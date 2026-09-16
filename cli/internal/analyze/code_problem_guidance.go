@@ -163,7 +163,7 @@ func codeProblemGuidanceMessage(category string, kind codeProblemGuidanceKind) s
 	case codeCategoryLifecycle:
 		return "проверьте очистку слушателей, обратных вызовов и привязок представления, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла"
 	case codeCategoryLogSpam:
-		return "ограничьте частоту логов, уберите отладочные логи из часто выполняемого пути или агрегируйте события"
+		return "ограничьте частоту логов, уберите отладочные сообщения из часто выполняемого пути или объединяйте похожие события"
 	case codeCategoryMainIO:
 		return "вынесите дисковый и сетевой ввод-вывод с главного потока и проверьте нарушения StrictMode"
 	default:

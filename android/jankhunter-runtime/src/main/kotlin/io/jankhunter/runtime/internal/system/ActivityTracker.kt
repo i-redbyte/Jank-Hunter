@@ -18,6 +18,7 @@ internal class ActivityTracker(
         callbacks.recordQuality(QualityCounterId.LIFECYCLE_REGISTRY_LIMIT)
     },
 ) : Application.ActivityLifecycleCallbacks {
+    @Volatile private var active = true
     private var startedActivities = 0
     private val createdAtMs = SystemClock.elapsedRealtime()
     private val activityStates = BoundedRegistry<Activity, ActivityState>(MAX_TRACKED_ACTIVITIES) { state ->
@@ -29,7 +30,7 @@ internal class ActivityTracker(
     private var lastResumedScreen: String? = null
     private var firstResumeRecorded = false
 
-    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = RuntimeHookGuard.run {
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = whileActive {
         val screenName = screenName(activity)
         val now = now()
         makeRoomFor(activity)
@@ -41,15 +42,17 @@ internal class ActivityTracker(
         }
     }
 
-    override fun onActivityStarted(activity: Activity) = RuntimeHookGuard.run {
-        if (startedActivities == 0) {
+    override fun onActivityStarted(activity: Activity) = whileActive {
+        val screenName = screenName(activity)
+        val state = state(activity, screenName)
+        if (state.started) return@whileActive
+        state.started = true
+        val firstStarted = startedActivities++ == 0
+        if (firstStarted) {
             callbacks.setUiVisible(true)
             callbacks.recordCounter("app.lifecycle.ui_visible.count", 1)
             frameMonitor?.setWindowActive(true)
         }
-        startedActivities++
-        val screenName = screenName(activity)
-        val state = state(activity, screenName)
         state.startedAtMs = now()
         callbacks.setScreen(screenName)
         if (state.openOperation == null) {
@@ -60,7 +63,7 @@ internal class ActivityTracker(
         installJankStats(activity)
     }
 
-    override fun onActivityResumed(activity: Activity) = RuntimeHookGuard.run {
+    override fun onActivityResumed(activity: Activity) = whileActive {
         val screenName = screenName(activity)
         val state = state(activity, screenName)
         val now = now()
@@ -78,35 +81,33 @@ internal class ActivityTracker(
         setJankStatsTracking(activity, true)
     }
 
-    override fun onActivityPaused(activity: Activity) = RuntimeHookGuard.run {
+    override fun onActivityPaused(activity: Activity) = whileActive {
         val screenName = screenName(activity)
-        val state = state(activity, screenName)
+        val state = activityStates[activity]
         val now = now()
         recordLifecycle(screenName, "paused")
-        if (state.resumedAtMs > 0) {
+        if (state != null && state.resumedAtMs > 0) {
             callbacks.recordGauge("screen.${screenKey(screenName)}.lifecycle.foreground_duration_ms", now - state.resumedAtMs)
             state.resumedAtMs = 0L
         }
         setJankStatsTracking(activity, false)
     }
 
-    override fun onActivityStopped(activity: Activity) = RuntimeHookGuard.run {
+    override fun onActivityStopped(activity: Activity) = whileActive {
         val screenName = screenName(activity)
-        val state = state(activity, screenName)
+        val state = activityStates[activity]
         val now = now()
         recordLifecycle(screenName, "stopped")
         setJankStatsTracking(activity, false)
-        if (state.startedAtMs > 0) {
+        if (state != null && state.startedAtMs > 0) {
             callbacks.recordGauge("screen.${screenKey(screenName)}.lifecycle.visible_duration_ms", now - state.startedAtMs)
             state.startedAtMs = 0L
         }
-        state.openOperation?.cancel()
-        state.openOperation = null
-        if (startedActivities > 0) {
-            startedActivities--
-        }
+        state?.openOperation?.cancel()
+        if (state != null) state.openOperation = null
+        val wasStarted = forgetStarted(state)
         callbacks.recordGauge("app.lifecycle.started_activities", startedActivities.toLong())
-        if (startedActivities == 0) {
+        if (wasStarted && startedActivities == 0) {
             frameMonitor?.setWindowActive(false)
             callbacks.setUiVisible(false)
             callbacks.recordCounter("app.lifecycle.ui_hidden.count", 1)
@@ -114,20 +115,26 @@ internal class ActivityTracker(
         }
     }
 
-    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = RuntimeHookGuard.run {
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = whileActive {
         callbacks.recordCounter("screen.${screenKey(screenName(activity))}.lifecycle.save_state.count", 1)
     }
 
-    override fun onActivityDestroyed(activity: Activity) = RuntimeHookGuard.run {
+    override fun onActivityDestroyed(activity: Activity) = whileActive {
         val screenName = screenName(activity)
-        recordLifecycle(screenName, "destroyed")
-        activityStates.remove(activity)?.let { state ->
-            state.openOperation?.cancel()
-            if (state.createdAtMs > 0) {
-                callbacks.recordGauge("screen.${screenKey(screenName)}.lifecycle.lifetime_ms", now() - state.createdAtMs)
-            }
-        }
+        val state = activityStates.remove(activity)
+        val wasStarted = forgetStarted(state)
+        // Release UI ownership before telemetry: a failed metric must not retain a destroyed window.
         removeJankStatsHandle(activity)
+        if (wasStarted && startedActivities == 0) {
+            frameMonitor?.setWindowActive(false)
+            callbacks.setUiVisible(false)
+        }
+        state?.openOperation?.cancel()
+        recordLifecycle(screenName, "destroyed")
+        if (wasStarted) callbacks.recordGauge("app.lifecycle.started_activities", startedActivities.toLong())
+        if (state != null && state.createdAtMs > 0) {
+            callbacks.recordGauge("screen.${screenKey(screenName)}.lifecycle.lifetime_ms", now() - state.createdAtMs)
+        }
         val changingConfigurations = runCatching { activity.isChangingConfigurations }.getOrDefault(false)
         if (!changingConfigurations) {
             callbacks.recordCounter("jankhunter.object_watcher.activity_destroyed.watch.count", 1)
@@ -135,7 +142,36 @@ internal class ActivityTracker(
         }
     }
 
+    fun deactivate() { active = false }
+
+    /** Restore observation, without inventing created/started/resumed events or screen-open time. */
+    fun restoreObservedActivity(activity: Activity, resumed: Boolean) = whileActive {
+        if (activity.isDestroyed || activity.isFinishing || activityStates.containsKey(activity)) return@whileActive
+        val screen = screenName(activity)
+        val now = now()
+        makeRoomFor(activity)
+        val restored = ActivityState(screen, createdAtMs = 0L, started = true, startedAtMs = now)
+        activityStates[activity] = restored
+        startedActivities++
+        callbacks.setUiVisible(true)
+        frameMonitor?.setWindowActive(true)
+        if (resumed || lastResumedScreen == null) callbacks.setScreen(screen)
+        installJankStats(activity)
+        if (resumed) {
+            restored.resumedAtMs = now
+            firstResumeRecorded = true
+            lastResumedScreen = screen
+            setJankStatsTracking(activity, true)
+        }
+        callbacks.recordGauge("app.lifecycle.started_activities", startedActivities.toLong())
+    }
+
+    private inline fun whileActive(action: () -> Unit) {
+        if (active) RuntimeHookGuard.run(action)
+    }
+
     fun close() {
+        deactivate()
         activityStates.forEachValue { state -> state.openOperation?.cancel() }
         for (handle in jankStatsHandles.values) {
             handle.uninstall()
@@ -152,8 +188,8 @@ internal class ActivityTracker(
         val canonicalFrameMonitor = frameMonitor ?: return
         if (!jankStatsEnabled || jankStatsHandles.containsKey(activity)) return
         makeRoomFor(activity)
-        val handle = JankHunterJankStats.install(activity.window) { frame ->
-            canonicalFrameMonitor.onJankStatsFrame(callbacks.currentScreen(), frame.durationNanos, frame.isJank)
+        val handle = JankHunterJankStats.install(activity.window) { isJank, durationNanos ->
+            canonicalFrameMonitor.onJankStatsFrame(callbacks.currentScreen(), durationNanos, isJank)
         } ?: return
         handle.setTrackingEnabled(false)
         jankStatsHandles[activity] = handle
@@ -190,9 +226,18 @@ internal class ActivityTracker(
 
     private fun makeRoomFor(activity: Activity) {
         val evicted = activityStates.makeRoomFor(activity) ?: return
+        // The gauge covers retained observations; evicted state is explicitly quality-accounted.
+        forgetStarted(evicted.value)
         evicted.value.openOperation?.cancel()
         removeJankStatsHandle(evicted.key)
         RuntimeHookGuard.run(onCardinalityLoss)
+    }
+
+    private fun forgetStarted(state: ActivityState?): Boolean {
+        if (state == null || !state.started) return false
+        state.started = false
+        if (startedActivities > 0) startedActivities--
+        return true
     }
 
     private fun state(activity: Activity, screenName: String): ActivityState {
@@ -242,6 +287,7 @@ internal class ActivityTracker(
     private data class ActivityState(
         var screenName: String,
         val createdAtMs: Long,
+        var started: Boolean = false,
         var startedAtMs: Long = 0L,
         var resumedAtMs: Long = 0L,
         var openOperation: JankHunterOperation? = null,
@@ -265,6 +311,8 @@ internal class BoundedRegistry<K : Any, V : Any>(
     operator fun set(key: K, value: V) {
         entries[key] = value
     }
+
+    operator fun get(key: K): V? = entries[key]
 
     fun containsKey(key: K): Boolean = entries.containsKey(key)
 

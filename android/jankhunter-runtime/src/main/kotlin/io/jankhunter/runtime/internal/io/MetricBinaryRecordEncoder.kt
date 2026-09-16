@@ -47,6 +47,14 @@ internal class MetricBinaryRecordEncoder(
         metric(Jhlog.TYPE_GAUGE, name, value, count.coerceAtLeast(1L), sum, max, mode)
     }
 
+    fun gaugeWide(name: String?, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long) {
+        if (value < 0L || count <= 0L || max < 0L || sumHigh < 0L || sumHigh >= count) {
+            sink.recordInvalidMetric()
+            return
+        }
+        metric(Jhlog.TYPE_GAUGE, name, value, count, sum, max, mode, sumHigh)
+    }
+
     fun logSpam(
         screen: String?,
         owner: String?,
@@ -88,9 +96,10 @@ internal class MetricBinaryRecordEncoder(
         sum: Long,
         max: Long,
         mode: MetricAggregationMode,
+        sumHigh: Long = 0L,
     ) {
         val normalizedCount = count.coerceAtLeast(1L)
-        val normalizedSum = if (sum == 0L) value else sum
+        val normalizedSum = if (sum == 0L && sumHigh == 0L) value else sum
         val normalizedMax = if (max == 0L) value else max
         val payload = sink.payload()
             .symbolRef(sink.symbolId(BinaryLogWriter.DICT_METRIC, name))
@@ -99,6 +108,7 @@ internal class MetricBinaryRecordEncoder(
             .uvarint(normalizedSum)
             .uvarint(normalizedMax)
             .uvarint(mode.wireValue)
+        if (recordType == Jhlog.TYPE_GAUGE) payload.uvarint(sumHigh)
         sink.emitSemantic(recordType, 0L, payload, sink.producerContext())
     }
 

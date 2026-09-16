@@ -7,6 +7,26 @@ import org.junit.Test
 
 class InstrumentationModelTest {
     @Test
+    fun resolverPreIndexSeparatesExactWildcardAndUnknownCandidates() {
+        assertTrue(
+            HookIntentResolver.candidateMask(
+                "post",
+                "(Ljava/lang/Runnable;)Z",
+            ) != 0,
+        )
+        assertTrue(
+            HookIntentResolver.candidateMask(
+                "submit",
+                "(Ljava/util/concurrent/Callable;)Lcom/google/common/util/concurrent/ListenableFuture;",
+            ) != 0,
+        )
+        assertEquals(0, HookIntentResolver.candidateMask("length", "()I"))
+        assertEquals(0, HookIntentResolver.candidateMask("post", "()V"))
+        assertTrue(HookIntentResolver.namedCandidateMask("post") != 0)
+        assertEquals(0, HookIntentResolver.namedCandidateMask("length"))
+    }
+
+    @Test
     fun signatureSpecMatchesOnlyKnownVariants() {
         val call = methodCall(
             owner = "okhttp3/OkHttpClient\$Builder",
@@ -506,6 +526,12 @@ class InstrumentationModelTest {
         assertEquals(first, second)
         assertEquals("stable:0x865bbc6d7b314f77", OwnerIds.canonical(first))
         assertEquals("com.example.Foo.load", OwnerIds.readableOwner("com/example/Foo", "load"))
+        assertEquals("com.example.Foo.load", OwnerIds.coroutineOwner("com/example/Foo${'$'}load${'$'}1"))
+        assertEquals(
+            "com.example.Foo${'$'}Companion.load",
+            OwnerIds.coroutineOwner("com/example/Foo${'$'}Companion${'$'}load${'$'}1"),
+        )
+        assertEquals("com.example.Foo.coroutine", OwnerIds.coroutineOwner("com/example/Foo${'$'}1"))
         assertFalse(first == differentDescriptor)
     }
 

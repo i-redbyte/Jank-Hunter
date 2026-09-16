@@ -3,7 +3,8 @@ package io.jankhunter.runtime
 import android.app.Activity
 
 /** Explicit telemetry boundary used by Android system collectors. */
-internal interface RuntimeCollectorCallbacks {
+internal interface RuntimeCollectorCallbacks : MainThreadStallCallbacks {
+    fun bindFrameCallbacks(): RuntimeCollectorCallbacks = this
     fun setScreen(screenName: String?)
     fun currentScreen(): String
     fun setUiVisible(visible: Boolean)
@@ -30,6 +31,8 @@ internal interface RuntimeCollectorCallbacks {
         freeStorageKb: Long,
         totalStorageKb: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     )
     fun recordUiWindow(
         screen: String?,
@@ -41,8 +44,7 @@ internal interface RuntimeCollectorCallbacks {
         frameDeadlineUs: Long,
         frameDurationBuckets: LongArray,
     )
-    fun captureMainThreadStallContext(owner: String?): JankHunterContextSnapshot
-    fun recordMainThreadStall(context: JankHunterContextSnapshot, stackHint: String?, durationMs: Long)
+    fun bindMainThreadStallCallbacks(): MainThreadStallCallbacks
     fun recordMainThreadDispatch(durationMs: Long, thresholdMs: Long, source: String?)
     fun recordProcessExit(
         reason: Long,
@@ -64,6 +66,8 @@ internal class RuntimeCollectorTelemetry(
     private val asyncTelemetry: RuntimeAsyncTelemetry,
     private val flushRequest: () -> Unit,
 ) : RuntimeCollectorCallbacks {
+    override fun bindFrameCallbacks(): RuntimeCollectorCallbacks = systemTelemetry.bindFrameCallbacks(this)
+
     override fun setScreen(screenName: String?) = contextTelemetry.setScreen(screenName)
 
     override fun currentScreen(): String = contexts.currentScreen()
@@ -112,6 +116,8 @@ internal class RuntimeCollectorTelemetry(
         freeStorageKb: Long,
         totalStorageKb: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long,
+        trafficKnownFlags: Int,
     ) = systemTelemetry.recordContext(
         networkKind,
         batteryPct,
@@ -127,6 +133,8 @@ internal class RuntimeCollectorTelemetry(
         freeStorageKb,
         totalStorageKb,
         networkVpn,
+        trafficUidPlusOne,
+        trafficKnownFlags,
     )
 
     override fun recordUiWindow(
@@ -149,6 +157,10 @@ internal class RuntimeCollectorTelemetry(
         frameDurationBuckets,
     )
 
+    override fun nextMainThreadStallId(): Long = contextTelemetry.nextMainThreadStallId()
+
+    override fun bindMainThreadStallCallbacks(): MainThreadStallCallbacks = contextTelemetry.bindMainThreadStallCallbacks()
+
     override fun captureMainThreadStallContext(owner: String?): JankHunterContextSnapshot {
         return contextTelemetry.captureMainThreadStallContext(owner)
     }
@@ -157,7 +169,9 @@ internal class RuntimeCollectorTelemetry(
         context: JankHunterContextSnapshot,
         stackHint: String?,
         durationMs: Long,
-    ) = contextTelemetry.recordMainThreadStall(context, stackHint, durationMs)
+        incidentId: Long,
+        state: MainThreadStallState,
+    ) = contextTelemetry.recordMainThreadStall(context, stackHint, durationMs, incidentId, state)
 
     override fun recordMainThreadDispatch(durationMs: Long, thresholdMs: Long, source: String?) {
         asyncTelemetry.recordMainThreadDispatch(durationMs, thresholdMs, source)

@@ -22,7 +22,7 @@ func compareDatabaseAnalysis(baseline, candidate Summary) DatabaseComparison {
 	candidateObserved := databaseSummaryObserved(candidate)
 	result.Comparable = baseObserved && candidateObserved
 	if !result.Comparable {
-		result.Note = "DB call/transaction telemetry не зафиксирована хотя бы в одном прогоне; отсутствие измерения не подменяется нулём."
+		result.Note = "Данные о SQL-вызовах и транзакциях не записаны хотя бы в одном прогоне. Отсутствующее измерение нельзя считать нулём."
 	} else if baseline.CollectorFlagsAll&uint64(jhlog.CollectorDatabase) == 0 ||
 		candidate.CollectorFlagsAll&uint64(jhlog.CollectorDatabase) == 0 {
 		result.Comparable = false
@@ -122,6 +122,7 @@ func databaseComparisonMetrics(baseline, candidate Summary, setComparable bool) 
 	if base.Scenarios.ObservedOperationScopes > 0 || after.Scenarios.ObservedOperationScopes > 0 {
 		metrics = append(metrics, databaseScenarioRateDelta(
 			"DB repeated calls per operation scope",
+			"operation",
 			databaseScenarioCalls(base.Scenarios.Candidates, "operation", ""),
 			databaseScenarioCalls(after.Scenarios.Candidates, "operation", ""),
 			base.Scenarios.ObservedOperationScopes,
@@ -133,6 +134,7 @@ func databaseComparisonMetrics(baseline, candidate Summary, setComparable bool) 
 		metrics = append(metrics,
 			databaseScenarioRateDelta(
 				"DB repeated calls per transaction scope",
+				"transaction",
 				databaseScenarioCalls(base.Scenarios.Candidates, "transaction", ""),
 				databaseScenarioCalls(after.Scenarios.Candidates, "transaction", ""),
 				base.Scenarios.ObservedTransactionScopes,
@@ -141,6 +143,7 @@ func databaseComparisonMetrics(baseline, candidate Summary, setComparable bool) 
 			),
 			databaseScenarioRateDelta(
 				"DB batch-candidate calls per transaction scope",
+				"transaction",
 				databaseScenarioCalls(base.Scenarios.Candidates, "transaction", "batch_candidate"),
 				databaseScenarioCalls(after.Scenarios.Candidates, "transaction", "batch_candidate"),
 				base.Scenarios.ObservedTransactionScopes,
@@ -177,44 +180,52 @@ func databaseScenarioCalls(
 
 func databaseScenarioRateDelta(
 	name string,
+	scopeKind string,
 	baselineCalls, candidateCalls, baselineScopes, candidateScopes uint64,
 	setComparable, evidenceComplete bool,
 ) Delta {
+	unit := "выз./операцию"
+	contextLabel := "операций"
+	if scopeKind == "transaction" {
+		unit = "выз./транзакцию"
+		contextLabel = "транзакций"
+	}
 	result := relativeDeltaFloat(
 		name,
 		databasePerOperation(float64(baselineCalls), baselineScopes),
 		databasePerOperation(float64(candidateCalls), candidateScopes),
-		"выз./scope",
+		unit,
 		true,
 		minUint64(baselineScopes, candidateScopes),
 	)
 	if !setComparable {
 		return databaseUnavailableDelta(
 			result, baselineScopes, candidateScopes,
-			"DB telemetry не зафиксирована хотя бы в одном прогоне",
+			"данные БД не записаны хотя бы в одном прогоне",
 		)
 	}
 	if baselineScopes == 0 || candidateScopes == 0 {
 		return databaseUnavailableDelta(
 			result, baselineScopes, candidateScopes,
-			"operation/transaction scope identity не зафиксирована хотя бы в одном прогоне",
+			"хотя бы в одном прогоне нет идентификаторов операций или транзакций",
 		)
 	}
 	if !evidenceComplete {
 		return databaseUnavailableDelta(
 			result, baselineScopes, candidateScopes,
-			"bounded scenario evidence неполон хотя бы в одном прогоне",
+			"часть серий повторных вызовов не сохранилась хотя бы в одном прогоне",
 		)
 	}
 	if minUint64(baselineScopes, candidateScopes) < databaseComparisonMinSample {
 		return databaseUnavailableDelta(
 			result, baselineScopes, candidateScopes,
-			fmt.Sprintf("для scenario rate нужно не менее %d scopes в каждом прогоне", databaseComparisonMinSample),
+			fmt.Sprintf("для сравнения нужно не менее %d %s в каждом прогоне", databaseComparisonMinSample, contextLabel),
 		)
 	}
 	result.ComparisonNote = fmt.Sprintf(
-		"Count-Min оценка повторов normalized fingerprint, нормировано по %d и %d наблюдаемым scopes; это hypothesis, не доказанный N+1",
+		"Приблизительное число повторов нормировано по %d и %d наблюдаемым %s. Это сигнал для проверки, а не доказанный N+1",
 		baselineScopes, candidateScopes,
+		contextLabel,
 	)
 	return result
 }
@@ -376,7 +387,7 @@ func databaseLatencyDelta(
 		return databaseUnavailableDelta(result, baseline.Calls, candidate.Calls,
 			fmt.Sprintf("для p95 нужно не менее %d вызовов этого класса потока в каждом прогоне", databaseComparisonMinSample))
 	}
-	result.ComparisonNote = "thread-specific p95; main и background не смешиваются"
+	result.ComparisonNote = "верхние 5% рассчитаны отдельно для главного и фонового потоков"
 	return result
 }
 
@@ -640,13 +651,13 @@ func databaseStatementComparisonStatus(
 	case !row.BaselinePresent:
 		return "new", "SQL отсутствует в базе; регрессия не заявляется без парной выборки."
 	case !row.CandidatePresent:
-		return "removed", "SQL отсутствует в кандидате."
+		return "removed", "SQL отсутствует в проверяемом прогоне."
 	case minimumCalls < databaseComparisonMinSample:
 		return "insufficient_data", "Для описательного сравнения нужно не менее 20 вызовов в каждом прогоне."
 	case !row.Comparable:
-		return "not_comparable", "Наборы DB telemetry несопоставимы по runtime coverage."
+		return "not_comparable", "Наборы данных БД несопоставимы по полноте записи во время выполнения."
 	default:
-		return "compared", "Частота нормирована по длительности; latency сравнивается только по thread-specific выборкам."
+		return "compared", "Частота нормирована по длительности; время выполнения сравнивается отдельно для главного и фонового потоков."
 	}
 }
 

@@ -99,8 +99,8 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	if !hasSeries(report.Series, "HTTP запросы") {
 		t.Fatalf("report.Series does not include HTTP запросы: %#v", report.Series)
 	}
-	if !hasSeries(report.Series, "Дельта RX трафика") {
-		t.Fatalf("report.Series does not include Дельта RX трафика: %#v", report.Series)
+	if hasSeries(report.Series, "Дельта RX трафика") {
+		t.Fatal("legacy UID provenance must not produce an exact traffic series")
 	}
 	if countSeries(report.Series, "Доля подтормаживаний UI") != 1 {
 		t.Fatalf("UI jank series must be unique: %#v", report.Series)
@@ -159,8 +159,17 @@ func TestAnalyzeInspectTimelineHonorsFilters(t *testing.T) {
 			t.Fatalf("filtered timeline has HTTPCount=%d in bucket %+v", bucket.HTTPCount, bucket)
 		}
 	}
-	if hasSeries(report.Series, "HTTP запросы") {
-		t.Fatalf("filtered report should not include HTTP request series: %#v", report.Series)
+	if !hasSeries(report.Series, "HTTP запросы") {
+		t.Fatal("complete filtered quiet collection must retain observed zeros")
+	}
+	for _, series := range report.Series {
+		if series.Name == "HTTP запросы" {
+			for i, value := range series.Points {
+				if value != 0 || !series.Present[i] {
+					t.Fatal("filtered count is not an observed zero")
+				}
+			}
+		}
 	}
 }
 
@@ -195,8 +204,8 @@ func TestAnalyzeInspectNormalizesAbsoluteTimelineOffset(t *testing.T) {
 }
 
 func TestAnalyzeInspectOverlaysIndependentRunsByRelativeTime(t *testing.T) {
-	first := writeRunOffsetTimelineFixture(t, "first.jhlog", 1, 60*60*1000)
-	second := writeRunOffsetTimelineFixture(t, "second.jhlog", 2, 21*24*60*60*1000)
+	first := writeRunOffsetTimelineFixture(t, "first.jhlog", 1, 60*60*1000, 1)
+	second := writeRunOffsetTimelineFixture(t, "second.jhlog", 2, 21*24*60*60*1000, 2)
 
 	report, err := analyzeInspectForTest(t, []string{first, second}, analyze.Options{})
 	if err != nil {
@@ -261,7 +270,7 @@ func writeTimelineFixture(t *testing.T) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "timeline.jhlog")
-	file, writer, err := jhlog.Create(path)
+	file, writer, err := jhlog.CreateWithHeader(path, completeHTTPTestHeader())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -284,10 +293,10 @@ func writeTimelineFixture(t *testing.T) string {
 	}
 
 	events := []jhlog.Event{
-		{Type: jhlog.EventSession, TimeMS: 1, Session: &jhlog.SessionEvent{AppVersionRef: jhlog.LocalSymbol(4), BuildRef: jhlog.LocalSymbol(5), DeviceRef: jhlog.LocalSymbol(6), SDKInt: 35}},
-		{Type: jhlog.EventHTTP, TimeMS: 100, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 100, DNSMS: 5, TTFBMS: 20, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 1200, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 200, DNSMS: 10, ConnectMS: 50, TTFBMS: 80, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 1500, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, Flags: uint64(jhlog.FlagHTTPFailed), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 300, TTFBMS: 90, Status: jhlog.Status5xx}},
+		{Type: jhlog.EventSession, TimeMS: 1, Session: &jhlog.SessionEvent{AppVersionRef: jhlog.LocalSymbol(4), BuildRef: jhlog.LocalSymbol(5), DeviceRef: jhlog.LocalSymbol(6), SDKInt: 35, CollectorFlags: uint64(jhlog.CollectorHTTP)}},
+		{Type: jhlog.EventHTTP, Flags: uint64(jhlog.FlagHTTPTTFBObserved | jhlog.FlagHTTPTTFBKnown), TimeMS: 100, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 100, DNSMS: 5, TTFBMS: 20, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, Flags: uint64(jhlog.FlagHTTPTTFBObserved | jhlog.FlagHTTPTTFBKnown), TimeMS: 1200, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 200, DNSMS: 10, ConnectMS: 50, TTFBMS: 80, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 1500, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, Flags: uint64(jhlog.FlagHTTPFailed | jhlog.FlagHTTPTTFBObserved | jhlog.FlagHTTPTTFBKnown), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 300, TTFBMS: 90, Status: jhlog.Status5xx}},
 		{Type: jhlog.EventUIWindow, TimeMS: 1600, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(3)}, UIWindow: typedUIWindow(1000, 60, 6, 22)},
 		{Type: jhlog.EventMemory, TimeMS: 2400, Memory: &jhlog.MemoryEvent{PSSKB: 123000, JavaHeapKB: 32000, NativeHeapKB: 18000}},
 		{Type: jhlog.EventContext, TimeMS: 2500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 90, AvailMemoryKB: 1000, RxBytes: 1000, TxBytes: 200}},
@@ -299,6 +308,10 @@ func writeTimelineFixture(t *testing.T) string {
 		if err := writer.WriteEvent(event); err != nil {
 			t.Fatalf("WriteEvent(%v) error = %v", event.Type, err)
 		}
+	}
+	writer.SetQualitySnapshot(jhlog.QualitySnapshot{CapturedElapsedUS: 4001000, Counters: map[uint64]uint64{jhlog.QualityCollectionWindowStartElapsedMS: 1, jhlog.QualityCollectionWindowEndElapsedMS: 4001}})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -341,12 +354,15 @@ func writeAbsoluteOffsetTimelineFixture(t *testing.T) string {
 	return writeRunOffsetTimelineFixture(t, "absolute-offset.jhlog", 0, uint64(12*60*60*1000))
 }
 
-func writeRunOffsetTimelineFixture(t *testing.T, name string, runByte byte, baseMS uint64) string {
+func writeRunOffsetTimelineFixture(t *testing.T, name string, runByte byte, baseMS uint64, process ...byte) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), name)
 	header := jhlog.DefaultSegmentHeader()
 	header.RunID[0] = runByte
+	if len(process) > 0 {
+		header.ProcessInstanceID[0] = process[0]
+	}
 	file, writer, err := jhlog.CreateWithHeader(path, header)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

@@ -57,7 +57,7 @@ func appearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:         loop.BurnScore,
 		ConfidenceDelta:   loop.Confidence,
 		Severity:          networkLoopFindingSeverity(loop),
-		Summary:           fmt.Sprintf("В проверяемом прогоне появился признак сетевого цикла: период %.1f сек, доверие %.2f, условная нагрузка %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
+		Summary:           fmt.Sprintf("В проверяемом прогоне появился повторяющийся сетевой запрос: период %.1f сек, надёжность %.2f, условная нагрузка %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
 	}
 }
 
@@ -71,7 +71,7 @@ func disappearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:        -loop.BurnScore,
 		ConfidenceDelta:  -loop.Confidence,
 		Severity:         "ok",
-		Summary:          fmt.Sprintf("В проверяемом прогоне исчез признак сетевого цикла из базового: период %.1f сек, доверие %.2f, условная нагрузка %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
+		Summary:          fmt.Sprintf("В проверяемом прогоне исчез повторяющийся сетевой запрос из базы: период %.1f сек, надёжность %.2f, условная нагрузка %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
 	}
 }
 
@@ -108,7 +108,7 @@ func changedNetworkLoopDelta(baseline, candidate NetworkLoopFinding) (NetworkLoo
 		BurnDelta:         burnDelta,
 		ConfidenceDelta:   confidenceDelta,
 		Severity:          severity,
-		Summary:           fmt.Sprintf("Признак сетевого цикла %s: период %.1f сек -> %.1f сек, условная нагрузка %.1f -> %.1f, доверие %.2f -> %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
+		Summary:           fmt.Sprintf("Повторяющийся сетевой запрос %s: период %.1f сек → %.1f сек, условная нагрузка %.1f → %.1f, надёжность %.2f → %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
 	}, true
 }
 
@@ -130,7 +130,7 @@ func networkLoopSummary(loops []NetworkLoopFinding) string {
 	if len(loops) == 0 {
 		return "Сетевых циклов по DNS, соединениям, переподключениям, WebSocket и всплескам маршрутов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d признаков сетевых циклов. Каждый прошёл порог по повторяемости и совокупной уверенности; отдельные методы могут давать разную силу подтверждения.", len(loops))
+	return fmt.Sprintf("Найдено признаков сетевых повторов: %d. Каждый прошёл порог повторяемости и общей надёжности; отдельные методы могут давать разную силу подтверждения.", len(loops))
 }
 
 func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
@@ -138,14 +138,14 @@ func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
 		return []Finding{{
 			Severity: "ok",
 			Title:    "Сетевые циклы не найдены",
-			Detail:   "Повторяющихся DNS-запросов, соединений, переподключений или всплесков маршрута/источника с достаточным доверием нет.",
+			Detail:   "Повторяющихся DNS-запросов, соединений, переподключений или всплесков маршрута с достаточной надёжностью нет.",
 		}}
 	}
 	worst := loops[0]
 	return []Finding{{
 		Severity:       networkLoopFindingSeverity(worst),
 		Title:          "Найден признак сетевого цикла",
-		Detail:         fmt.Sprintf("Предполагаемый период %.1fs, доверие %.2f, условная нагрузка %.1f. Повторяющаяся последовательность: %s. Это гипотеза, а не доказанная причина.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
+		Detail:         fmt.Sprintf("Предполагаемый период %.1f с, надёжность %.2f, условная нагрузка %.1f. Повторяется: %s. Это гипотеза, а не доказанная причина.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
 		Recommendation: worst.ProbableCause,
 		Evidence:       networkLoopEvidence(worst),
 	}}
@@ -193,9 +193,6 @@ func networkLoopEvidence(loop NetworkLoopFinding) []string {
 	}
 	if loop.Owner != "" {
 		evidence = append(evidence, "место запуска: "+analysisOwnerLabel(loop.Owner))
-		if !analysisOwnerIsKnown(loop.Owner) {
-			evidence = append(evidence, missingOwnerAction())
-		}
 	}
 	evidence = append(evidence, fmt.Sprintf("интервал: %.1f сек..%.1f сек", seconds(loop.FirstMS), seconds(loop.LastMS)))
 	if len(loop.Path.Nodes) > 0 {

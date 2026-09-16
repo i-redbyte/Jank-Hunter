@@ -311,6 +311,25 @@ internal object JankHunterHooks {
     }
 
     @JvmStatic
+    fun enterCoroutineSegment(continuation: Any?, ownerName: String?): Long {
+        return try {
+            hooks().enterCoroutineSegment(continuation, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun exitCoroutineSegment(token: Long, continuation: Any?, result: Any?, throwable: Throwable?) {
+        try {
+            hooks().exitCoroutineSegment(token, continuation, result, throwable)
+        } catch (hookFailure: Throwable) {
+            recordFailure(hookFailure)
+        }
+    }
+
+    @JvmStatic
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         return try {
             hooks().wrapClickListener(listener, ownerName)

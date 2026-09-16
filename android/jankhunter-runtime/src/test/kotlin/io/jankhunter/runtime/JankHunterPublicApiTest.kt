@@ -35,7 +35,9 @@ class JankHunterPublicApiTest {
             sortedSetOf(
                 "autoInit",
                 "captureLogArchive",
+                "captureLogArchiveAsync",
                 "captureLogSnapshot",
+                "captureLogSnapshotAsync",
                 "flush",
                 "init",
                 "initDiagnostics",
@@ -89,7 +91,6 @@ class JankHunterPublicApiTest {
             JankHunterCallable::class.java,
             JankHunterCoroutineFunction2::class.java,
             JankHunterClickListener::class.java,
-            JankHunterHandlerRunnable::class.java,
             JankHunterExecutor::class.java,
             JankHunterExecutorService::class.java,
             JankHunterScheduledExecutorService::class.java,
@@ -249,18 +250,18 @@ class JankHunterPublicApiTest {
     fun systemCollectorsRequireInjectedCallbacks() {
         val callbackType = Class.forName("io.jankhunter.runtime.RuntimeCollectorCallbacks")
         val collectors = listOf(
-            ActivityTracker::class.java,
-            FpsMonitor::class.java,
-            MainThreadWatchdog::class.java,
-            MemorySampler::class.java,
-            SystemContextSampler::class.java,
+            ActivityTracker::class.java to callbackType,
+            FpsMonitor::class.java to callbackType,
+            MainThreadWatchdog::class.java to MainThreadStallCallbacks::class.java,
+            MemorySampler::class.java to callbackType,
+            SystemContextSampler::class.java to callbackType,
         )
 
-        collectors.forEach { collector ->
+        collectors.forEach { (collector, injectedType) ->
             assertTrue(
                 "${collector.simpleName} still depends on the global runtime facade",
                 collector.declaredConstructors.any { constructor ->
-                    constructor.parameterTypes.any(callbackType::isAssignableFrom)
+                    constructor.parameterTypes.any(injectedType::isAssignableFrom)
                 },
             )
         }

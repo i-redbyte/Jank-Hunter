@@ -2,11 +2,14 @@ package report
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 )
+
+var runtimeCallCauseAllocationSink []uiCauseInsight
 
 func TestUIScreenInsightsRankActionableCauseCandidates(t *testing.T) {
 	insights := uiScreenInsights(analyze.Summary{
@@ -67,7 +70,7 @@ func TestUIScreenInsightsRankActionableCauseCandidates(t *testing.T) {
 	if causes[2].Title != "Обработчик нажатия выполнялся слишком долго" {
 		t.Fatalf("click cause = %+v", causes[2])
 	}
-	if causes[3].Relation != "кандидат из кода" || causes[3].Title != "Отрисовка пользовательского View выполнялась дольше бюджета кадра" || !strings.Contains(causes[3].Explanation, "не хранит признак главного потока") {
+	if causes[3].Relation != "возможная причина в коде" || causes[3].Title != "Отрисовка пользовательского View выполнялась дольше бюджета кадра" || !strings.Contains(causes[3].Explanation, "не хранит признак главного потока") {
 		t.Fatalf("runtime cause = %+v", causes[3])
 	}
 	if !strings.Contains(causes[3].Where, "FeedPresenter.render → FeedAdapter.bind → FeedItemView.onDraw") {
@@ -75,6 +78,29 @@ func TestUIScreenInsightsRankActionableCauseCandidates(t *testing.T) {
 	}
 	if !strings.Contains(insights[0].Diagnosis, causes[0].Title) || insights[0].Action != causes[0].Action {
 		t.Fatalf("diagnosis did not lead to the top cause: %+v", insights[0])
+	}
+}
+
+func TestUIScreenInsightsRoundFrameDeadlineUpForMillisecondMetrics(t *testing.T) {
+	insights := uiScreenInsights(analyze.Summary{
+		Screens: []analyze.ScreenStats{{
+			Screen: "Feed", Frames: 120, JankyFrames: 12, JankRatePct: 10,
+			FrameDeadlineUS: 16_667,
+		}},
+		RuntimeCalls: []analyze.RuntimeCallStats{{
+			Screen: "Feed", Caller: "jankhunter.semantic.v1.compose.draw.main", Callee: "FeedScreen",
+			Count: 1, TotalMS: 16, MaxMS: 16,
+		}, {
+			Screen: "Feed", Caller: "FeedScreen.render", Callee: "FeedRow.bind",
+			Count: 1, TotalMS: 16, MaxMS: 16,
+		}},
+	})
+
+	if len(insights) != 1 {
+		t.Fatalf("uiScreenInsights() count = %d, want 1", len(insights))
+	}
+	if len(insights[0].Causes) != 0 {
+		t.Fatalf("sub-deadline millisecond metrics were presented as causes: %+v", insights[0].Causes)
 	}
 }
 
@@ -140,6 +166,47 @@ func TestMainThreadStallCandidatesStayBoundedAndKeepLargestPauses(t *testing.T) 
 		if !strings.Contains(joined, retained) {
 			t.Fatalf("top stall %q was not retained: %+v", retained, causes)
 		}
+	}
+}
+
+func TestMainThreadStallCausesPreserveAllSamplesForLateTopGroup(t *testing.T) {
+	summary := analyze.Summary{SignalContexts: []analyze.SignalContextStats{
+		{Screen: "Feed", Owner: "LateTop", Operation: "load", StallCount: 2, StallMaxMS: 1},
+		{Screen: "Feed", Owner: "A", Operation: "load", StallCount: 1, StallMaxMS: 50},
+		{Screen: "Feed", Owner: "B", Operation: "load", StallCount: 1, StallMaxMS: 40},
+		{Screen: "Feed", Owner: "C", Operation: "load", StallCount: 1, StallMaxMS: 30},
+		{Screen: "Feed", Owner: "D", Operation: "load", StallCount: 1, StallMaxMS: 20},
+		{Screen: "Feed", Owner: "LateTop", Operation: "load", StallCount: 3, StallMaxMS: 60},
+	}}
+
+	causes, total := mainThreadStallCausesWithTotal(summary, "Feed")
+
+	if total != 6 {
+		t.Fatalf("total = %d, want 6", total)
+	}
+	if len(causes) != mainThreadStallCauseLimit {
+		t.Fatalf("visible causes = %d, want %d", len(causes), mainThreadStallCauseLimit)
+	}
+	if got := causes[0].Evidence; !strings.Contains(got, "5 раз") {
+		t.Fatalf("late top group lost earlier samples: %q", got)
+	}
+}
+
+func TestUIScreenInsightsDiscloseOmittedMainThreadStallSignals(t *testing.T) {
+	contexts := make([]analyze.SignalContextStats, 6)
+	for index := range contexts {
+		contexts[index] = analyze.SignalContextStats{
+			Screen: "MainActivity", Owner: fmt.Sprintf("Owner%d", index),
+			StallCount: 1, StallMaxMS: uint64((index + 1) * 100),
+		}
+	}
+	insights := uiScreenInsights(analyze.Summary{
+		Screens:        []analyze.ScreenStats{{Screen: "MainActivity", Frames: 120, JankyFrames: 12}},
+		SignalContexts: contexts,
+	})
+
+	if len(insights) != 1 || insights[0].CauseTotal != 6 || insights[0].OmittedCauses != 2 {
+		t.Fatalf("stall signal totals = %+v, want total=6 omitted=2", insights)
 	}
 }
 
@@ -308,5 +375,325 @@ func TestUIScreenInsightsExplainComposeAndRoomMainThreadWork(t *testing.T) {
 	}
 	if !strings.Contains(insights[0].Causes[1].Title, "Метод доступа к данным Room") || !strings.Contains(insights[0].Causes[1].Explanation, "на главном потоке") {
 		t.Fatalf("room cause = %+v", insights[0].Causes[1])
+	}
+}
+
+func TestRuntimeCallCausesBoundMaterializationToVisibleCandidates(t *testing.T) {
+	const callCount = 4_096
+	calls := make([]analyze.RuntimeCallStats, callCount)
+	for index := range calls {
+		calls[index] = analyze.RuntimeCallStats{
+			Screen:    "FeedActivity",
+			Operation: fmt.Sprintf("feed.operation.%04d", index),
+			Caller:    fmt.Sprintf("com.app.FeedCaller%04d.run", index),
+			Callee:    fmt.Sprintf("com.app.FeedTarget%04d.render", index),
+			Count:     1,
+			TotalMS:   uint64(index + 17),
+			MaxMS:     uint64(index + 17),
+		}
+	}
+	summary := analyze.Summary{RuntimeCalls: calls}
+
+	causes := runtimeCallCauses(summary, "FeedActivity", 16)
+	if len(causes) != 2 {
+		t.Fatalf("runtime call causes = %d, want 2", len(causes))
+	}
+	for _, endpoint := range []string{"FeedTarget4095.render", "FeedTarget4094.render"} {
+		if !strings.Contains(causes[0].Title+causes[1].Title, endpoint) {
+			t.Fatalf("top runtime endpoint %q is missing: %+v", endpoint, causes)
+		}
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+
+	runtimeCallCauses(summary, "FeedActivity", 16)
+	allocations := testing.AllocsPerRun(10, func() {
+		runtimeCallCauses(summary, "FeedActivity", 16)
+	})
+	if allocations > 64 {
+		t.Fatalf("bounded runtime causes allocate %.2f objects, want at most 64", allocations)
+	}
+	benchmark := testing.Benchmark(func(b *testing.B) {
+		for range b.N {
+			runtimeCallCauseAllocationSink = runtimeCallCauses(summary, "FeedActivity", 16)
+		}
+	})
+	if bytes := benchmark.AllocedBytesPerOp(); bytes > 512*1024 {
+		t.Fatalf("bounded runtime causes allocate %d bytes/op, want at most 512 KiB", bytes)
+	}
+}
+
+func TestRuntimeCallCausesRemainBoundedWhenDurationsTie(t *testing.T) {
+	const callCount = 4_096
+	calls := make([]analyze.RuntimeCallStats, callCount)
+	for index := range calls {
+		calls[index] = analyze.RuntimeCallStats{
+			Screen:    "FeedActivity",
+			Operation: fmt.Sprintf("feed.operation.%04d", index),
+			Caller:    fmt.Sprintf("com.app.FeedCaller%04d.run", index),
+			Callee:    fmt.Sprintf("com.app.FeedTarget%04d.render", index),
+			Count:     1,
+			TotalMS:   100,
+			MaxMS:     100,
+		}
+	}
+	summary := analyze.Summary{RuntimeCalls: calls}
+
+	if causes := runtimeCallCauses(summary, "FeedActivity", 16); len(causes) != 2 {
+		t.Fatalf("runtime call causes = %d, want 2", len(causes))
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(10, func() {
+		runtimeCallCauses(summary, "FeedActivity", 16)
+	})
+	if allocations > 64 {
+		t.Fatalf("equal-duration runtime causes allocate %.2f objects, want at most 64", allocations)
+	}
+}
+
+func TestRuntimeCallCausesReuseTraversalBuffersForDisconnectedTiedCalls(t *testing.T) {
+	const callCount = 4_096
+	calls := make([]analyze.RuntimeCallStats, callCount)
+	for index := range calls {
+		calls[index] = analyze.RuntimeCallStats{
+			Screen: "FeedActivity", Operation: "feed.operation",
+			Caller: fmt.Sprintf("com.app.FeedCaller%04d.run", index),
+			Callee: fmt.Sprintf("com.app.FeedTarget%04d.render", index),
+			Count:  1, TotalMS: 100, MaxMS: 100,
+		}
+	}
+	summary := analyze.Summary{RuntimeCalls: calls}
+
+	if causes := runtimeCallCauses(summary, "FeedActivity", 16); len(causes) != 2 {
+		t.Fatalf("runtime call causes = %d, want 2", len(causes))
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(10, func() {
+		runtimeCallCauses(summary, "FeedActivity", 16)
+	})
+	if allocations > 128 {
+		t.Fatalf("disconnected tied runtime causes allocate %.2f objects, want at most 128", allocations)
+	}
+}
+
+func TestUIScreenInsightsDiscloseOmittedRuntimeCallSignals(t *testing.T) {
+	calls := make([]analyze.RuntimeCallStats, 10)
+	for index := range calls {
+		calls[index] = analyze.RuntimeCallStats{
+			Screen: "FeedActivity", Caller: fmt.Sprintf("Caller%d.run", index),
+			Callee: fmt.Sprintf("Target%d.render", index), Count: 1,
+			TotalMS: uint64(index + 20), MaxMS: uint64(index + 20),
+		}
+	}
+	insights := uiScreenInsights(analyze.Summary{
+		Screens:      []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 120, JankyFrames: 12}},
+		RuntimeCalls: calls,
+	})
+
+	if len(insights) != 1 || insights[0].CauseTotal != 10 || insights[0].OmittedCauses != 8 {
+		t.Fatalf("runtime-call signal totals = %+v, want total=10 omitted=8", insights)
+	}
+}
+
+func TestRuntimeCallCausesDoNotWrapDurationMagnitude(t *testing.T) {
+	overflowingMS := uint64(math.MaxUint64/1_000 + 1)
+	causes := runtimeCallCauses(analyze.Summary{RuntimeCalls: []analyze.RuntimeCallStats{
+		{
+			Screen: "FeedActivity", Caller: "com.app.Slow.run", Callee: "com.app.VerySlow.render",
+			Count: 1, TotalMS: overflowingMS, MaxMS: overflowingMS,
+		},
+		{
+			Screen: "FeedActivity", Caller: "com.app.Fast.run", Callee: "com.app.LessSlow.render",
+			Count: 1, TotalMS: 1_000, MaxMS: 1_000,
+		},
+	}}, "FeedActivity", 16)
+
+	if len(causes) != 2 || !strings.Contains(causes[0].Title, "VerySlow.render") {
+		t.Fatalf("wrapped duration changed runtime cause order: %+v", causes)
+	}
+}
+
+func TestUIRelatedSignalsSaturateIntegerCounters(t *testing.T) {
+	maximum := int(^uint(0) >> 1)
+	nearby, _, _ := uiRelatedSignals(analyze.Summary{SignalContexts: []analyze.SignalContextStats{
+		{Screen: "Feed", HTTPCount: maximum, HTTPFailed: maximum, StallCount: maximum},
+		{Screen: "Feed", HTTPCount: 1, HTTPFailed: 1, StallCount: 1},
+	}}, "Feed")
+	if !strings.Contains(nearby, fmt.Sprint(maximum)) || strings.Contains(nearby, "-1") {
+		t.Fatalf("UI related signal counters wrapped: %q", nearby)
+	}
+}
+
+func TestUIScreenInsightsBoundVisibleCauseCardsAndReportOmissions(t *testing.T) {
+	const causeCount = 100
+	windows := make([]analyze.ProblemWindowStats, causeCount)
+	for index := range windows {
+		windows[index] = analyze.ProblemWindowStats{
+			Screen: "FeedActivity", Kind: "wrapped_click", Owner: fmt.Sprintf("com.app.Click%03d.run", index),
+			Count: 1, MaxMS: uint64(index + 20),
+		}
+	}
+	insights := uiScreenInsights(analyze.Summary{
+		Screens:        []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 180, JankyFrames: 30, JankRatePct: 16.7}},
+		ProblemWindows: windows,
+	})
+
+	if len(insights) != 1 || len(insights[0].Causes) != 12 {
+		t.Fatalf("visible UI causes = %+v, want 12 bounded cards", insights)
+	}
+	if insights[0].CauseTotal != causeCount || insights[0].OmittedCauses != causeCount-12 {
+		t.Fatalf("UI cause totals = %d/%d, want %d/%d", insights[0].CauseTotal, insights[0].OmittedCauses, causeCount, causeCount-12)
+	}
+	if !strings.Contains(insights[0].Causes[0].Where, "Click099.run") {
+		t.Fatalf("strongest UI cause was not retained: %+v", insights[0].Causes[0])
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(10, func() {
+		uiScreenInsights(analyze.Summary{
+			Screens:        []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 180, JankyFrames: 30, JankRatePct: 16.7}},
+			ProblemWindows: windows,
+		})
+	})
+	if allocations > 112 {
+		t.Fatalf("bounded UI cause cards allocate %.2f objects, want at most 112", allocations)
+	}
+}
+
+func TestUIScreenInsightsBoundHighCardinalitySourceMaterialization(t *testing.T) {
+	const sourceCount = 1_024
+	ioCalls := make([]analyze.IOStats, sourceCount)
+	contexts := make([]analyze.SignalContextStats, sourceCount)
+	logSpam := make([]analyze.LogSpamStats, sourceCount)
+	for index := 0; index < sourceCount; index++ {
+		owner := fmt.Sprintf("com.app.Owner%04d.run", index)
+		ioCalls[index] = analyze.IOStats{
+			Screen: "FeedActivity", Owner: owner, Operation: "file_read", MainThread: true,
+			Count: 1, MaxDurationUS: uint64(100_000 + index), TotalDurationUS: uint64(100_000 + index),
+		}
+		contexts[index] = analyze.SignalContextStats{
+			Screen: "FeedActivity", Owner: owner, RouteSample: fmt.Sprintf("GET /feed/%04d", index),
+			HTTPCount: 1, HTTPP95MS: uint64(1_000 + index),
+		}
+		logSpam[index] = analyze.LogSpamStats{
+			Screen: "FeedActivity", Owner: owner, Source: "android.util.Log.d", Count: uint64(100 + index),
+		}
+	}
+	summary := analyze.Summary{
+		Screens:        []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 180, JankyFrames: 30, JankRatePct: 16.7}},
+		IOAnalysis:     &analyze.IOAnalysis{Calls: ioCalls},
+		SignalContexts: contexts,
+		LogSpam:        logSpam,
+	}
+
+	insights := uiScreenInsights(summary)
+	if len(insights) != 1 || len(insights[0].Causes) != uiScreenCauseLimit {
+		t.Fatalf("visible UI causes = %+v, want %d bounded cards", insights, uiScreenCauseLimit)
+	}
+	wantTotal := sourceCount * 3
+	if insights[0].CauseTotal != wantTotal || insights[0].OmittedCauses != wantTotal-uiScreenCauseLimit {
+		t.Fatalf("UI cause totals = %d/%d, want %d/%d", insights[0].CauseTotal, insights[0].OmittedCauses, wantTotal, wantTotal-uiScreenCauseLimit)
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(5, func() {
+		uiScreenInsights(summary)
+	})
+	if allocations > 512 {
+		t.Fatalf("high-cardinality UI sources allocate %.2f objects, want at most 512", allocations)
+	}
+}
+
+func TestDatabaseUICausesBoundHighCardinalityMaterialization(t *testing.T) {
+	const contextCount = 1_024
+	contexts := make([]analyze.DatabaseStatementContextStats, contextCount)
+	for index := range contexts {
+		contexts[index] = analyze.DatabaseStatementContextStats{
+			Source: fmt.Sprintf("com.app.FeedDao%04d.load", index), Screen: "FeedActivity",
+			Main: analyze.DatabaseExecutionStats{Calls: 1, MaxDurationUS: uint64(40_000 + index)},
+			MainCorrelation: analyze.DatabaseCorrelationStats{
+				UIWindowOverlaps: 1, UIOverlapMaxDurationUS: uint64(40_000 + index),
+			},
+		}
+	}
+	analysis := &analyze.DatabaseAnalysis{Statements: []analyze.DatabaseStatementStats{{
+		Query: "SELECT item FROM feed WHERE id = ?", Contexts: contexts,
+	}}}
+
+	causes := databaseUICauses(analysis, "FeedActivity")
+	if len(causes) != databaseUICauseLimit {
+		t.Fatalf("database UI causes = %d, want %d", len(causes), databaseUICauseLimit)
+	}
+	insights := uiScreenInsights(analyze.Summary{
+		Screens:          []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 180, JankyFrames: 30, JankRatePct: 16.7}},
+		DatabaseAnalysis: analysis,
+	})
+	if len(insights) != 1 || len(insights[0].Causes) != databaseUICauseLimit ||
+		insights[0].CauseTotal != contextCount || insights[0].OmittedCauses != contextCount-databaseUICauseLimit {
+		t.Fatalf("database UI insight did not preserve bounded/total counts: %+v", insights)
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(5, func() {
+		databaseUICauses(analysis, "FeedActivity")
+	})
+	if allocations > 160 {
+		t.Fatalf("high-cardinality database UI causes allocate %.2f objects, want at most 160", allocations)
+	}
+}
+
+func TestMainThreadIOCauseThresholdDoesNotWrapDeadline(t *testing.T) {
+	deadlineUS := uint64(math.MaxUint64/2 + 1)
+	causes := mainThreadIOCauses(analyze.Summary{IOAnalysis: &analyze.IOAnalysis{Calls: []analyze.IOStats{{
+		Screen: "FeedActivity", Operation: "file_read", MainThread: true,
+		MaxDurationUS: deadlineUS - 1, TotalDurationUS: deadlineUS,
+	}}}}, "FeedActivity", deadlineUS)
+	if len(causes) != 0 {
+		t.Fatalf("sub-threshold I/O was included after deadline overflow: %+v", causes)
+	}
+}
+
+func TestUIFrameDeadlineMillisecondsDoesNotWrap(t *testing.T) {
+	want := uint64(math.MaxUint64/1_000 + 1)
+	if got := uiFrameDeadlineMS(analyze.ScreenStats{FrameDeadlineUS: math.MaxUint64}); got != want {
+		t.Fatalf("uiFrameDeadlineMS(MaxUint64) = %d, want %d", got, want)
+	}
+}
+
+func TestUIHasSlowFrameTailDoesNotWrapDeadline(t *testing.T) {
+	screen := analyze.ScreenStats{
+		FrameDeadlineStatus: "consistent", FrameDeadlineUS: math.MaxUint64,
+		FrameP95MS: 1, FrameP99MS: 1,
+	}
+	if uiHasSlowFrameTail(screen) {
+		t.Fatal("tiny frame tail was classified as slow after deadline overflow")
+	}
+}
+
+func BenchmarkConnectedRuntimeCallComponentsStar(b *testing.B) {
+	const edgeCount = 4_096
+	calls := make([]analyze.RuntimeCallStats, edgeCount)
+	for index := range calls {
+		calls[index] = analyze.RuntimeCallStats{
+			Caller: "com.app.Root.dispatch",
+			Callee: fmt.Sprintf("com.app.Leaf%04d.run", index),
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		components := selectConnectedRuntimeCallComponents(calls, 2)
+		if len(components) != 1 || len(components[0]) != edgeCount {
+			b.Fatalf("components = %d/%d, want 1/%d", len(components), len(components[0]), edgeCount)
+		}
 	}
 }

@@ -44,7 +44,16 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 		`data-jankhunter-single-html`,
 		`class="report-logo"`,
 		`РАЗДЕЛЫ ОТЧЁТА`,
-		`grid-template-columns: 232px minmax(0, 1fr)`,
+		`--shell-forest: #006400`,
+		`--shell-attention: #FF4500`,
+		`--shell-paper: #FFFFE0`,
+		`--shell-critical: #8B0000`,
+		`--shell-danger: #DC143C`,
+		`--shell-medium: #FF8A3D`,
+		`--shell-low: #F4D35E`,
+		`--shell-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif`,
+		`box-shadow: inset 3px 0 var(--shell-low), inset -3px 0 var(--shell-low)`,
+		`grid-template-columns: clamp(210px, 16.18vw, 260px) minmax(0, 1fr)`,
 		`id="jankhunter-report-pages"`,
 		`"id":"overview"`,
 		`"id":"math"`,
@@ -54,11 +63,15 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 		`new DecompressionStream("gzip")`,
 		`payload.remove()`,
 		`jankhunter-report:navigate`,
+		`jankhunter-report:scroll-fragment`,
 		`#page=`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("bundle does not contain %q", marker)
 		}
+	}
+	if strings.Contains(html, "#4B0082") || strings.Contains(html, "#4b0082") {
+		t.Fatal("bundle still contains the removed purple accent")
 	}
 	if strings.Contains(html, "data-report-style") {
 		t.Fatal("bundle contains removed report-style selection marker")
@@ -91,6 +104,10 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	secondPage := decodeBundlePagePayload(t, html, pages[1].Payload)
 	if !strings.Contains(firstPage, bundledPageBridge) || !strings.Contains(secondPage, bundledPageBridge) {
 		t.Fatal("navigation bridge is not injected into every embedded page")
+	}
+	if !strings.Contains(firstPage, "details.open = true") ||
+		!strings.Contains(firstPage, "jankhunter-report:scroll-fragment") {
+		t.Fatal("embedded navigation does not reveal targets inside closed details")
 	}
 }
 

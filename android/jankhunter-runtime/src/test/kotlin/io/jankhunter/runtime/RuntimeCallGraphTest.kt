@@ -6,10 +6,14 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.LockSupport
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -211,7 +215,7 @@ class RuntimeCallGraphTest {
         val writer = writer(directory)
         val now = AtomicLong(0L)
         val consumerStarted = CountDownLatch(1)
-        val observedAfterFormerBoundary = CountDownLatch(2)
+        val observedAfterFormerBoundary = CountDownLatch(1)
         val emitted = CountDownLatch(1)
         val graph = RuntimeCallGraph(
             nowMs = now::get,
@@ -219,6 +223,7 @@ class RuntimeCallGraphTest {
             captureOperationId = { 41L },
             maxKeys = { 128 },
             periodicFlushIntervalMs = 30_000L,
+            uptimeNanos = { TimeUnit.MILLISECONDS.toNanos(now.get()) },
             batchObserver = { emitted.countDown() },
             consumerLoopObserver = {
                 if (now.get() == 0L) consumerStarted.countDown()
@@ -230,6 +235,7 @@ class RuntimeCallGraphTest {
             assertTrue("runtime graph consumer did not start", consumerStarted.await(2L, TimeUnit.SECONDS))
             graph.recordEdge(1L, 2L)
             now.set(6_000L)
+            LockSupport.unpark(graph.consumerForTest())
             assertTrue(
                 "consumer did not observe the former five-second boundary",
                 observedAfterFormerBoundary.await(2L, TimeUnit.SECONDS),
@@ -237,6 +243,7 @@ class RuntimeCallGraphTest {
             assertFalse("runtime edge flushed at the former boundary", emitted.await(100L, TimeUnit.MILLISECONDS))
 
             now.set(30_000L)
+            LockSupport.unpark(graph.consumerForTest())
             assertTrue("runtime edge did not flush at the bounded window", emitted.await(2L, TimeUnit.SECONDS))
             val admissionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
             while (graph.emittedForTest() < 1L && System.nanoTime() < admissionDeadline) Thread.yield()
@@ -394,6 +401,7 @@ class RuntimeCallGraphTest {
             assertEquals(1L, graph.acceptedForTest())
             assertEquals(0L, graph.emittedForTest())
             assertEquals(1L, graph.acceptedEventLossForTest())
+            assertEquals(0, graph.registeredProducerCountForTest())
         } finally {
             failConsumer.countDown()
             graph.clear()
@@ -414,8 +422,118 @@ class RuntimeCallGraphTest {
             assertEquals(0L, graph.acceptedForTest())
             assertEquals(0L, graph.emittedForTest())
             assertEquals(0L, graph.acceptedEventLossForTest())
+            assertEquals(0, graph.registeredProducerCountForTest())
             assertFalse(graph.flushBlocking(10L))
         } finally {
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerStartFailureClosesAdmissionAndReleasesLifecycleState() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-start-failure").toFile()
+        val writer = writer(directory)
+        val failure = IllegalStateException("injected thread start failure")
+        lateinit var graph: RuntimeCallGraph
+        graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            consumerThreadFactory = { runnable, name ->
+                object : Thread(runnable, name) {
+                    override fun start() {
+                        graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = true)
+                        throw failure
+                    }
+                }
+            },
+        )
+        try {
+            assertSame(failure, assertThrows(IllegalStateException::class.java) { graph.resetFlushState(writer) })
+
+            assertEquals(null, graph.consumerForTest())
+            assertFalse(graph.acceptingPublishersForTest())
+            assertFalse(graph.flushBlocking(1L))
+            assertEquals(1L, graph.acceptedForTest())
+            assertEquals(1L, graph.acceptedEventLossForTest())
+            assertEquals(0, graph.registeredProducerCountForTest())
+        } finally {
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun methodEntryCannotRegisterProducerAfterConcurrentClear() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-late-registration").toFile()
+        val writer = writer(directory)
+        val registrationEntered = CountDownLatch(1)
+        val releaseRegistration = CountDownLatch(1)
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            producerRegistrationObserver = {
+                registrationEntered.countDown()
+                assertTrue("producer registration release timed out", releaseRegistration.await(5L, TimeUnit.SECONDS))
+            },
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        graph.resetFlushState(writer)
+        try {
+            val publisher = executor.submit<Long> { graph.enter(1L, "method", enabled = true) }
+            assertTrue("producer did not reach registration", registrationEntered.await(5L, TimeUnit.SECONDS))
+
+            graph.clear()
+            awaitConsumerStopped(graph)
+            releaseRegistration.countDown()
+
+            assertEquals(0L, publisher.get(5L, TimeUnit.SECONDS))
+            assertEquals(0, graph.registeredProducerCountForTest())
+        } finally {
+            releaseRegistration.countDown()
+            executor.shutdownNow()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerDoesNotSwallowFatalVmFailure() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-fatal-consumer").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val uncaught = CountDownLatch(1)
+        val failure = AtomicReference<Throwable>()
+        val fatal = FatalConsumerError()
+        val graph = graph(
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await(5L, TimeUnit.SECONDS)
+                throw fatal
+            },
+        )
+        graph.resetFlushState(writer)
+        try {
+            assertTrue(consumerEntered.await(5L, TimeUnit.SECONDS))
+            checkNotNull(graph.consumerForTest()).uncaughtExceptionHandler =
+                Thread.UncaughtExceptionHandler { _, throwable ->
+                    failure.set(throwable)
+                    uncaught.countDown()
+                }
+            releaseConsumer.countDown()
+
+            assertTrue("fatal consumer failure was swallowed", uncaught.await(5L, TimeUnit.SECONDS))
+            assertSame(fatal, failure.get())
+        } finally {
+            releaseConsumer.countDown()
             graph.clear()
             writer.close()
             directory.deleteRecursively()
@@ -508,6 +626,182 @@ class RuntimeCallGraphTest {
         }
     }
 
+    @Test
+    fun exactShutdownHonorsTimeoutWithoutDiscardingConsumerStateDuringClear() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-exact-timeout").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val observedEvents = AtomicLong()
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            exactAdmission = { true },
+            batchObserver = { batch -> observedEvents.addAndGet(batch.logicalEventCount()) },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await()
+            },
+        )
+        graph.resetFlushState(writer)
+        val consumer = graph.consumerForTest()
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = true)
+
+            val startedAtNs = System.nanoTime()
+            assertFalse(graph.flushForShutdown(timeoutMs = 1L))
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNs) < 1_000L)
+
+            graph.clear()
+            assertTrue("clear hid the still-running consumer", graph.consumerForTest()?.isAlive == true)
+
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            assertFalse("consumer did not finish deferred clear", consumer?.isAlive == true)
+            assertEquals(1L, observedEvents.get())
+            assertEquals(0, graph.registeredProducerCountForTest())
+        } finally {
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deferredShutdownClosesWriterOnlyAfterAcceptedGraphEventsAreWritten() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-deferred-writer-close").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            exactAdmission = { true },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await()
+            },
+        )
+        graph.resetFlushState(writer)
+        val consumer = graph.consumerForTest()
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = true)
+
+            assertFalse(graph.flushForShutdown(timeoutMs = 1L))
+            assertFalse(closeWhenGraphDrained(graph, writer, timeoutMs = 5_000L))
+            assertTrue("writer closed before the graph drained", writer.isAcceptingEvents())
+
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+
+            assertFalse("graph consumer did not finish", consumer?.isAlive == true)
+            assertEquals(1L, graph.emittedForTest())
+            assertEquals(0L, graph.acceptedEventLossForTest())
+            assertFalse("writer remained open after deferred graph shutdown", writer.isAcceptingEvents())
+        } finally {
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deferredShutdownDoesNotTakeOwnershipOfUnrelatedWriter() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-unrelated-writer").toFile()
+        val graphWriter = writer(directory)
+        val unrelatedWriter = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await()
+            },
+        )
+        graph.resetFlushState(graphWriter)
+        val consumer = graph.consumerForTest()
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            assertFalse(graph.flushForShutdown(timeoutMs = 1L))
+            assertFalse(closeWhenGraphDrained(graph, graphWriter, timeoutMs = 5_000L))
+
+            assertTrue(closeWhenGraphDrained(graph, unrelatedWriter, timeoutMs = 5_000L))
+            assertFalse("unrelated writer remained open", unrelatedWriter.isAcceptingEvents())
+
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            assertFalse("graph writer remained open", graphWriter.isAcceptingEvents())
+        } finally {
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            graph.clear()
+            graphWriter.close()
+            unrelatedWriter.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun restartWaitsForDeferredConsumerShutdown() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-deferred-restart").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val restartEntered = CountDownLatch(1)
+        val graph = graph(
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await()
+            },
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        graph.resetFlushState(writer)
+        val firstConsumer = graph.consumerForTest()
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            assertFalse(graph.flushForShutdown(timeoutMs = 1L))
+            graph.clear()
+
+            val restart = executor.submit {
+                restartEntered.countDown()
+                graph.resetFlushState(writer)
+            }
+            assertTrue("restart did not begin", restartEntered.await(5L, TimeUnit.SECONDS))
+            releaseConsumer.countDown()
+
+            restart.get(5L, TimeUnit.SECONDS)
+            assertTrue("replacement consumer did not start", graph.consumerForTest()?.isAlive == true)
+        } finally {
+            releaseConsumer.countDown()
+            firstConsumer?.join(5_000L)
+            graph.flushForShutdown()
+            graph.clear()
+            executor.shutdownNow()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun closeWhenGraphDrained(graph: RuntimeCallGraph, writer: AsyncLogWriter, timeoutMs: Long): Boolean {
+        val closed = java.util.concurrent.atomic.AtomicBoolean()
+        graph.whenWriterDrained(writer) { closed.set(writer.close(timeoutMs)) }
+        return closed.get()
+    }
+
     private fun withGraph(
         initialScreen: String = "screen",
         maxKeys: Int = 128,
@@ -586,4 +880,6 @@ class RuntimeCallGraphTest {
             value = updated
         }
     }
+
+    private class FatalConsumerError : VirtualMachineError()
 }

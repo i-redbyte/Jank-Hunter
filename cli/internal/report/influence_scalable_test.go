@@ -54,6 +54,32 @@ func TestInfluenceReportContainsScalableNavigationAndEvidenceModel(t *testing.T)
 	}
 }
 
+func TestInfluenceGraphUsesVisibleZoomRangeAndWidthFittedViewport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "influence.html")
+	if err := report.WriteInfluenceWithOptions(path, buildReportInfluenceFixture(), "Граф влияния", report.ReportOptions{}); err != nil {
+		t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
+	}
+	html := readInfluenceHTML(t, path)
+	for _, expected := range []string{
+		`data-influence-zoom-value`,
+		`data-influence-min-zoom="45"`,
+		`data-influence-max-zoom="200"`,
+		`preserveAspectRatio="xMinYMin meet"`,
+		`const constrainTransform = () =>`,
+		`const syncViewportFrame = () =>`,
+		`viewHeight = graphWidth * clientHeight / clientWidth`,
+		`new ResizeObserver(syncViewportFrame)`,
+		`const zoomAt = (nextScale, clientX, clientY) =>`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Errorf("influence graph viewport does not contain %q", expected)
+		}
+	}
+	if strings.Contains(html, `0.45, 2.4`) {
+		t.Error("influence graph still exposes the obsolete 240% zoom limit")
+	}
+}
+
 func TestInfluenceReportStaticDOMIDsAreUnique(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "influence.html")
 	if err := report.WriteInfluenceWithOptions(path, buildReportInfluenceFixture(), "Граф влияния", report.ReportOptions{}); err != nil {

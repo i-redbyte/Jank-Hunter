@@ -12,6 +12,7 @@ import (
 )
 
 type analysisOptionsBuilder struct {
+	outputPath           string
 	filter               analyze.Filter
 	artifactsDir         string
 	mappingPath          string
@@ -19,6 +20,7 @@ type analysisOptionsBuilder struct {
 	diagnosticsPath      string
 	diCatalogPath        string
 	componentCatalogPath string
+	lambdaCapturePath    string
 	databaseEvidencePath string
 	artifactNS           []byte
 }
@@ -69,6 +71,9 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 }
 
 func (b analysisOptionsBuilder) buildForLogs(paths []string) (analyze.Options, error) {
+	if err := rejectOutputInputOverlap(b.outputPath, paths); err != nil {
+		return analyze.Options{}, err
+	}
 	namespaces, err := logArtifactNamespaces(paths)
 	if err != nil {
 		return analyze.Options{}, err
@@ -91,6 +96,19 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 	if err != nil {
 		return analyze.Options{}, err
 	}
+	inputs := []string{b.mappingPath, b.classGraphPath, b.diagnosticsPath, b.diCatalogPath,
+		b.componentCatalogPath, b.lambdaCapturePath, b.databaseEvidencePath}
+	for _, path := range []string{b.classGraphPath, b.diagnosticsPath} {
+		if path != "" {
+			inputs = append(inputs, filepath.Join(filepath.Dir(path), "artifact-metadata.json"))
+		}
+	}
+	if b.artifactsDir != "" {
+		inputs = append(inputs, filepath.Join(b.artifactsDir, "artifact-metadata.json"))
+	}
+	if err := rejectOutputInputOverlap(b.outputPath, inputs); err != nil {
+		return analyze.Options{}, err
+	}
 	nameMapping, err := analyze.LoadNameMapping(b.mappingPath)
 	if err != nil {
 		return analyze.Options{}, err
@@ -111,6 +129,10 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 	if err != nil {
 		return analyze.Options{}, err
 	}
+	lambdaCaptures, err := analyze.LoadLambdaCaptureCatalog(b.lambdaCapturePath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
 	databaseEvidence, err := analyze.LoadDatabaseEvidence(b.databaseEvidencePath)
 	if err != nil {
 		return analyze.Options{}, err
@@ -122,6 +144,7 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 		InstrumentationDiagnostics: diagnostics,
 		DependencyInjectionCatalog: diCatalog,
 		AndroidComponentCatalog:    componentCatalog,
+		LambdaCaptures:             lambdaCaptures,
 		DatabaseEvidence:           databaseEvidence,
 		ArtifactDirectory:          b.artifactsDir,
 		ArtifactSymbolNamespace:    append([]byte(nil), b.artifactNS...),
@@ -194,6 +217,7 @@ type androidArtifactBundle struct {
 	diagnostics      string
 	diCatalog        string
 	componentCatalog string
+	lambdaCaptures   string
 	symbolNamespace  []byte
 }
 
@@ -231,6 +255,9 @@ func (b analysisOptionsBuilder) withExplicitArtifactsForNamespaces(
 	}
 	if b.componentCatalogPath == "" && bundle.componentCatalog != "" {
 		b.componentCatalogPath = bundle.componentCatalog
+	}
+	if b.lambdaCapturePath == "" && bundle.lambdaCaptures != "" {
+		b.lambdaCapturePath = bundle.lambdaCaptures
 	}
 	return b, nil
 }
@@ -287,6 +314,10 @@ func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) 
 	componentCatalog := filepath.Join(absolute, "android-components-catalog.jsonl")
 	if info, statErr := os.Stat(componentCatalog); statErr == nil && !info.IsDir() && info.Size() > 0 {
 		bundle.componentCatalog = componentCatalog
+	}
+	lambdaCaptures := filepath.Join(absolute, "lambda-captures.jsonl")
+	if info, statErr := os.Stat(lambdaCaptures); statErr == nil && !info.IsDir() && info.Size() > 0 {
+		bundle.lambdaCaptures = lambdaCaptures
 	}
 	return bundle, nil
 }

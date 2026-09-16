@@ -1,11 +1,5 @@
 
 (() => {
-  const explorer = document.getElementById('explorer');
-  const registry = document.getElementById('registry');
-  if (explorer && registry && explorer.parentNode === registry.parentNode) {
-    explorer.parentNode.insertBefore(registry, explorer);
-  }
-
   const tableScope = (root) => root && root.querySelectorAll ? root : document;
 
   const markScrollableTables = (root = document) => {
@@ -97,7 +91,12 @@
       window.requestIdleCallback(callback, { timeout: 700 });
       return;
     }
-    window.setTimeout(() => callback({ timeRemaining: () => 8 }), 0);
+    window.setTimeout(() => {
+      const idleStartedAt = performance.now();
+      callback({
+        timeRemaining: () => Math.max(0, 8 - (performance.now() - idleStartedAt)),
+      });
+    }, 0);
   };
 
   const forEachChunk = (nodes, chunkSize, visit, done) => {
@@ -255,12 +254,11 @@
       button.textContent = 'Загрузка…';
     }
     const promise = new Promise((resolve, reject) => {
-      const added = [];
       const step = () => {
         const started = performance.now();
         try {
           while (nextDeferredChunk(tbody) && performance.now() - started < 8) {
-            added.push(...materializeDeferredChunk(tbody, false));
+            materializeDeferredChunk(tbody, true);
           }
         } catch (error) {
           reject(error);
@@ -270,14 +268,23 @@
           requestAnimationFrame(step);
           return;
         }
-        if (added.length) {
-          tbody.dispatchEvent(new CustomEvent('report:rows-added', { bubbles: true, detail: { rows: added } }));
-        }
-        resolve(added);
+        resolve();
       };
       requestAnimationFrame(step);
     });
     deferredLoads.set(tbody, promise);
+    const releaseLoad = () => {
+      if (deferredLoads.get(tbody) === promise) deferredLoads.delete(tbody);
+    };
+    void promise.then(releaseLoad, () => {
+      releaseLoad();
+      const retryButton = tbody.querySelector('[data-load-more-rows]');
+      if (retryButton) {
+        retryButton.disabled = false;
+        retryButton.removeAttribute('aria-busy');
+        updateDeferredLoader(tbody, 0);
+      }
+    });
     return promise;
   };
 
@@ -323,8 +330,92 @@
     });
   });
 
+  const reportTermHelp = new Map([
+    ['4xx', 'HTTP 4xx - ответ о проблеме в запросе или правах клиента.'],
+    ['5xx', 'HTTP 5xx - ответ о внутренней ошибке сервера.'],
+    ['abi', 'ABI описывает машинную архитектуру, для которой собран нативный код приложения.'],
+    ['anr', 'ANR - ситуация, когда Android считает приложение не отвечающим пользователю.'],
+    ['api', 'API level - версия набора системных возможностей Android.'],
+    ['asm', 'ASM анализирует байткод во время сборки и добавляет точки сбора данных Jank Hunter.'],
+    ['cpu', 'CPU - процессор устройства. Высокая загрузка может задерживать главный поток и фоновые задачи.'],
+    ['dao', 'DAO - слой методов, через который приложение читает и изменяет данные в базе.'],
+    ['di', 'DI - внедрение зависимостей: объект получает готовые зависимости вместо создания их внутри себя.'],
+    ['dns', 'DNS преобразует имя сервера в сетевой адрес. Задержка здесь происходит до соединения.'],
+    ['fps', 'FPS - число отрисованных кадров в секунду. Смотрите его вместе с долей медленных кадров.'],
+    ['gc', 'GC - сборщик мусора, который освобождает объекты, больше не достижимые из работающего приложения.'],
+    ['hprof', 'HPROF - дамп Java/Kotlin-кучи. Он позволяет проверить путь ссылок от корня GC до объекта.'],
+    ['http', 'HTTP - протокол сетевых запросов приложения.'],
+    ['ipc', 'IPC - обмен данными между процессами Android.'],
+    ['jank', 'Jank - заметная пользователю задержка отрисовки, когда кадр не уложился в доступное время.'],
+    ['mad', 'MAD - медиана абсолютных отклонений. Показывает устойчивый разброс значений.'],
+    ['p50', 'p50 - медиана: половина измерений не превышает это значение.'],
+    ['p90', 'p90 - значение, которое не превысили 90% измерений.'],
+    ['p95', 'p95 - значение, которое не превысили 95% измерений.'],
+    ['p99', 'p99 - значение, которое не превысили 99% измерений; на малой выборке оно нестабильно.'],
+    ['pss', 'PSS - память процесса с пропорционально учтёнными общими страницами.'],
+    ['r8', 'R8 оптимизирует и переименовывает классы и методы Android-приложения. Mapping возвращает исходные имена.'],
+    ['ram', 'RAM - оперативная память устройства.'],
+    ['room', 'Room - Android-библиотека доступа к SQLite через DAO и сгенерированный код.'],
+    ['rps', 'RPS - число запросов в секунду.'],
+    ['rss', 'RSS - все физические страницы памяти процесса, включая общие страницы целиком.'],
+    ['sql', 'SQL - язык запросов к базе данных.'],
+    ['sqlite', 'SQLite - встроенная база данных Android.'],
+    ['ttfb', 'TTFB - от начала первой отправки заголовков запроса до чтения первого байта ответа из транспорта, до HTTP-парсера. Включает отправку тела; интервалы могут пересекаться.'],
+    ['uid', 'UID - системный идентификатор приложения Android.'],
+    ['vpn', 'VPN направляет сетевой трафик через виртуальное соединение и может менять задержки.'],
+    ['websocket', 'WebSocket - длительное двустороннее сетевое соединение.'],
+    ['группа запусков', 'Группа запусков объединяет записи с одинаковой версией приложения, устройством и другими условиями.'],
+    ['надежность', 'Надёжность показывает, насколько вывод подтверждён данными. Это не вероятность ошибки.'],
+    ['медиана', 'Медиана - середина отсортированной выборки: половина значений ниже, половина выше.'],
+    ['перцентиль', 'Перцентиль показывает границу, ниже которой находится заданная доля измерений.'],
+    ['retention', 'Retention означает, что объект остаётся достижимым дольше ожидаемого. Это ещё не доказанная утечка.'],
+    ['удержание', 'Удержание означает, что объект остаётся достижимым дольше ожидаемого. Это ещё не доказанная утечка.'],
+    ['δ', 'Δ - разница между проверяемым и базовым значением.'],
+  ]);
+
+  const normalizeHelpLabel = (value) =>
+    (value || '').trim().toLocaleLowerCase('ru').replaceAll('ё', 'е');
+
+  const reportHelpFor = (label) => {
+    const normalized = normalizeHelpLabel(label);
+    if (!normalized) return '';
+    const exact = reportTermHelp.get(normalized);
+    if (exact) return exact;
+    const words = normalized.split(/[^a-zа-я0-9]+/u);
+    for (const word of words) {
+      const help = reportTermHelp.get(word);
+      if (help) return help;
+    }
+    return '';
+  };
+
+  const enhanceReportHelp = (root = document) => {
+    tableScope(root).querySelectorAll('th').forEach((header) => {
+      if (header.dataset.tip) return;
+      const label = header.textContent.trim().replace(/\s+/g, ' ');
+      if (!label) return;
+      const explicit = header.querySelector('[data-tip]');
+      header.dataset.tip = explicit?.dataset.tip || reportHelpFor(label) ||
+        `Столбец «${label}»: наведите на значение ниже, чтобы прочитать его полностью.`;
+      if (!header.hasAttribute('tabindex')) header.tabIndex = 0;
+    });
+    tableScope(root).querySelectorAll(
+      'h1, h2, h3, h4, .label, .env-label, .pill, .chip, .influence-toolbar-label'
+    ).forEach((label) => {
+      if (label.dataset.tip) return;
+      const help = reportHelpFor(label.textContent);
+      if (!help) return;
+      label.dataset.tip = help;
+      if (!label.matches('a, button, input, select, textarea, [tabindex]')) label.tabIndex = 0;
+    });
+  };
+
+  enhanceReportHelp();
+
   const tooltip = document.createElement('div');
   tooltip.className = 'jh-tooltip';
+  tooltip.id = 'jh-report-tooltip';
+  tooltip.setAttribute('role', 'tooltip');
   document.body.appendChild(tooltip);
   let activeTarget = null;
   const gap = 10;
@@ -380,11 +471,21 @@
   };
 
   const showTooltip = (target) => {
+    if (activeTarget && activeTarget !== target) {
+      const remaining = (activeTarget.getAttribute('aria-describedby') || '')
+        .split(/\s+/).filter((id) => id && id !== tooltip.id);
+      if (remaining.length) activeTarget.setAttribute('aria-describedby', remaining.join(' '));
+      else activeTarget.removeAttribute('aria-describedby');
+    }
     activeTarget = target;
+    const describedBy = (target.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+    if (!describedBy.includes(tooltip.id)) describedBy.push(tooltip.id);
+    target.setAttribute('aria-describedby', describedBy.join(' '));
     placeTooltip(target);
   };
 
   const tooltipTarget = (node) => {
+    if (!node?.closest) return null;
     const explicit = node.closest('[data-tip]');
     if (explicit) return explicit;
     const candidate = node.closest(
@@ -407,6 +508,12 @@
   };
 
   const hideTooltip = () => {
+    if (activeTarget) {
+      const remaining = (activeTarget.getAttribute('aria-describedby') || '')
+        .split(/\s+/).filter((id) => id && id !== tooltip.id);
+      if (remaining.length) activeTarget.setAttribute('aria-describedby', remaining.join(' '));
+      else activeTarget.removeAttribute('aria-describedby');
+    }
     activeTarget = null;
     tooltip.classList.remove('is-visible');
   };
@@ -429,6 +536,9 @@
     if (target) showTooltip(target);
   });
   document.addEventListener('focusout', hideTooltip);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && activeTarget) hideTooltip();
+  });
   window.addEventListener('scroll', () => {
     if (activeTarget) placeTooltip(activeTarget);
   }, { passive: true });
@@ -441,6 +551,38 @@
       if (activeTarget) placeTooltip(activeTarget);
     }, { passive: true });
   }
+
+  const revealHashTarget = (hash = window.location.hash) => {
+    if (!hash || hash === '#') return;
+    let id = hash.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch (_) {
+      return;
+    }
+    const target = document.getElementById(id);
+    if (!target) return;
+    let details = target.closest('details');
+    while (details) {
+      details.open = true;
+      details = details.parentElement?.closest('details');
+    }
+    document.querySelectorAll('.nav a[href^="#"]').forEach((link) => {
+      const active = link.hash === hash;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    });
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('a[href^="#"]');
+    if (!link) return;
+    requestAnimationFrame(() => revealHashTarget(link.hash));
+  });
+  window.addEventListener('hashchange', () => revealHashTarget());
+  if (window.location.hash) requestAnimationFrame(() => revealHashTarget());
 
   document.querySelectorAll('[data-zero-toggle]').forEach((toggle) => {
     const scope = toggle.closest('[data-zero-scope]') || document.body;
@@ -482,6 +624,14 @@
   };
   const codeEvidenceArchives = new WeakMap();
   const codeEvidenceSearchTexts = new WeakMap();
+  const reportCodeArchiveFailure = (error) => {
+    console.error('Не удалось прочитать архив с доказательствами по коду', error);
+  };
+  const normalizeCodeEvidenceSearch = (value) => (value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase('ru')
+    .replaceAll('ё', 'е');
   const codeEvidenceLocation = (problem) => {
     const className = problem?.class_name || 'класс не определён';
     return className + (problem?.method ? '.' + problem.method : '');
@@ -489,7 +639,7 @@
   const codeEvidenceRecordSearch = (record) => {
     const cached = codeEvidenceSearchTexts.get(record);
     if (cached) return cached;
-    const text = JSON.stringify(record).toLowerCase();
+    const text = normalizeCodeEvidenceSearch(JSON.stringify(record));
     codeEvidenceSearchTexts.set(record, text);
     return text;
   };
@@ -525,6 +675,9 @@
       return { mode: archive.mode || 'inspect', records, byKey };
     })();
     codeEvidenceArchives.set(registry, promise);
+    void promise.catch(() => {
+      if (codeEvidenceArchives.get(registry) === promise) codeEvidenceArchives.delete(registry);
+    });
     return promise;
   };
   const materializeCodeProblemEvidence = async (details) => {
@@ -639,8 +792,8 @@
     summary.append(main, count);
     const body = createCodeEvidenceElement('div', 'code-problem-detail-body');
     body.dataset.codeProblemEvidenceBody = '';
-    body.dataset.impactLabel = compareMode ? 'Влияние кандидата' : 'Влияние';
-    body.dataset.signalsLabel = compareMode ? 'Сигналы кандидата' : 'Сигналы';
+    body.dataset.impactLabel = compareMode ? 'Влияние в проверяемом прогоне' : 'Влияние';
+    body.dataset.signalsLabel = compareMode ? 'Сигналы проверяемого прогона' : 'Сигналы';
     const placeholder = appendCodeEvidenceBlock(body, 'Полные доказательства', 'span-all');
     appendTextParagraph(placeholder, 'Откройте строку, чтобы развернуть все сигналы и сценарии без усечения.');
     details.append(summary, body);
@@ -672,7 +825,7 @@
       scoreCell.append(
         createCodeEvidenceElement('span', 'problem-score sev-' + (severity || 'ok'), Number(problem.score || 0).toFixed(1)),
         createCodeEvidenceElement('div', 'muted', codeEvidenceSeverityLabel(severity, true)),
-        createCodeEvidenceElement('div', 'muted', problem.runtime_evidence ? 'есть runtime-сигналы' : 'только статическая связь'),
+        createCodeEvidenceElement('div', 'muted', problem.runtime_evidence ? 'есть данные выполнения' : 'только статическая связь'),
       );
       row.appendChild(scoreCell);
     }
@@ -691,7 +844,7 @@
     if (compareMode) {
       const scoreCell = document.createElement('td');
       scoreCell.appendChild(createCodeEvidenceElement('div', '', 'база ' + (compare.has_baseline ? Number(compare.baseline_score || 0).toFixed(1) : 'нет сопоставимой точки')));
-      scoreCell.appendChild(createCodeEvidenceElement('div', '', 'кандидат ' + Number(problem.score || 0).toFixed(1)));
+      scoreCell.appendChild(createCodeEvidenceElement('div', '', 'проверяемый ' + Number(problem.score || 0).toFixed(1)));
       scoreCell.appendChild(createCodeEvidenceElement('div', 'muted', compare.comparable ? 'дельта ' + (score >= 0 ? '+' : '') + score.toFixed(1) : 'дельта не вычисляется'));
       row.appendChild(scoreCell);
     }
@@ -810,7 +963,7 @@
       if (filterFrame) cancelAnimationFrame(filterFrame);
       filterFrame = requestAnimationFrame(() => {
         filterFrame = 0;
-        void applyArchive();
+        void applyArchive().catch(reportCodeArchiveFailure);
       });
     };
     search?.addEventListener('input', scheduleApply);
@@ -839,12 +992,17 @@
       const button = event.target.closest('[data-load-more-code-problems]');
       if (!button) return;
       button.disabled = true;
-      if (!activeRecords) {
-        const archive = await loadCodeEvidenceArchive(registry);
-        activeRecords = archive?.records || [];
+      try {
+        if (!activeRecords) {
+          const archive = await loadCodeEvidenceArchive(registry);
+          activeRecords = archive?.records || [];
+        }
+        const loaded = tbody.querySelectorAll('[data-code-problem-row]').length;
+        renderRecords(activeRecords, Math.min(loaded + 50, activeRecords.length));
+      } catch (error) {
+        button.disabled = false;
+        reportCodeArchiveFailure(error);
       }
-      const loaded = tbody.querySelectorAll('[data-code-problem-row]').length;
-      renderRecords(activeRecords, Math.min(loaded + 50, activeRecords.length));
     });
   };
 
@@ -854,7 +1012,7 @@
       return;
     }
     const tbody = registry.querySelector('tbody');
-    let rows = Array.from(registry.querySelectorAll('[data-code-problem-row]'));
+    let sortedRows = Array.from(registry.querySelectorAll('[data-code-problem-row]'));
     const search = registry.querySelector('[data-code-registry-search]');
     const severity = registry.querySelector('[data-code-registry-severity]');
     const category = registry.querySelector('[data-code-registry-category]');
@@ -866,9 +1024,8 @@
     const severityRank = { high: 3, medium: 2, ok: 1 };
     let sortKey = 'score';
     let sortDir = 'desc';
-    let sortedRows = rows.slice();
     let filterFrame = 0;
-    const deferredTotal = Number(tbody.querySelector('[data-deferred-loader]')?.dataset.deferredTotal || rows.length);
+    const deferredTotal = Number(tbody.querySelector('[data-deferred-loader]')?.dataset.deferredTotal || sortedRows.length);
     const ensureSelectOption = (select, value, label) => {
       if (!select || !value || Array.from(select.options).some((option) => option.value === value)) return;
       select.appendChild(new Option(label || value, value));
@@ -935,19 +1092,24 @@
       scheduleTableMeasure();
     };
     const applyWithCompleteData = async (reorder = false) => {
-      if (nextDeferredChunk(tbody)) {
-        await materializeAllDeferredRows(tbody);
-      }
-      if ((search?.value || '').trim()) {
-        const archive = await loadCodeEvidenceArchive(registry);
-        if (archive) {
-          rows.forEach((row) => {
-            if (row.jhSearchText) return;
-            const details = row.querySelector('[data-code-problem-evidence-key]');
-            const problem = archive.byKey.get(details?.dataset.codeProblemEvidenceKey || '')?.problem;
-            row.jhSearchText = ((row.dataset.search || row.textContent || '') + ' ' + JSON.stringify(problem || '')).toLowerCase();
-          });
+      try {
+        if (nextDeferredChunk(tbody)) {
+          await materializeAllDeferredRows(tbody);
         }
+        if ((search?.value || '').trim()) {
+          const archive = await loadCodeEvidenceArchive(registry);
+          if (archive) {
+            sortedRows.forEach((row) => {
+              if (row.jhSearchText) return;
+              const details = row.querySelector('[data-code-problem-evidence-key]');
+              const problem = archive.byKey.get(details?.dataset.codeProblemEvidenceKey || '')?.problem;
+              row.jhSearchText = ((row.dataset.search || row.textContent || '') + ' ' + JSON.stringify(problem || '')).toLowerCase();
+            });
+          }
+        }
+      } catch (error) {
+        reportCodeArchiveFailure(error);
+        return;
       }
       if (reorder) sortRows();
       apply(reorder);
@@ -989,7 +1151,6 @@
     registry.addEventListener('report:rows-added', (event) => {
       const additions = (event.detail?.rows || []).filter((row) => row.matches('[data-code-problem-row]'));
       if (!additions.length) return;
-      rows = rows.concat(additions);
       sortedRows = sortedRows.concat(additions);
       sortRows();
       apply(true);
@@ -1018,6 +1179,7 @@
           sectionTitle,
           label: location,
           text: codeEvidenceRecordSearch(record),
+          normalized: true,
           reveal: async () => {
             const findRow = () => Array.from(registry.querySelectorAll('[data-code-problem-row]'))
               .find((row) => row.querySelector('[data-code-problem-evidence-key]')?.dataset.codeProblemEvidenceKey === key);

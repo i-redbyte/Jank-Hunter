@@ -98,7 +98,7 @@ func ProfileFile(path string) (SizeProfileFile, map[EventType]uint64, map[EventT
 	}
 	fileProfile := SizeProfileFile{
 		Path:            path,
-		Format:          "jhlog-" + FormatVersionString,
+		Format:          "jhlog-" + result.FormatVersion,
 		Status:          result.Status,
 		Sealed:          result.Sealed,
 		TailBytes:       result.TailBytes,

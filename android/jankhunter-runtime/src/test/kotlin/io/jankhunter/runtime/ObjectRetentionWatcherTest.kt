@@ -2,13 +2,57 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetentionEvidence
+import java.lang.ref.Reference
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ObjectRetentionWatcherTest {
+    @Test
+    fun watchedObjectsUseWeakIdentityIndexWithoutQueueCompaction() {
+        val fieldTypes = ObjectRetentionWatcher::class.java.declaredFields.map { it.type }
+
+        assertFalse(fieldTypes.contains(ConcurrentLinkedQueue::class.java))
+        assertTrue(ObjectRetentionWatcher::class.java.declaredFields.any { it.name == "watchedByIdentityHash" })
+    }
+
+    @Test
+    fun startDoesNotWaitForBusyDiagnosticLock() {
+        val watcher = ObjectRetentionWatcher(retainedDelayMs = RETAINED_DELAY_MS)
+        val scheduler = io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler()
+        val checkLock = checkNotNull(ObjectRetentionWatcher::class.java.getDeclaredField("checkLock").apply {
+            isAccessible = true
+        }.get(watcher)) as ReentrantLock
+        val startEntered = CountDownLatch(1)
+        val startCompleted = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            checkLock.withLock {
+                executor.submit {
+                    startEntered.countDown()
+                    watcher.start(scheduler)
+                    startCompleted.countDown()
+                }
+                assertTrue(startEntered.await(1, TimeUnit.SECONDS))
+                assertTrue(startCompleted.await(1, TimeUnit.SECONDS))
+            }
+            watcher.start(scheduler)
+        } finally {
+            watcher.stop()
+            scheduler.shutdown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+        }
+    }
+
     @Test
     fun cardinalityLossUsesPrimitivePort() {
         val field = ObjectRetentionWatcher::class.java.getDeclaredField("onCardinalityLoss")
@@ -248,6 +292,39 @@ class ObjectRetentionWatcherTest {
     }
 
     @Test
+    fun staleQueueEntryFromPreviousRunCannotRemoveCurrentWatch() {
+        var now = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+        )
+        enableManualWatch(watcher)
+        watcher.watch(Any(), "previous-run", null, null)
+        val staleReference = watchedReferences(watcher).single()
+        watcher.stop()
+
+        enableManualWatch(watcher)
+        try {
+            val first = Any()
+            val second = Any()
+            watcher.watch(first, "current-run", null, null)
+            staleReference.enqueue()
+            watcher.watch(second, "current-run", null, null)
+            now = RETAINED_DELAY_MS
+
+            watcher.checkRetained()
+
+            assertEquals(2L, reports.single().count)
+        } finally {
+            watcher.stop()
+        }
+    }
+
+    @Test
     fun reportsWatcherCapacityLossWithoutRetainingExtraObject() {
         var losses = 0L
         val watcher = ObjectRetentionWatcher(
@@ -359,6 +436,13 @@ class ObjectRetentionWatcherTest {
             isAccessible = true
         }
         (runningField.get(watcher) as AtomicBoolean).set(true)
+    }
+
+    private fun watchedReferences(watcher: ObjectRetentionWatcher): List<Reference<*>> {
+        val watchedField = ObjectRetentionWatcher::class.java.getDeclaredField("watched").apply {
+            isAccessible = true
+        }
+        return (watchedField.get(watcher) as List<*>).map { requireNotNull(it) as Reference<*> }
     }
 
     private companion object {

@@ -86,6 +86,8 @@ func (b *problemBuilder) coverage() []CategoryCoverage {
 		available  []string
 		action     string
 	}
+	processCPUAvailable := hasGaugePrefix(b.summary.Gauges, "process.cpu.")
+	powerEvidence, thermalSamples, thermalAvailable := powerCoverageEvidence(b.summary.Gauges)
 	definitions := []coverageDefinition{
 		{ProblemCategoryStability, "Стабильность", []string{"паузы главного потока", "причины завершения процессов"}, collectorConfigured(b.summary, jhlog.CollectorMainThreadStalls) || collectorConfigured(b.summary, jhlog.CollectorProcessExit) || b.summary.StallCount > 0 || len(b.summary.ProcessExits) > 0, true, []string{"паузы главного потока", "причины завершения процессов"}, "Включить сбор пауз и завершений процессов, затем записать активный пользовательский сценарий длительностью не менее 30 секунд."},
 		{ProblemCategoryOperations, "Операции приложения", []string{"начало, завершение, бюджет и итог операций"}, b.summary.OperationAnalysis != nil, b.summary.OperationAnalysis != nil && b.summary.OperationAnalysis.Completed >= b.cfg.OperationMinSample && !operationAggregationLimited(b.summary.OperationAnalysis), []string{"типизированный жизненный цикл операций"}, "Добавить измеряемые операции вокруг важных действий, экранов и фоновых работ, затем собрать не менее 20 завершений."},
@@ -93,8 +95,8 @@ func (b *problemBuilder) coverage() []CategoryCoverage {
 		{ProblemCategoryNetwork, "Сеть", []string{"жизненный цикл HTTP и WebSocket"}, b.summary.HTTPCount > 0 || b.summary.WebSocketAnalysis != nil, uint64(b.summary.HTTPCount) >= b.cfg.HTTPMinSample || (b.summary.WebSocketAnalysis != nil && b.summary.WebSocketAnalysis.Opened >= 3), []string{"завершённые HTTP-вызовы и WebSocket-соединения"}, "Подключить jankhunter-okhttp3 и повторить сетевой сценарий."},
 		{ProblemCategoryMemory, "Память и сборка мусора", []string{"снимки памяти", "счётчики сборки мусора и выделения памяти ART", "удержания объектов или снимок кучи HPROF"}, collectorConfigured(b.summary, jhlog.CollectorSystemSampler) || collectorConfigured(b.summary, jhlog.CollectorRetainedObjects) || b.summary.MemoryCount > 0 || len(b.summary.MemoryLeaks) > 0 || b.summary.GCAnalysis != nil, b.summary.MemoryCount >= 3 || len(b.summary.MemoryLeaks) > 0 || b.summary.GCAnalysis != nil, []string{"события памяти, сборки мусора и удержаний"}, "Включить сбор памяти; подозрение на утечку проверить с помощью снимка кучи HPROF."},
 		{ProblemCategoryIO, "Файлы и база данных", []string{"файловые операции, SQL-вызовы SQLite/Room и вызовы DAO с привязкой к коду"}, collectorConfigured(b.summary, jhlog.CollectorIOTracing) || collectorConfigured(b.summary, jhlog.CollectorRoom) || collectorConfigured(b.summary, jhlog.CollectorDatabase) || b.summary.IOAnalysis != nil || b.summary.DatabaseAnalysis != nil, b.summary.IOAnalysis != nil || b.summary.DatabaseAnalysis != nil || hasSemanticDomain(b.summary, SemanticDomainRoom), []string{"файловые операции, SQL-вызовы SQLite/Room и DAO с привязкой к коду"}, "Включить сбор файловых операций, базы данных и Room, затем выполнить сценарий с БД или хранилищем."},
-		{ProblemCategoryCPU, "Процессор и фоновые задачи", []string{"нагрузка процессора", "очереди исполнителей", "выполнения фоновых задач с привязкой к коду"}, collectorConfigured(b.summary, jhlog.CollectorSystemSampler) || collectorConfigured(b.summary, jhlog.CollectorWorker) || hasNamedPrefix(b.summary.Gauges, "process.cpu.") || b.summary.AsyncAnalysis != nil, hasNamedPrefix(b.summary.Gauges, "process.cpu.") || hasSemanticDomain(b.summary, SemanticDomainWorker) || b.summary.AsyncAnalysis != nil, []string{"нагрузка процессора, очереди асинхронных и фоновых задач"}, "Обернуть критичные исполнители и включить системный сбор и сбор фоновых задач, затем выполнить фоновый сценарий."},
-		{ProblemCategoryPower, "Энергия и нагрев", []string{"температура и расход батареи", "зарядка и активность приложения"}, collectorConfigured(b.summary, jhlog.CollectorSystemSampler) || hasNamedPrefix(b.summary.Gauges, "device.thermal.") || hasNamedPrefix(b.summary.Gauges, "battery."), hasNamedPrefix(b.summary.Gauges, "device.thermal.") || hasNamedPrefix(b.summary.Gauges, "battery."), []string{"температура и расход батареи"}, "Записать длинный сценарий без зарядки с включённым системным сборщиком."},
+		{ProblemCategoryCPU, "Процессор и фоновые задачи", []string{"нагрузка процессора", "очереди исполнителей", "выполнения фоновых задач с привязкой к коду"}, collectorConfigured(b.summary, jhlog.CollectorSystemSampler) || collectorConfigured(b.summary, jhlog.CollectorWorker) || processCPUAvailable || b.summary.AsyncAnalysis != nil, processCPUAvailable || hasSemanticDomain(b.summary, SemanticDomainWorker) || b.summary.AsyncAnalysis != nil, []string{"нагрузка процессора, очереди асинхронных и фоновых задач"}, "Обернуть критичные исполнители и включить системный сбор и сбор фоновых задач, затем выполнить фоновый сценарий."},
+		{ProblemCategoryPower, "Условия питания и нагрев", []string{"статус нагрева Android (thermal status)"}, collectorConfigured(b.summary, jhlog.CollectorSystemSampler) || len(powerEvidence) > 0, thermalAvailable && thermalSamples >= thermalMinimumSamples, powerEvidence, "Запишите не менее трёх системных замеров на Android 10 или новее и повторите сценарий в сопоставимых условиях питания и нагрева."},
 		{ProblemCategoryLogs, "Логи", []string{"число вызовов логирования"}, len(b.summary.LogSpam) > 0, len(b.summary.LogSpam) > 0, []string{"число вызовов логирования"}, "Включить запись частого логирования и выполнить соответствующий сценарий."},
 		{ProblemCategoryAndroidComponents, "Компоненты Android и IPC", []string{"жизненный цикл Service и BroadcastReceiver", "данные клиента и сервера Binder", "видимость и важность процесса"}, b.summary.AndroidComponents != nil, b.summary.AndroidComponents != nil && b.summary.AndroidComponents.Available && !b.summary.AndroidComponents.Partial, []string{"структурированные события Service, BroadcastReceiver, Binder/AIDL и состояния процесса"}, "Включить сбор компонентов Android для всех процессов сценария и передать полный набор .jhlog одного запуска приложения."},
 	}
@@ -132,6 +134,8 @@ func (b *problemBuilder) coverage() []CategoryCoverage {
 			coverage.AvailableEvidence = definition.available
 		} else {
 			coverage.MissingEvidence = definition.required
+		}
+		if status != "healthy" && status != "problems_found" {
 			coverage.NextAction = definition.action
 		}
 		if len(findings) > 0 {
@@ -140,6 +144,41 @@ func (b *problemBuilder) coverage() []CategoryCoverage {
 		out = append(out, coverage)
 	}
 	return out
+}
+
+func powerCoverageEvidence(gauges []NamedGauge) ([]string, uint64, bool) {
+	var batteryLevel, chargingState, powerSaveMode, thermalStatus bool
+	var thermalSamples uint64
+	for _, gauge := range gauges {
+		switch gauge.Name {
+		case "battery.level_pct":
+			batteryLevel = true
+		case "battery.status", "battery.charging", "battery.plugged":
+			chargingState = true
+		case "device.power_save_mode":
+			powerSaveMode = true
+		case "device.thermal.status":
+			thermalStatus = true
+			thermalSamples = gauge.sampleCount
+			if thermalSamples == 0 {
+				thermalSamples = 1
+			}
+		}
+	}
+	evidence := make([]string, 0, 4)
+	if batteryLevel {
+		evidence = append(evidence, "уровень заряда")
+	}
+	if chargingState {
+		evidence = append(evidence, "состояние зарядки")
+	}
+	if powerSaveMode {
+		evidence = append(evidence, "режим энергосбережения")
+	}
+	if thermalStatus {
+		evidence = append(evidence, "статус нагрева Android (thermal status)")
+	}
+	return evidence, thermalSamples, thermalStatus
 }
 
 func collectionEvidenceDegraded(quality CollectionQuality) bool {
@@ -206,13 +245,13 @@ func problemSummaryHeadline(summary ProblemSummary) string {
 	if summary.Total > 0 {
 		if summary.SignalTotal > summary.Total {
 			return fmt.Sprintf(
-				"Найдено инцидентов: %d; объединено связанных сигналов: %d. Максимальный приоритет расследования — %s.",
+				"Найдено проблем: %d; связанных сигналов: %d. Максимальный приоритет - %s.",
 				summary.Total,
 				summary.SignalTotal,
 				problemSummaryWorstPriority(summary),
 			)
 		}
-		return fmt.Sprintf("Найдено проблем: %d. Максимальный приоритет расследования — %s.", summary.Total, problemSummaryWorstPriority(summary))
+		return fmt.Sprintf("Найдено проблем: %d. Максимальный приоритет расследования - %s.", summary.Total, problemSummaryWorstPriority(summary))
 	}
 	if summary.Unchecked > 0 {
 		return fmt.Sprintf("Проблем не найдено, но %d категорий не проверены полностью.", summary.Unchecked)
@@ -235,8 +274,8 @@ func problemSummaryWorstPriority(summary ProblemSummary) string {
 	}
 }
 
-func detectorRegistry(cfg ProblemDetectorConfig) []DetectorMetadata {
-	return []DetectorMetadata{
+func detectorRegistry(cfg ProblemDetectorConfig, lambdaCaptures bool) []DetectorMetadata {
+	registry := []DetectorMetadata{
 		{ID: "stability.historical_process_exit", Version: cfg.Version, Category: ProblemCategoryStability, Title: "Историческое завершение процесса", MinimumSample: 1, RequiredSignals: []string{"ApplicationExitInfo"}},
 		{ID: "operations.health", Version: cfg.Version, Category: ProblemCategoryOperations, Title: "Нарушение бюджета или неуспешный итог операции", MinimumSample: cfg.OperationMinSample, RequiredSignals: []string{"operation lifecycle"}, Thresholds: []DetectorThreshold{{"budget_breach_rate", cfg.OperationBudgetBreachRate * 100, "%"}, {"failure_rate", cfg.OperationFailureRate * 100, "%"}}},
 		{ID: "stability.main_thread_stall", Version: cfg.Version, Category: ProblemCategoryStability, Title: "Остановка главного потока", MinimumSample: 1, RequiredSignals: []string{"main-thread stall"}, Thresholds: []DetectorThreshold{{"stall", float64(cfg.StallMS), "ms"}, {"high", float64(cfg.StallHighMS), "ms"}}},
@@ -260,7 +299,7 @@ func detectorRegistry(cfg ProblemDetectorConfig) []DetectorMetadata {
 		{ID: "cpu.process_saturation", Version: cfg.Version, Category: ProblemCategoryCPU, Title: "Высокая загрузка CPU", MinimumSample: 4, RequiredSignals: []string{"process CPU"}, Thresholds: []DetectorThreshold{{"process_cpu", cfg.ProcessCPUPercent, "% core"}}},
 		{ID: "cpu.worker_execution", Version: cfg.Version, Category: ProblemCategoryCPU, Title: "Долгая, повторная или неуспешная Worker-задача", MinimumSample: 1, RequiredSignals: []string{"Worker boundary"}, Thresholds: []DetectorThreshold{{"long_execution", float64(workerLongExecutionMS), "ms"}, {"repeated", float64(workerRepeatedMinCount), "events"}}},
 		{ID: "cpu.async_queue", Version: cfg.Version, Category: ProblemCategoryCPU, Title: "Ожидание в очереди Executor", MinimumSample: cfg.AsyncQueueMinSamples, RequiredSignals: []string{"wrapped Executor metrics"}, Thresholds: []DetectorThreshold{{"queue_wait", float64(cfg.AsyncQueueWaitMS), "ms"}}},
-		{ID: "power.thermal_pressure", Version: cfg.Version, Category: ProblemCategoryPower, Title: "Thermal pressure", MinimumSample: 3, RequiredSignals: []string{"thermal status"}, Thresholds: []DetectorThreshold{{"severe", float64(cfg.ThermalSevereStatus), "Android status"}}},
+		{ID: "power.thermal_pressure", Version: cfg.Version, Category: ProblemCategoryPower, Title: "Сильный нагрев устройства", MinimumSample: thermalMinimumSamples, RequiredSignals: []string{"thermal status"}, Thresholds: []DetectorThreshold{{"severe", float64(cfg.ThermalSevereStatus), "Android status"}}},
 		{ID: "logs.spam", Version: cfg.Version, Category: ProblemCategoryLogs, Title: "Спам логами", MinimumSample: cfg.LogSpamMinCount, RequiredSignals: []string{"log hook"}, Thresholds: []DetectorThreshold{{"count", float64(cfg.LogSpamMinCount), "logs"}, {"rate", cfg.LogSpamRate, "logs/s"}}},
 		{ID: "android.service.callback_failure", Version: cfg.Version, Category: ProblemCategoryAndroidComponents, Title: "Ошибка callback службы", MinimumSample: 1, RequiredSignals: []string{"typed Service callback"}},
 		{ID: "android.service.timeout", Version: cfg.Version, Category: ProblemCategoryAndroidComponents, Title: "Таймаут службы", MinimumSample: 1, RequiredSignals: []string{"typed Service onTimeout"}},
@@ -272,6 +311,14 @@ func detectorRegistry(cfg ProblemDetectorConfig) []DetectorMetadata {
 		{ID: "android.binder.failure", Version: cfg.Version, Category: ProblemCategoryAndroidComponents, Title: "Ошибка Binder-транзакции", MinimumSample: 1, RequiredSignals: []string{"typed Binder transaction outcome"}},
 		{ID: "android.binder.unhandled", Version: cfg.Version, Category: ProblemCategoryAndroidComponents, Title: "Необработанный transaction code", MinimumSample: 1, RequiredSignals: []string{"typed Binder transaction outcome"}},
 	}
+	if lambdaCaptures {
+		registry = append(
+			registry,
+			DetectorMetadata{ID: "memory.lambda_capture", Version: cfg.Version, Category: ProblemCategoryMemory, Title: "Лямбда удерживает объект с lifecycle", MinimumSample: 1, RequiredSignals: []string{"результат статического анализа лямбд"}},
+			DetectorMetadata{ID: "stability.lambda_lifetime_mismatch", Version: cfg.Version, Category: ProblemCategoryStability, Title: "Небезопасное чтение WeakReference", MinimumSample: 1, RequiredSignals: []string{"результат статического анализа лямбд"}},
+		)
+	}
+	return registry
 }
 
 func validateProblemReport(report ProblemReport) error {

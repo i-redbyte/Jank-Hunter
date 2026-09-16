@@ -66,10 +66,10 @@ func semanticWorkOverviewFromItems(items []analyze.SemanticWorkStats, domain str
 	overview := semanticOverviewBase(domain)
 	overview.Boundaries = len(items)
 	for _, item := range items {
-		overview.Executions += item.Count
+		overview.Executions = saturatingAddUint64(overview.Executions, item.Count)
 		overview.MaxDuration = max(overview.MaxDuration, item.MaxMS)
 		if item.MainThread {
-			overview.MainThread += item.Count
+			overview.MainThread = saturatingAddUint64(overview.MainThread, item.Count)
 		}
 		if semanticWorkVerdictFor(item).NeedsAttention {
 			overview.Suspicious++
@@ -77,16 +77,16 @@ func semanticWorkOverviewFromItems(items []analyze.SemanticWorkStats, domain str
 	}
 	overview.Status, overview.Severity = "измерено, явных отклонений нет", "ok"
 	if overview.Suspicious > 0 {
-		overview.Status, overview.Severity = "есть кандидаты для проверки", "medium"
+		overview.Status, overview.Severity = "есть места для проверки", "medium"
 	}
 	overview.Summary = fmt.Sprintf(
-		"%s в %s; самое долгое — %d мс.",
+		"%s в %s; самое долгое - %d мс.",
 		russianCount(overview.Executions, "выполнение", "выполнения", "выполнений"),
 		russianCount(overview.Boundaries, "границе кода", "границах кода", "границах кода"),
 		overview.MaxDuration,
 	)
 	if overview.MainThread > 0 {
-		overview.Summary += " На главном потоке — " + russianCount(overview.MainThread, "выполнение", "выполнения", "выполнений") + "."
+		overview.Summary += " На главном потоке - " + russianCount(overview.MainThread, "выполнение", "выполнения", "выполнений") + "."
 	}
 	if overview.Suspicious > 0 {
 		overview.Summary += " Требуют внимания: " + russianCount(overview.Suspicious, "граница", "границы", "границ") + "."
@@ -179,11 +179,24 @@ func roomWorkRows(summary analyze.Summary) []semanticWorkRow {
 	return semanticWorkRowsForDomain(summary, analyze.SemanticDomainRoom)
 }
 
-func ordinaryRuntimeCalls(summary analyze.Summary) []analyze.RuntimeCallStats {
-	result := make([]analyze.RuntimeCallStats, 0, len(summary.RuntimeCalls))
+const runtimeCallReportLimit = 256
+
+type ordinaryRuntimeCallView struct {
+	Rows  []analyze.RuntimeCallStats
+	Total int
+}
+
+func ordinaryRuntimeCallViewFor(summary analyze.Summary) ordinaryRuntimeCallView {
+	capacity := min(len(summary.RuntimeCalls), runtimeCallReportLimit)
+	result := ordinaryRuntimeCallView{
+		Rows: make([]analyze.RuntimeCallStats, 0, capacity),
+	}
 	for _, call := range summary.RuntimeCalls {
 		if !analyze.IsSemanticRuntimeCall(call.Caller) {
-			result = append(result, call)
+			result.Total++
+			if len(result.Rows) < runtimeCallReportLimit {
+				result.Rows = append(result.Rows, call)
+			}
 		}
 	}
 	return result

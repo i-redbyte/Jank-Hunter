@@ -23,7 +23,10 @@ func TestInspectRendersAsyncGCAndStartupDetailsWithInterpretationBoundaries(t *t
 			}},
 			Tasks: []analyze.AsyncTaskStats{{
 				Kind: "coroutine", Owner: "FeedRepository", DurationSamples: 2,
-				AvgDurationMS: 500, MaxDurationMS: 700, Failures: 1,
+				AvgDurationMS: 500, MaxDurationMS: 700, Failures: 1, SegmentedSamples: 2,
+				ActiveSamples: 2, AvgActiveMS: 90, MaxActiveMS: 120,
+				SuspendedSamples: 2, AvgSuspendedMS: 410, MaxSuspendedMS: 580,
+				Suspensions: 3, ThreadMigrations: 1, SegmentedFailures: 1, Cancellations: 1,
 			}},
 		},
 		GCAnalysis: &analyze.GCAnalysis{
@@ -52,6 +55,7 @@ func TestInspectRendersAsyncGCAndStartupDetailsWithInterpretationBoundaries(t *t
 	for _, expected := range []string{
 		`href="#async-analysis"`, `id="async-analysis"`, "Очереди и выполнение асинхронных задач",
 		"render", "FeedRepository", "не равно чистому времени процессора",
+		"Активное время", "Время ожидания suspension", "3 / 1", "1 / 1",
 		`href="#gc-analysis"`, `id="gc-analysis"`, "Сборка мусора и скорость выделения памяти",
 		"Временная связь, а не доказанная причина", "счётчиков среды Android",
 		`href="#startup-analysis"`, `id="startup-analysis"`, "Запуск приложения и переходы между экранами",

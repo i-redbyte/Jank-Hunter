@@ -49,6 +49,7 @@ class GenerateJankHunterArtifactMetadataTaskTest {
         assertTrue(text.contains("\"databaseWholeApplication\":true"))
         assertTrue(text.contains("\"databaseTracing\":true"))
         assertTrue(text.contains("\"ioTracing\":true"))
+        assertTrue(text.contains("\"lambdaCaptures\":true"))
         assertTrue(text.contains("\"includePackages\":[\"com.app\"]"))
         assertFalse(text.contains("\"kind\":\"entry\""))
         assertFalse(text.contains("\"owner\""))

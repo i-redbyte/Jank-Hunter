@@ -61,7 +61,12 @@ internal class SessionBinaryRecordEncoder(
         totalStorageKb: Long,
         networkVpn: Boolean,
         foreground: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ) {
+        require(trafficUidPlusOne in 0L..MAX_TRAFFIC_UID_PLUS_ONE)
+        require(trafficKnownFlags in 0..TRAFFIC_KNOWN_FLAGS_MASK)
+        require(trafficKnownFlags == 0 || trafficUidPlusOne != 0L)
         var attributes = foregroundFlag(foreground)
         if (lowMemory) attributes = attributes or BinaryLogWriter.FLAG_CONTEXT_LOW_MEMORY
         if (networkMetered) attributes = attributes or BinaryLogWriter.FLAG_NETWORK_METERED
@@ -78,20 +83,26 @@ internal class SessionBinaryRecordEncoder(
             .uvarint(nonNegative(totalMemoryKb))
             .uvarint(nonNegative(freeStorageKb))
             .uvarint(nonNegative(totalStorageKb))
+            .uvarint(trafficUidPlusOne)
+            .uvarint(trafficKnownFlags.toLong())
         sink.emitSemantic(Jhlog.TYPE_DEVICE_CONTEXT, attributes, payload, sink.producerContext())
     }
 
     fun stall(
         screen: String?, owner: String?, stackHint: String?, durationMs: Long, foreground: Boolean,
+        incidentId: Long, state: Long,
     ) {
+        validateStallLifecycle(incidentId, state)
         val payload = sink.payload()
             .symbolRef(sink.symbolId(BinaryLogWriter.DICT_STACK, stackHint))
             .uvarint(nonNegative(durationMs))
+            .uvarint(nonNegative(incidentId))
+            .uvarint(state)
         sink.emitSemantic(
             Jhlog.TYPE_STALL,
             BinaryLogWriter.FLAG_THREAD_MAIN or foregroundFlag(foreground),
             payload,
-            sink.context(screen, owner),
+            sink.context(screen, owner, sink.producerContext()?.operationId ?: 0L),
         )
     }
 
@@ -188,3 +199,6 @@ internal class SessionBinaryRecordEncoder(
         const val RETAINED_EVIDENCE_AFTER_EXPLICIT_GC = 2L
     }
 }
+
+private const val MAX_TRAFFIC_UID_PLUS_ONE = 1L shl 31
+private const val TRAFFIC_KNOWN_FLAGS_MASK = 3

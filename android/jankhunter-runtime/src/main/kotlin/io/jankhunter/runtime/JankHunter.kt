@@ -82,6 +82,8 @@ object JankHunter {
      * Atomically moves the active session to [storage] without restarting collection. Passing
      * `null` restores Jank Hunter's built-in file storage. The selected storage is retained while
      * runtime collection is disabled and is used by the next runtime start.
+     * [JankHunterStorageSwitchResult.IN_PROGRESS] means the ordered switch already started and its
+     * final state will be applied asynchronously.
      */
     @JvmStatic
     @JvmOverloads
@@ -95,14 +97,35 @@ object JankHunter {
     @JvmStatic
     fun initDiagnostics(): JankHunterInitDiagnostics = runtime.lifecycle.diagnostics()
 
-    /** Seals a coordinated vector frontier and immediately continues collection in new segments. */
+    /**
+     * Seals a coordinated vector frontier and immediately continues collection in new segments.
+     * Returns `null` on the main thread; use [captureLogSnapshotAsync] from UI code.
+     */
     @JvmStatic
     fun captureLogSnapshot(): JankHunterLogSnapshot? = runtime.session.captureLogSnapshot()
 
-    /** Captures every live process at one vector frontier and atomically publishes one ZIP file. */
+    /** Captures a snapshot on Jank Hunter's maintenance worker. */
+    @JvmStatic
+    fun captureLogSnapshotAsync(callback: JankHunterCaptureCallback<JankHunterLogSnapshot>): Boolean {
+        return runtime.session.captureLogSnapshotAsync(callback)
+    }
+
+    /**
+     * Captures every live process at one vector frontier and atomically publishes one ZIP file.
+     * Returns `null` on the main thread; use [captureLogArchiveAsync] from UI code.
+     */
     @JvmStatic
     fun captureLogArchive(destination: File): JankHunterLogArchive? {
         return runtime.session.captureLogArchive(destination)
+    }
+
+    /** Captures and writes an archive on Jank Hunter's maintenance worker. */
+    @JvmStatic
+    fun captureLogArchiveAsync(
+        destination: File,
+        callback: JankHunterCaptureCallback<JankHunterLogArchive>,
+    ): Boolean {
+        return runtime.session.captureLogArchiveAsync(destination, callback)
     }
 
     @JvmStatic

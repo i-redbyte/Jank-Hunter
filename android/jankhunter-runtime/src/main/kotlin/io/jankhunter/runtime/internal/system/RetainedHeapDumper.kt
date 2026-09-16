@@ -3,6 +3,7 @@ package io.jankhunter.runtime.internal.system
 import android.os.Debug
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.RuntimeLongSource
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -61,6 +62,7 @@ internal class RetainedHeapDumper(
         } catch (error: Throwable) {
             dumpCount.decrementAndGet()
             lastDumpAtMs.compareAndSet(now, last)
+            RuntimeHookGuard.rethrowFatal(error)
             Result.Failed(error.javaClass.simpleName ?: "error")
         }
     }
@@ -88,7 +90,7 @@ internal class RetainedHeapDumper(
             return file
         } finally {
             if (!committed) {
-                runCatching { artifact.abort() }
+                RuntimeHookGuard.swallow { artifact.abort() }
             }
         }
     }
@@ -100,7 +102,8 @@ internal class RetainedHeapDumper(
             } else {
                 storage.listFiles()
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
             return false
         }
         val dumps = ArrayList<ManagedHeapDump>(paths.size)
@@ -126,7 +129,8 @@ internal class RetainedHeapDumper(
                 storage.delete(file.name)
                 storage.listFiles().none { path -> File(path).name == file.name }
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
             false
         }
     }

@@ -205,6 +205,60 @@ func TestColumnarMicroPageRANSMaskRoundTripsWithoutOuterGZIP(t *testing.T) {
 	}
 }
 
+func TestColumnarMicroPageReusesDecodeBuffersAcrossSequentialPages(t *testing.T) {
+	event := Event{
+		Type:   EventCounter,
+		Metric: &MetricEvent{MetricRef: LocalSymbol(1), Value: 7, Count: 1, Sum: 7, Max: 7},
+	}
+	var payload bytes.Buffer
+	if err := encodeEventPayload(&payload, event, nil); err != nil {
+		t.Fatal(err)
+	}
+	singleRecord, err := encodeMicroPageRecord(
+		[]microPageRow{{eventType: event.Type, payload: payload.Bytes()}},
+		nil,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullRecord, err := encodeMicroPageRecord(
+		[]microPageRow{
+			{eventType: event.Type, payload: payload.Bytes()},
+			{eventType: event.Type, payload: payload.Bytes()},
+		},
+		nil,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleBody := microPageRecordBody(t, singleRecord)
+	fullBody := microPageRecordBody(t, fullRecord)
+	segmentState := decodeSegmentState(nil)
+
+	first, _, err := decodeRecord(
+		fullBody, recordDecodeState{}, "", "", "first", RecordPosition{}, nil, segmentState,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEvents := &first.microPage.events[0]
+	firstWeights := &first.microPage.weights[0]
+	second, _, err := decodeRecord(
+		singleBody, recordDecodeState{}, "", "", "second", RecordPosition{}, nil, segmentState,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstEvents != &second.microPage.events[0] || firstWeights != &second.microPage.weights[0] {
+		t.Fatal("sequential micro-pages allocated new event or weight buffers")
+	}
+	if segmentState.workspace.events[1].Metric != nil {
+		t.Fatal("smaller micro-page retained a payload from the previous page")
+	}
+}
+
 func microPageRecordBody(t *testing.T, record []byte) []byte {
 	t.Helper()
 	reader := recordReader{data: record}

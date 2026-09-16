@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import android.os.Looper
 import android.os.SystemClock
+import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.io.Jhlog
 
@@ -23,21 +24,26 @@ internal class RuntimeWorkerTelemetry(
         return mixed.nonZero()
     }
 
-    fun enqueued(instanceId: Long, periodic: Boolean) {
+    fun enqueued(instanceId: Long, periodic: Boolean) = registrationEvent(instanceId, periodic, Jhlog.WORKER_STAGE_ENQUEUED)
+
+    fun registeredObserved(instanceId: Long, periodic: Boolean) =
+        registrationEvent(instanceId, periodic, Jhlog.WORKER_STAGE_REGISTERED_OBSERVED)
+
+    private fun registrationEvent(instanceId: Long, periodic: Boolean, stage: Long) {
         RuntimeHookGuard.run {
             if (!isEnabled() || instanceId == 0L) return@run
             recordEvent(
                 workerId = 0L,
                 workerName = null,
                 instanceId = instanceId,
-                stage = Jhlog.WORKER_STAGE_ENQUEUED,
+                stage = stage,
                 outcome = Jhlog.WORKER_OUTCOME_UNKNOWN,
                 periodic = periodic,
             )
         }
     }
 
-    fun isEnabled(): Boolean = access.isActive() && access.config?.workerTracingEnabled() == true
+    fun isEnabled(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.WORKERS)
 
     fun started(
         instanceId: Long,
@@ -58,12 +64,15 @@ internal class RuntimeWorkerTelemetry(
         generation: Int,
     ): Long = RuntimeHookGuard.value(0L) {
         if (!isEnabled() || instanceId == 0L || workerId == 0L) return@value 0L
-        val token = SystemClock.elapsedRealtimeNanos().coerceAtLeast(1L)
+        val epoch = access.collectionEpoch ?: return@value 0L
+        val token = epoch.tokens.begin(RuntimeAsyncTokenTable.WORKER, SystemClock.elapsedRealtimeNanos())
+        if (token == 0L) return@value 0L
         recordEvent(
             workerId = workerId,
             workerName = workerName,
             instanceId = instanceId,
             stage = Jhlog.WORKER_STAGE_STARTED,
+            activeWriter = epoch.writer,
             outcome = Jhlog.WORKER_OUTCOME_UNKNOWN,
             runAttempt = runAttempt,
             generation = generation,
@@ -108,27 +117,40 @@ internal class RuntimeWorkerTelemetry(
         stopReasonKnown: Boolean,
     ) {
         RuntimeHookGuard.run {
-            if (token == 0L || !isEnabled() || instanceId == 0L || workerId == 0L) return@run
-            val durationNanos = (SystemClock.elapsedRealtimeNanos() - token).coerceAtLeast(0L)
-            recordEvent(
-                workerId = workerId,
-                workerName = workerName,
-                instanceId = instanceId,
-                stage = Jhlog.WORKER_STAGE_FINISHED,
-                outcome = outcome.wireValue(),
-                durationMs = durationNanos / NANOS_PER_MILLISECOND,
-                runAttempt = runAttempt,
-                generation = generation,
-                stopReason = stopReason,
-                stopReasonKnown = stopReasonKnown,
-            )
-            semantic.recordBoundary(
-                JankHunterSemanticWork.WORKER,
-                workerId,
-                workerName,
-                durationNanos,
-                outcome,
-            )
+            if (token == 0L) return@run
+            val epoch = access.epochForCompletion(token) ?: return@run
+            val started = access.claimAsync(epoch, token, RuntimeAsyncTokenTable.WORKER, JankHunterRuntimeFeature.WORKERS)
+            if (started < 0L) return@run
+            try {
+                if (instanceId == 0L || workerId == 0L) {
+                    access.rejectAsyncCompletion(RuntimeAsyncTokenTable.REJECT_INVALID)
+                    return@run
+                }
+                val durationNanos = (SystemClock.elapsedRealtimeNanos() - started).coerceAtLeast(0L)
+                recordEvent(
+                    workerId = workerId,
+                    workerName = workerName,
+                    instanceId = instanceId,
+                    stage = Jhlog.WORKER_STAGE_FINISHED,
+                    activeWriter = epoch.writer,
+                    outcome = outcome.wireValue(),
+                    durationMs = durationNanos / NANOS_PER_MILLISECOND,
+                    runAttempt = runAttempt,
+                    generation = generation,
+                    stopReason = stopReason,
+                    stopReasonKnown = stopReasonKnown,
+                )
+                semantic.recordBoundary(
+                    JankHunterSemanticWork.WORKER,
+                    workerId,
+                    workerName,
+                    durationNanos,
+                    outcome,
+                    expectedWriter = epoch.writer,
+                )
+            } finally {
+                epoch.tokens.release(token)
+            }
         }
     }
 
@@ -144,8 +166,9 @@ internal class RuntimeWorkerTelemetry(
         stopReason: Int = 0,
         stopReasonKnown: Boolean = false,
         periodic: Boolean = false,
+        activeWriter: AsyncLogWriter? = access.writer,
     ) {
-        val activeWriter = access.writer ?: return
+        if (activeWriter == null) return
         var flags = access.uiVisibleFlag()
         val mainLooper = Looper.getMainLooper()
         if (mainLooper != null && Looper.myLooper() === mainLooper) {
@@ -180,7 +203,7 @@ internal class RuntimeWorkerTelemetry(
             className.endsWith("${'$'}Success") -> JankHunterWorkerOutcome.SUCCESS
             className.endsWith("${'$'}Failure") -> JankHunterWorkerOutcome.FAILURE
             className.endsWith("${'$'}Retry") -> JankHunterWorkerOutcome.RETRY
-            else -> JankHunterWorkerOutcome.SUCCESS
+            else -> JankHunterWorkerOutcome.UNKNOWN
         }
     }
 
@@ -196,11 +219,12 @@ internal class RuntimeWorkerTelemetry(
 
     private fun normalizedName(name: String): String = name.trim().takeIf(String::isNotEmpty) ?: UNKNOWN
 
-    private fun stableId(name: String): Long = JankHunterSemanticWork.stableId("jankhunter.worker.v1\u0000$name")
+    private fun stableId(name: String): Long = JankHunterSemanticWork.stableId(WORKER_PREFIX, name)
 
     private fun Long.nonZero(): Long = if (this == 0L) 1L else this
 
     private companion object {
+        const val WORKER_PREFIX = "jankhunter.worker.v1\u0000"
         const val UNKNOWN = "unknown"
         const val NANOS_PER_MILLISECOND = 1_000_000L
         const val ID_ROTATION = 29

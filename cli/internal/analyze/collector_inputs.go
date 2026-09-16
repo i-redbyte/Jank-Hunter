@@ -15,6 +15,7 @@ func isJankStatsMetric(name string) bool {
 func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputCompleteness {
 	runtimeEvidence := summary.LogCount > 0 && summary.DataRecordCount > 0
 	classGraph := summary.Influence.HasClassGraph
+	lambdaCaptures := summary.LambdaCaptureAnalysis != nil && summary.LambdaCaptureAnalysis.Available
 	diagnostics := c.diagnostics != nil && c.diagnostics.Available && c.diagnostics.ClassCount > 0
 	missing := make([]string, 0, 4)
 	if !runtimeEvidence {
@@ -46,6 +47,7 @@ func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputComp
 		Complete:                   complete,
 		RuntimeEvidence:            runtimeEvidence,
 		ClassGraph:                 classGraph,
+		LambdaCaptures:             lambdaCaptures,
 		InstrumentationDiagnostics: diagnostics,
 		HeapEvidence:               c.heap != nil && len(c.heap.Sources) > 0,
 		ArtifactDirectory:          c.artifactDirectory,

@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import io.jankhunter.runtime.JankHunterLogSnapshot
+import io.jankhunter.runtime.RuntimeHookGuard
+import io.jankhunter.runtime.internal.monotonicDeadlineAfterMillis
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
@@ -14,6 +16,9 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -29,7 +34,7 @@ internal class ProcessLogSnapshotCoordinator private constructor(
     private val context: Context,
     private val directory: File,
     private val participantLease: ProcessSnapshotParticipants.Lease,
-    private val captureLocal: () -> JankHunterLogSnapshot?,
+    private val captureLocal: (timeoutMs: Long) -> JankHunterLogSnapshot?,
 ) : Closeable {
     private val closed = AtomicBoolean()
     private val responseInFlight = AtomicBoolean()
@@ -48,14 +53,25 @@ internal class ProcessLogSnapshotCoordinator private constructor(
             val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(RESPONDER_TIMEOUT_MS)
             val responseThread = Thread(
                 {
+                    var captureHandedOff = false
                     try {
-                        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                        try {
+                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                        } catch (error: Throwable) {
+                            RuntimeHookGuard.rethrowFatal(error)
+                        }
                         if (captureAllowed) {
+                            captureHandedOff = true
                             respond(token, deadlineNs)
                         } else {
                             writeResponse(token, participantLease.id, null)
                         }
                     } finally {
+                        releaseUnhandedResponseAdmission(
+                            responseInFlight,
+                            captureAllowed,
+                            captureHandedOff,
+                        )
                         pendingResult.finish()
                     }
                 },
@@ -63,9 +79,10 @@ internal class ProcessLogSnapshotCoordinator private constructor(
             ).apply { isDaemon = true }
             try {
                 responseThread.start()
-            } catch (_: Throwable) {
-                if (captureAllowed) responseInFlight.set(false)
+            } catch (error: Throwable) {
+                releaseUnhandedResponseAdmission(responseInFlight, captureAllowed, captureHandedOff = false)
                 pendingResult.finish()
+                RuntimeHookGuard.rethrowFatal(error)
             }
         }
     }
@@ -84,26 +101,46 @@ internal class ProcessLogSnapshotCoordinator private constructor(
 
     fun capture(): JankHunterLogSnapshot? = requesterLock.withLock {
         if (closed.get()) return null
-        return runCatching {
-            RandomAccessFile(File(directory, EXCHANGE_LOCK_FILE), "rw").use { access ->
-                access.channel.lock().use {
-                    captureLock.withLock {
-                        if (closed.get()) null else captureLocked()
+        val deadlineNs = monotonicDeadlineAfterMillis(CAPTURE_TIMEOUT_MS)
+        return try {
+            RandomAccessFile(File(directory, EXCHANGE_LOCK_FILE), "rw").use access@{ file ->
+                val fileLock = acquireLockBeforeDeadline(file.channel, deadlineNs) ?: return@access null
+                fileLock.use lock@{
+                    val remainingNs = deadlineNs - System.nanoTime()
+                    if (remainingNs <= 0L) return@lock null
+                    val acquired = try {
+                        captureLock.tryLock(remainingNs, TimeUnit.NANOSECONDS)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        false
+                    }
+                    if (!acquired) return@lock null
+                    try {
+                        if (closed.get()) null else captureLocked(deadlineNs)
+                    } finally {
+                        captureLock.unlock()
                     }
                 }
             }
-        }.getOrNull()
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
+            null
+        }
     }
 
-    private fun captureLocked(): JankHunterLogSnapshot? {
+    private fun captureLocked(deadlineNs: Long): JankHunterLogSnapshot? {
         removeAllResponses()
-        val participants = runCatching { ProcessSnapshotParticipants.active(directory) }.getOrNull()
-            ?: return null
+        val participants = try {
+            ProcessSnapshotParticipants.active(directory)
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
+            return null
+        }
         val self = participants.firstOrNull { participant -> participant.id == participantLease.id }
             ?: return null
         val expected = participants.mapTo(linkedSetOf(), ProcessSnapshotParticipants.Participant::id)
         if (participants.size == 1) {
-            val snapshot = captureLocal() ?: return null
+            val snapshot = captureLocalBefore(deadlineNs) ?: return null
             return snapshot.takeIf { activeParticipantIds() == expected }
         }
 
@@ -118,22 +155,29 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                     .putExtra(EXTRA_REQUESTER, self.id),
                 broadcastPermission,
             )
-            val local = captureLocal() ?: return null
+            val local = captureLocalBefore(deadlineNs) ?: return null
             results[self.id] = SnapshotResponse(local.capturedAtMs, local.logPaths)
-            val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CAPTURE_TIMEOUT_MS)
-            while (System.nanoTime() < deadlineNs) {
-                if (closed.get()) return null
+            var nextParticipantCheckNs = System.nanoTime() + PARTICIPANT_RECHECK_NS
+            while (true) {
+                val nowNs = System.nanoTime()
+                if (deadlineNs - nowNs <= 0L) return null
+                if (closed.get() || Thread.currentThread().isInterrupted) return null
                 for (participantId in expected) {
                     if (participantId in results) continue
                     val response = readResponse(token, participantId) ?: continue
                     if (!response.succeeded) return null
                     results[participantId] = response
                 }
-                if (activeParticipantIds() != expected) return null
-                if (results.keys.containsAll(expected)) return combine(results.values)
+                if (results.size == expected.size) {
+                    if (activeParticipantIds() != expected) return null
+                    return combine(results.values)
+                }
+                if (nowNs - nextParticipantCheckNs >= 0L) {
+                    if (activeParticipantIds() != expected) return null
+                    nextParticipantCheckNs = nowNs + PARTICIPANT_RECHECK_NS
+                }
                 LockSupport.parkNanos(RESPONSE_POLL_NS)
             }
-            return null
         } finally {
             removeResponses(token)
         }
@@ -148,8 +192,9 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                     responseInFlight.set(false)
                 }
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
             responseInFlight.set(false)
+            RuntimeHookGuard.rethrowFatal(error)
             null
         }
         writeResponse(token, participantLease.id, result?.takeIf { it.completed }?.value)
@@ -166,10 +211,17 @@ internal class ProcessLogSnapshotCoordinator private constructor(
         }
         if (!acquired) return null
         return try {
-            if (closed.get() || System.nanoTime() >= deadlineNs) null else captureLocal()
+            if (closed.get()) null else captureLocalBefore(deadlineNs)
         } finally {
             captureLock.unlock()
         }
+    }
+
+    private fun captureLocalBefore(deadlineNs: Long): JankHunterLogSnapshot? {
+        val remainingNs = deadlineNs - System.nanoTime()
+        if (remainingNs <= 0L) return null
+        val remainingMs = TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceAtLeast(1L)
+        return captureLocal(remainingMs)
     }
 
     private fun combine(responses: Collection<SnapshotResponse>): JankHunterLogSnapshot {
@@ -190,39 +242,48 @@ internal class ProcessLogSnapshotCoordinator private constructor(
         )
     }
 
-    private fun activeParticipantIds(): Set<String>? =
-        runCatching { ProcessSnapshotParticipants.active(directory) }
-            .getOrNull()
-            ?.mapTo(hashSetOf(), ProcessSnapshotParticipants.Participant::id)
+    private fun activeParticipantIds(): Set<String>? {
+        return try {
+            ProcessSnapshotParticipants.active(directory)
+                .mapTo(hashSetOf(), ProcessSnapshotParticipants.Participant::id)
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
+            null
+        }
+    }
 
     private fun writeResponse(token: String, participantId: String, snapshot: JankHunterLogSnapshot?) {
         if (!isToken(token) || !isToken(participantId)) return
         val response = responseFile(token, participantId)
         val temporary = File(directory, "${response.name}.${android.os.Process.myPid()}.tmp")
-        runCatching {
-            val payload = runCatching { encodeResponse(snapshot) }.getOrElse { encodeResponse(null) }
+        try {
+            val payload = try {
+                encodeResponse(snapshot)
+            } catch (error: Throwable) {
+                RuntimeHookGuard.rethrowFatal(error)
+                encodeResponse(null)
+            }
             temporary.outputStream().buffered().use { output ->
                 output.write(payload)
                 output.flush()
             }
             if (!temporary.renameTo(response)) throw IOException("Cannot publish ${response.name}")
-        }.onFailure {
+        } catch (error: Throwable) {
             temporary.delete()
+            RuntimeHookGuard.rethrowFatal(error)
         }
     }
 
     private fun readResponse(token: String, participantId: String): SnapshotResponse? {
         val file = responseFile(token, participantId)
         if (!file.isFile) return null
-        return runCatching {
-            RandomAccessFile(file, "r").use { access ->
-                val length = access.length()
-                if (length !in MIN_RESPONSE_BYTES.toLong()..MAX_RESPONSE_BYTES.toLong()) {
-                    throw IOException("Invalid Jank Hunter snapshot response size")
-                }
-                decodeResponse(ByteArray(length.toInt()).also(access::readFully))
+        return RandomAccessFile(file, "r").use { access ->
+            val length = access.length()
+            if (length !in MIN_RESPONSE_BYTES.toLong()..MAX_RESPONSE_BYTES.toLong()) {
+                throw IOException("Invalid Jank Hunter snapshot response size")
             }
-        }.getOrNull()
+            decodeResponse(ByteArray(length.toInt()).also(access::readFully))
+        }
     }
 
     private fun removeResponses(token: String) {
@@ -242,7 +303,11 @@ internal class ProcessLogSnapshotCoordinator private constructor(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        runCatching { context.unregisterReceiver(receiver) }
+        try {
+            context.unregisterReceiver(receiver)
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
+        }
         participantLease.close()
     }
 
@@ -251,7 +316,7 @@ internal class ProcessLogSnapshotCoordinator private constructor(
             context: Context,
             directory: File,
             processName: String,
-            captureLocal: () -> JankHunterLogSnapshot?,
+            captureLocal: (timeoutMs: Long) -> JankHunterLogSnapshot?,
         ): ProcessLogSnapshotCoordinator {
             val appContext = context.applicationContext ?: context
             val lease = ProcessSnapshotParticipants.join(directory, processName)
@@ -334,12 +399,16 @@ internal class ProcessLogSnapshotCoordinator private constructor(
             threadName: String = CAPTURE_THREAD_NAME,
             task: () -> T,
         ): DeadlineResult<T> {
+            if (deadlineNs - System.nanoTime() <= 0L) return DeadlineResult(completed = false, value = null)
             val completed = CountDownLatch(1)
             val value = AtomicReference<T?>()
+            val failure = AtomicReference<Throwable?>()
             val worker = Thread(
                 {
                     try {
-                        value.set(runCatching(task).getOrNull())
+                        value.set(task())
+                    } catch (error: Throwable) {
+                        failure.set(error)
                     } finally {
                         completed.countDown()
                     }
@@ -355,7 +424,34 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                 false
             }
             if (!finished) worker.interrupt()
+            if (finished) failure.get()?.let(RuntimeHookGuard::rethrowFatal)
             return DeadlineResult(finished, value.get().takeIf { finished })
+        }
+
+        internal fun releaseUnhandedResponseAdmission(
+            responseInFlight: AtomicBoolean,
+            captureAllowed: Boolean,
+            captureHandedOff: Boolean,
+        ) {
+            if (captureAllowed && !captureHandedOff) responseInFlight.set(false)
+        }
+
+        internal fun acquireLockBeforeDeadline(
+            channel: FileChannel,
+            deadlineNs: Long,
+            pollNs: Long = FILE_LOCK_POLL_NS,
+        ): FileLock? {
+            while (deadlineNs - System.nanoTime() > 0L) {
+                val lock = try {
+                    channel.tryLock()
+                } catch (_: OverlappingFileLockException) {
+                    null
+                }
+                if (lock != null) return lock
+                if (Thread.currentThread().isInterrupted) return null
+                LockSupport.parkNanos(pollNs.coerceAtLeast(1L))
+            }
+            return null
         }
 
         private fun isToken(value: String): Boolean =
@@ -383,6 +479,8 @@ internal class ProcessLogSnapshotCoordinator private constructor(
         private const val CAPTURE_TIMEOUT_MS = 10_000L
         private const val RESPONDER_TIMEOUT_MS = 9_000L
         private val RESPONSE_POLL_NS = TimeUnit.MILLISECONDS.toNanos(10L)
+        private val PARTICIPANT_RECHECK_NS = TimeUnit.MILLISECONDS.toNanos(250L)
+        private val FILE_LOCK_POLL_NS = TimeUnit.MILLISECONDS.toNanos(10L)
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'S'.code.toByte(), 'R'.code.toByte())
     }
 

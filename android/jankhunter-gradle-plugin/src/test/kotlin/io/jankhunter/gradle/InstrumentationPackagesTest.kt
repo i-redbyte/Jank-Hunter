@@ -40,6 +40,8 @@ class InstrumentationPackagesTest {
     fun sharedPackageHelpersClassifyGeneratedAndBuiltinClasses() {
         assertTrue(InstrumentationPackages.isBuiltinExcluded("kotlinx/coroutines/BuildersKt"))
         assertTrue(InstrumentationPackages.isBuiltinExcluded("org.jetbrains.annotations.NotNull"))
+        assertFalse(InstrumentationPackages.isBuiltinExcluded("kotlinxextra/coroutines/BuildersKt"))
+        assertFalse(InstrumentationPackages.isBuiltinExcluded("io.jankhunter.okhttp3extra.ApplicationClient"))
         assertTrue(InstrumentationPackages.isGeneratedAndroidClass("com/example/R\$string"))
         assertFalse(InstrumentationPackages.isBuiltinExcluded("com/example/FeedRepository"))
         assertFalse(InstrumentationPackages.isGeneratedAndroidClass("com/example/FeedRepository"))

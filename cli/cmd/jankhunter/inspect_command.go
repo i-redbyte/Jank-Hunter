@@ -45,6 +45,11 @@ func runInspect(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
+	if err := rejectOutputInputOverlap(out, paths); err != nil {
+		return err
+	}
+	builder.outputPath = out
+	heap.outputPath = out
 	paths, sessionWarnings := selectLatestSessionLogs(paths, allSessions)
 	options, err := builder.buildForLogs(paths)
 	if err != nil {

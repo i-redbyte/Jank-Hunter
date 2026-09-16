@@ -5,12 +5,39 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContextTrackerTest {
+    @Test
+    fun capturedUnknownScreenDoesNotBecomeALaterGlobalScreen() {
+        val tracker = ContextTracker()
+        val captured = tracker.capture()
+        assertNull(captured.screen)
+        tracker.setScreen("LaterScreen")
+
+        tracker.callWithContext(captured, ownerName = null, onContextChanged = {}) {
+            assertNull("unknown enqueue screen inherited a later screen", tracker.capture().screen)
+        }
+        assertEquals("LaterScreen", tracker.currentScreen())
+    }
+
+    @Test
+    fun unchangedContextReusesImmutableSnapshotUntilAttributionChanges() {
+        val tracker = ContextTracker("Home")
+
+        val first = tracker.capture(ownerOverride = "Feed")
+        assertSame(first, tracker.capture(ownerOverride = "Feed"))
+
+        tracker.setScreen("Details")
+        val changed = tracker.capture(ownerOverride = "Feed")
+        assertNotSame(first, changed)
+        assertSame(changed, tracker.capture(ownerOverride = "Feed"))
+    }
+
     @Test
     fun propagatedOperationIdDoesNotUseBoxedThreadLocal() {
         val field = ContextTracker::class.java.getDeclaredField("propagatedOperationId")

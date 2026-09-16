@@ -186,6 +186,20 @@ class SessionLogAllocatorTest {
     }
 
     @Test
+    fun obsoleteCleanerPreservesReadableLegacy500Logs() {
+        val directory = Files.createTempDirectory("jankhunter-readable-legacy").toFile()
+        val legacy = File(directory, SessionLogName.create(DATE, RUN_ID, dailySessionIndex = 0L, segmentIndex = 0L))
+        try {
+            legacy.writeBytes(formatMagic(major = 5))
+            val result = ObsoleteSessionLogCleaner.clean(directory, storage = null)
+            assertEquals(0L, result.deleted)
+            assertTrue("A readable 5.0.0 log was deleted by the 5.1.0 SDK", legacy.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun obsoleteCleanerPreservesCurrentAndActivelyLeasedLogs() {
         val directory = Files.createTempDirectory("jankhunter-obsolete-cleaner").toFile()
         val current = File(directory, SessionLogName.create(DATE, RUN_ID, dailySessionIndex = 0L, segmentIndex = 0L))

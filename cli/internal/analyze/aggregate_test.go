@@ -540,7 +540,7 @@ func TestCollectionQualityRequiresExactAdmissionFeature(t *testing.T) {
 	if got.ExactAdmission || got.Complete || got.Level != "medium" {
 		t.Fatalf("best-effort collection quality = %+v", got)
 	}
-	if !warningsContain(got.Reasons, "без EXACT admission") {
+	if !warningsContain(got.Reasons, "без гарантированной записи принятых событий") {
 		t.Fatalf("best-effort reasons = %+v", got.Reasons)
 	}
 }
@@ -617,7 +617,7 @@ func TestCollectionQualitySeparatesTransportAndRuntimeGraphAdmissionLoss(t *test
 	if got.RuntimeGraphProducerCapacityLoss != 142_156 || got.OtherEvidenceLoss != 0 {
 		t.Fatalf("runtime graph capacity loss = %+v", got)
 	}
-	if got.RuntimeGraphCompletenessRatio >= 1 || !warningsContain(got.Notices, "producer page") {
+	if got.RuntimeGraphCompletenessRatio >= 1 || !warningsContain(got.Notices, "свободную страницу буфера") {
 		t.Fatalf("runtime graph quality = %+v", got)
 	}
 }
@@ -638,7 +638,7 @@ func TestCollectionQualityFailsClosedOnSuppressedRuntimeHookFailure(t *testing.T
 	got := collector.summary.CollectionQuality
 	if got.Level != "low" || got.Complete || got.RuntimeHookFailures != 3 ||
 		got.CriticalRuntimeHookFailures != 3 ||
-		!warningsContain(got.Reasons, "влияющих на evidence") {
+		!warningsContain(got.Reasons, "подтверждающих данных могла потеряться") {
 		t.Fatalf("suppressed hook failure quality = %+v", got)
 	}
 }
@@ -659,7 +659,7 @@ func TestCollectionQualityExplainsJankStatsFallbackWithoutClaimingEvidenceCorrup
 	got := collector.summary.CollectionQuality
 	if got.Level != "high" || got.Complete || got.DiagnosticCompletenessPercent != 100 ||
 		got.CriticalRuntimeHookFailures != 0 || len(got.RuntimeHookFailureDetails) != 1 ||
-		!warningsContain(got.Notices, "Choreographer fallback") {
+		!warningsContain(got.Notices, "резервный Choreographer") {
 		t.Fatalf("jankstats fallback quality = %+v", got)
 	}
 }
@@ -670,7 +670,7 @@ func TestQualityWarningsDescribeExactAdmissionContentionAsLosslessBackpressure(t
 		t.Fatalf("EXACT contention warnings = %+v", warnings)
 	}
 	warnings := qualityCounterWarnings(counters, false)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "BEST_EFFORT") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "при записи с возможной потерей") {
 		t.Fatalf("BEST_EFFORT contention warnings = %+v", warnings)
 	}
 }
@@ -680,8 +680,8 @@ func TestQualityWarningsUseLogicalCallUnitsForRuntimeGraphLoss(t *testing.T) {
 		jhlog.QualityRuntimeGraphWriterRejectionLoss:  25_164,
 		jhlog.QualityRuntimeGraphProducerCapacityLoss: 59_133,
 	}, true)
-	if !warningsContain(warnings, "writer не принял логические вызовы runtime-графа") ||
-		!warningsContain(warnings, "логических вызовов runtime-графа после deadline") ||
+	if !warningsContain(warnings, "модуль записи не принял вызовы для графа") ||
+		!warningsContain(warnings, "вызовы графа не приняты: исчерпана ёмкость буферов или время ожидания") ||
 		warningsContain(warnings, "batch runtime-графа") {
 		t.Fatalf("runtime graph loss warnings use wrong units: %+v", warnings)
 	}
@@ -841,6 +841,7 @@ func TestCollectionQualityRequiresCompleteDeclaredProcessRoster(t *testing.T) {
 	if got := incomplete.summary.CollectionQuality; got.Complete || got.ProcessRosterComplete ||
 		got.ObservedProcessCount != 1 || got.ExpectedProcessCount != 2 ||
 		got.Level != "high" || warningsContain(got.Reasons, "process roster неполон") ||
+		!warningsContain(got.Notices, "наблюдается 1 процесс из 2") ||
 		!warningsContain(got.Notices, "могли не запускаться") {
 		t.Fatalf("incomplete roster quality = %+v", got)
 	}
@@ -881,7 +882,7 @@ func TestCollectionQualityFailsClosedWhenManifestRosterDiscoveryFailed(t *testin
 	})
 	collector.finalizeCollectionQuality()
 	if got := collector.summary.CollectionQuality; got.Complete || got.ProcessRosterDeclarationComplete ||
-		!warningsContain(got.Reasons, "не смог полностью объявить process roster") {
+		!warningsContain(got.Reasons, "не удалось получить полный список процессов") {
 		t.Fatalf("failed roster discovery quality = %+v", got)
 	}
 }
@@ -900,7 +901,7 @@ func TestCollectionQualityFailsClosedWithoutProcessScopeFeature(t *testing.T) {
 
 	got := collector.summary.CollectionQuality
 	if got.Level != "low" || got.Complete || got.ProcessScope != "unknown" ||
-		got.ProcessScopeConsistent || !warningsContain(got.Reasons, "охват процессов подтвердить невозможно") {
+		got.ProcessScopeConsistent || !warningsContain(got.Reasons, "полноту охвата подтвердить невозможно") {
 		t.Fatalf("missing process scope quality = %+v", got)
 	}
 }
@@ -918,7 +919,7 @@ func TestCollectionQualityFailsClosedOnImpossibleCounters(t *testing.T) {
 				jhlog.QualityAcceptedEventTotal: 10,
 				jhlog.QualityWrittenEventTotal:  11,
 			},
-			reason: "невозможное состояние writer",
+			reason: "ошибка счётчиков записи",
 		},
 		{
 			name: "graph output exceeds input",
@@ -927,7 +928,7 @@ func TestCollectionQualityFailsClosedOnImpossibleCounters(t *testing.T) {
 				jhlog.QualityRuntimeGraphEmittedTotal: 11,
 			},
 			decoded: 11,
-			reason:  "невозможное состояние runtime-графа",
+			reason:  "ошибка счётчиков графа вызовов",
 		},
 		{
 			name: "graph emitted counter misses decoded calls",
@@ -935,7 +936,7 @@ func TestCollectionQualityFailsClosedOnImpossibleCounters(t *testing.T) {
 				jhlog.QualityRuntimeGraphInputTotal: 5,
 			},
 			decoded: 5,
-			reason:  "writer сообщает 0 записанных runtime-вызовов, но декодировано 5",
+			reason:  "модуль записи сообщает 0 сохранённых вызовов, но прочитано 5",
 		},
 	}
 	for _, test := range tests {
@@ -1039,7 +1040,7 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
 		if got.Level != "high" || got.Complete || got.UnsealedSegments != 1 ||
-			!warningsContain(got.Notices, "снимок активной сессии") || len(got.Reasons) != 0 {
+			!warningsContain(got.Notices, "активная сессия") || len(got.Reasons) != 0 {
 			t.Fatalf("live snapshot quality = %+v", got)
 		}
 	})
@@ -1111,7 +1112,7 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		got := collector.summary.CollectionQuality
 		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" || got.DiagnosticCompletenessPercent != 99.6 ||
 			got.BoundedEvidenceLoss != 20 || got.OtherEvidenceLoss != 0 ||
-			!warningsContain(got.Reasons, "полнота runtime-графа 98.00%") {
+			!warningsContain(got.Reasons, "полнота графа вызовов 98.00%") {
 			t.Fatalf("runtime graph completeness = %+v", got)
 		}
 	})
@@ -1147,8 +1148,8 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
 		if got.RuntimeGraphEnabled || got.RuntimeGraphCompletenessRatio != 0 || got.DiagnosticCompletenessPercent != 100 ||
-			got.Level != "high" || !got.Complete || warningsContain(got.Reasons, "runtime-граф отключён") ||
-			!warningsContain(got.Notices, "полностью исключён") {
+			got.Level != "high" || !got.Complete || warningsContain(got.Reasons, "граф вызовов отключён") ||
+			!warningsContain(got.Notices, "не влияет на оценку надёжности") {
 			t.Fatalf("disabled runtime graph quality = %+v", got)
 		}
 		if len(got.DiagnosticCompletenessComponents) != 4 || got.DiagnosticCompletenessComponents[1].ID != "runtime_graph" ||
@@ -1358,6 +1359,20 @@ func TestInspectMultipleLogsSumsPerLogDuration(t *testing.T) {
 	}
 	if len(summary.Warnings) == 0 {
 		t.Fatalf("expected multi-log duration warning")
+	}
+	if !warningsContain(summary.Warnings, "без подтверждённого идентификатора запуска") {
+		t.Fatalf("legacy multi-session warning is ambiguous: %+v", summary.Warnings)
+	}
+}
+
+func TestCombinedSessionTimelineWarningDistinguishesOneAndMultipleRuns(t *testing.T) {
+	oneRun := combinedSessionTimelineWarning(1)
+	if !strings.Contains(oneRun, "одного запуска") || strings.Contains(oneRun, "независим") {
+		t.Fatalf("one-run warning = %q", oneRun)
+	}
+	multipleRuns := combinedSessionTimelineWarning(3)
+	if !strings.Contains(multipleRuns, "3 запусков") || strings.Contains(multipleRuns, "одного запуска") {
+		t.Fatalf("multi-run warning = %q", multipleRuns)
 	}
 }
 
@@ -2251,7 +2266,7 @@ func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
 		{name: "io error", reason: jhlog.SegmentEndIOError, wantReason: "io_error", warningFragment: "из-за ошибки ввода-вывода"},
 		{name: "shutdown", reason: jhlog.SegmentEndShutdown, wantReason: "shutdown"},
 		{name: "rotation", reason: jhlog.SegmentEndRotation, wantReason: "rotation"},
-		{name: "storage budget", reason: jhlog.SegmentEndStorageBudget, wantReason: "storage_budget_exhausted", warningFragment: "storage_budget_exhausted"},
+		{name: "storage budget", reason: jhlog.SegmentEndStorageBudget, wantReason: "storage_budget_exhausted", warningFragment: "исчерпания общего лимита .jhlog"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -2277,6 +2292,9 @@ func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
 				}
 			} else if !strings.Contains(warnings, test.warningFragment) {
 				t.Fatalf("warnings %q do not contain %q", warnings, test.warningFragment)
+			}
+			if test.reason == jhlog.SegmentEndIOError && strings.Count(warnings, "ошибки ввода-вывода") != 1 {
+				t.Fatalf("I/O end reason was reported more than once: %q", warnings)
 			}
 			if test.reason == jhlog.SegmentEndSizeLimit {
 				for _, stale := range []string{"следующ", "продолж", "segment chain"} {
@@ -2456,6 +2474,7 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 			1: "memory.pss",
 			2: "battery.status",
 			3: "battery.charging",
+			4: "device.thermal.status",
 		},
 		Events: []jhlog.Event{
 			{
@@ -2505,11 +2524,33 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 					Mode:      jhlog.MetricModeBooleanRate,
 				},
 			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricRef: jhlog.LocalSymbol(4),
+					Value:     5,
+					Count:     2,
+					Sum:       5,
+					Max:       5,
+					Mode:      jhlog.MetricModeState,
+				},
+			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricRef: jhlog.LocalSymbol(4),
+					Value:     2,
+					Count:     1,
+					Sum:       2,
+					Max:       2,
+					Mode:      jhlog.MetricModeState,
+				},
+			},
 		},
 	}
 
 	summary := inspectLogsForTest("metrics", []jhlog.Log{log})
-	gauges := namedValuesByName(summary.Gauges)
+	gauges := namedGaugesByName(summary.Gauges)
 	if got := gauges["memory.pss"]; got.Value != 166 || got.Extra != "среднее=166 максимум=260 наблюдений=6" {
 		t.Fatalf("memory.pss = %+v", got)
 	}
@@ -2518,6 +2559,10 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 	}
 	if got := gauges["battery.charging"]; got.Value != 50 || got.Extra != "доля включённого состояния=50 включено=1 наблюдений=2" {
 		t.Fatalf("battery.charging = %+v", got)
+	}
+	if got := gauges["device.thermal.status"]; got.Value != 2 || got.maximum != 5 || got.sampleCount != 3 ||
+		got.Extra != "состояние=2 наблюдений=3" {
+		t.Fatalf("device.thermal.status = %+v", got)
 	}
 }
 
@@ -2662,8 +2707,8 @@ func TestCompareDoesNotReplaceMissingMeasurementsWithZero(t *testing.T) {
 		t.Fatalf("missing HTTP measurement became a regression: %+v", delta)
 	}
 	gate := EvaluateGate(comparison, ThresholdConfig{MaxSeverity: "ok"})
-	if gate.Failed {
-		t.Fatalf("gate failed on an incomparable metric: %+v", gate.Failures)
+	if !gate.Failed {
+		t.Fatal("global severity gate must fail when its metrics cannot be evaluated")
 	}
 }
 
@@ -2726,7 +2771,7 @@ func TestEvaluateGateFailsOnMetricRegression(t *testing.T) {
 
 	result := EvaluateGate(comparison, ThresholdConfig{
 		Metrics: map[string]MetricThreshold{
-			"HTTP p95": {MaxRegressionPct: 10},
+			"HTTP p95": {MaxRegressionPct: floatPointer(10)},
 		},
 	})
 	if !result.Failed {
@@ -2819,7 +2864,7 @@ func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
 	if !result.Failed {
 		t.Fatalf("expected confidence gate failure")
 	}
-	if got := strings.Join(result.Failures, "\n"); !strings.Contains(got, "baseline logs/events=1/10") {
+	if got := strings.Join(result.Failures, "\n"); !strings.Contains(got, "baseline independent acquisition groups=unknown, non-session events=10") {
 		t.Fatalf("confidence failure is not diagnostic enough: %q", got)
 	}
 }
@@ -2867,7 +2912,7 @@ func TestComparisonFailsClosedWhenProcessScopesDiffer(t *testing.T) {
 	if len(comparison.Deltas) == 0 || comparison.Deltas[0].Confidence != "low" {
 		t.Fatalf("scope mismatch confidence = %+v", comparison.Deltas)
 	}
-	if !warningsContain(comparison.QualityWarnings, "Process scope отличается") {
+	if !warningsContain(comparison.QualityWarnings, "Охват процессов отличается") {
 		t.Fatalf("scope mismatch warnings = %+v", comparison.QualityWarnings)
 	}
 	result := EvaluateGate(comparison, ThresholdConfig{MinConfidence: "high"})
@@ -2896,7 +2941,7 @@ func TestComparisonFailsClosedWhenAllowlistFingerprintsDiffer(t *testing.T) {
 	if len(comparison.Deltas) == 0 || comparison.Deltas[0].Confidence != "low" {
 		t.Fatalf("allowlist fingerprint mismatch confidence = %+v", comparison.Deltas)
 	}
-	if !warningsContain(comparison.QualityWarnings, "Process scope отличается") {
+	if !warningsContain(comparison.QualityWarnings, "Охват процессов отличается") {
 		t.Fatalf("comparison warnings = %+v", comparison.QualityWarnings)
 	}
 }
@@ -3046,8 +3091,8 @@ func TestEvaluateGateFailsOnLeakRegressionThresholds(t *testing.T) {
 			FailOnNew:          true,
 			FailOnWorse:        true,
 			FailOnNewHigh:      true,
-			MaxCandidateTotal:  1,
-			MaxHigh:            1,
+			MaxCandidateTotal:  gateIntPointer(1),
+			MaxHigh:            gateIntPointer(1),
 			RequireHeapForHigh: true,
 		},
 	})
@@ -3070,6 +3115,14 @@ func TestEvaluateGateFailsOnLeakRegressionThresholds(t *testing.T) {
 
 func namedValuesByName(values []NamedValue) map[string]NamedValue {
 	out := map[string]NamedValue{}
+	for _, value := range values {
+		out[value.Name] = value
+	}
+	return out
+}
+
+func namedGaugesByName(values []NamedGauge) map[string]NamedGauge {
+	out := map[string]NamedGauge{}
 	for _, value := range values {
 		out[value.Name] = value
 	}
@@ -3145,7 +3198,7 @@ func TestRouteBurstAccumulatorKeepsPeakInBoundedState(t *testing.T) {
 	for second := uint64(3); second < 20; second++ {
 		burst.add(1, second*1_000)
 	}
-	if burst.peak != 12 || burst.peakWindowStartMS != 2_000 || len(burst.buckets) != routeBurstRetainedSeconds || !burst.approximate {
+	if burst.peak != 12 || burst.peakWindowStartMS != 2_000 || len(burst.buckets) > rollingSecondBins || burst.approximate {
 		t.Fatalf("burst = %+v", burst)
 	}
 }
@@ -3242,5 +3295,68 @@ func attributionForTest(screenID, ownerID, _, _ uint64) jhlog.AttributionContext
 		Present: true,
 		Screen:  jhlog.LocalSymbol(screenID),
 		Owner:   jhlog.LocalSymbol(ownerID),
+	}
+}
+
+func TestSortRuntimeCallsDoesNotWrapPriorityOnLargeCounters(t *testing.T) {
+	items := []RuntimeCallStats{
+		{Caller: "com.example.Hot", Callee: "com.example.Target", MaxMS: 1 << 63},
+		{Caller: "com.example.Small", Callee: "com.example.Target", Count: 1},
+	}
+
+	sortRuntimeCalls(items)
+
+	if items[0].Caller != "com.example.Hot" {
+		t.Fatalf("largest runtime call sorted after a small call: %+v", items)
+	}
+}
+
+func TestComparisonAndOwnerTotalsSaturateInsteadOfWrapping(t *testing.T) {
+	max := ^uint64(0)
+	if got := totalLogSpam(Summary{LogSpam: []LogSpamStats{{Count: max}, {Count: 1}}}); got != max {
+		t.Fatalf("total log spam = %d, want saturation", got)
+	}
+	if got := namedValueTotal([]NamedValue{{Value: max}, {Value: 1}}); got != max {
+		t.Fatalf("named value total = %d, want saturation", got)
+	}
+	owners := map[ownerStatKey]*OwnerStats{{owner: "owner", kind: "stall"}: {
+		Owner: "owner", Kind: "stall", Count: 1, TotalMS: max,
+	}}
+	addOwner(owners, "owner", "stall", 1, "")
+	if got := owners[ownerStatKey{owner: "owner", kind: "stall"}].TotalMS; got != max {
+		t.Fatalf("owner duration = %d, want saturation", got)
+	}
+}
+
+func TestSortOwnersBreaksEqualMetricsDeterministically(t *testing.T) {
+	owners := []OwnerStats{
+		{Owner: "z.Owner", Kind: "stall", Count: 2, TotalMS: 100, MaxMS: 50},
+		{Owner: "a.Owner", Kind: "stall", Count: 2, TotalMS: 100, MaxMS: 50},
+	}
+
+	sortOwners(owners)
+
+	if owners[0].Owner != "a.Owner" {
+		t.Fatalf("owners with equal metrics are not sorted by stable identity: %+v", owners)
+	}
+}
+
+func TestSummarySortsBreakEqualMetricsByStableIdentity(t *testing.T) {
+	spam := []LogSpamStats{
+		{Source: "android.util.Log.d", Level: "debug", Count: 1, Owner: "z.Owner"},
+		{Source: "android.util.Log.d", Level: "debug", Count: 1, Owner: "a.Owner"},
+	}
+	sortLogSpam(spam)
+	if spam[0].Owner != "a.Owner" {
+		t.Fatalf("log rows with equal metrics are not sorted by stable identity: %+v", spam)
+	}
+
+	problems := []ProblemWindowStats{
+		{Kind: "retained", Count: 1, TotalWindowMS: 50, MaxMS: 50, Owner: "z.Owner"},
+		{Kind: "retained", Count: 1, TotalWindowMS: 50, MaxMS: 50, Owner: "a.Owner"},
+	}
+	sortProblems(problems)
+	if problems[0].Owner != "a.Owner" {
+		t.Fatalf("problem rows with equal metrics are not sorted by stable identity: %+v", problems)
 	}
 }

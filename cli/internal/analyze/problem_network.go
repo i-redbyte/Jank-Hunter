@@ -32,10 +32,10 @@ func (b *problemBuilder) detectNetwork() {
 		impact = min(impact, 32)
 		magnitude := 0
 		if slow {
-			magnitude = min(18, 7+int(route.P95MS/b.cfg.HTTPSlowMS)*4)
+			magnitude = boundedUint64RatioScore(route.P95MS, b.cfg.HTTPSlowMS, 7, 4, 18)
 		}
 		if failed {
-			magnitude = max(magnitude, min(25, 8+int(failureRate/b.cfg.HTTPFailureRate)*4))
+			magnitude = max(magnitude, boundedFloatRatioScore(failureRate, b.cfg.HTTPFailureRate, 8, 4, 25))
 		}
 		exposure := min(20, 4+int(math.Log2(float64(count)+1))*2)
 		if storm {
@@ -75,7 +75,7 @@ func (b *problemBuilder) detectNetwork() {
 			evidence = append(evidence, ProblemEvidence{Name: "Доля ошибок", Observed: formatPercent(failureRate * 100), Unit: "%", ExpectedOrThreshold: fmt.Sprintf("< %.1f%%", b.cfg.HTTPFailureRate*100), Numerator: u64ptr(failures), Denominator: u64ptr(count), Source: "typed_http"})
 		}
 		if storm {
-			evidence = append(evidence, ProblemEvidence{Name: "Пиковая частота за 1 секунду", Observed: fmt.Sprint(route.PeakRequestsPerSecond), Unit: "requests/s", ExpectedOrThreshold: fmt.Sprintf("< %.2f requests/s", b.cfg.HTTPStormRate), Sample: u64ptr(count), Source: "typed_http_completion_window"})
+			evidence = append(evidence, ProblemEvidence{Name: "Пиковая частота за 1 секунду", Observed: FormatRollingPeak(route.PeakRequestsPerSecond, route.BurstEstimateStatus), Unit: "requests/s", ExpectedOrThreshold: fmt.Sprintf("< %.2f requests/s", b.cfg.HTTPStormRate), Sample: u64ptr(count), Source: "typed_http_completion_window"})
 		}
 		if phase, ok := dominantHTTPPhase(route.Phases); ok {
 			evidence = append(evidence, ProblemEvidence{Name: "Граница верхних 5% фазы «" + httpPhaseProblemLabel(phase.Name) + "»", Observed: fmt.Sprint(phase.P95MS), Unit: "ms", Sample: u64ptr(uint64(phase.SampleCount)), Source: "typed_http_phase"})
@@ -88,16 +88,14 @@ func (b *problemBuilder) detectNetwork() {
 		}
 		wall := route.TotalDurationMS
 		if wall == 0 {
-			wall = uint64(route.Count) * route.P50MS
+			wall = saturatingMultiply(count, route.P50MS)
 		}
-		bytes := route.BytesRx + route.BytesTx
+		bytes := saturatingUint64Sum(route.BytesRx, route.BytesTx)
 		confidence, reasons, limits := problemConfidence(b.summary, count, b.cfg.HTTPMinSample, true)
-		if storm {
-			limits = append(limits, "Пик частоты рассчитан по секундам завершения. Одновременность восстановлена отдельно из интервалов, но миллисекундная точность не позволяет определить порядок событий внутри одной миллисекунды.")
-			if route.BurstEstimateStatus == "bounded_approximation" {
-				limits = append(limits, "Пиковая частота оценена приближённо из-за длительного или неупорядоченного потока событий.")
-			}
+		if route.KnownRequestBytes < route.Count || route.KnownResponseBytes < route.Count {
+			limits = append(limits, "Размеры HTTP-тел неполны: байтовая стоимость является нижней границей по зафиксированным данным.")
 		}
+
 		b.add(ProblemFinding{
 			DetectorID: "network.route_health", DetectorVersion: b.cfg.Version, Category: ProblemCategoryNetwork, Subcategory: networkSubcategory(slow, failed, storm),
 			Status: "observed", Confidence: confidence, ConfidenceReasons: reasons, Title: title,
@@ -106,7 +104,7 @@ func (b *problemBuilder) detectNetwork() {
 			Impact: []string{"Задержка или ошибка пользовательского сценария", "Лишняя сетевая и серверная нагрузка при частых вызовах"}, Evidence: evidence,
 			Frequency: &ProblemFrequency{Count: count, RatePerSec: rate}, Cost: &ProblemCost{WallTimeMS: nonZeroU64Ptr(wall), Bytes: nonZeroU64Ptr(bytes)},
 			PriorityBreakdown: priority(impact, magnitude, exposure, locationBreadth(where), compound, "задержка или ошибка для пользователя", "отклонение времени ответа", "частота в прогоне", "число контекстов", "сочетание сетевых симптомов"),
-			Recommendations:   []ProblemRecommendation{{Action: "Проверить место вызова, убрать лишние повторы и сократить время ответа маршрута", Rationale: "Исправление уменьшит задержку пользователя, а при повторных запросах — ещё и сетевую нагрузку.", Verification: "Повторить тот же сценарий и сравнить число запросов, ошибки, задержку верхних 5% запросов и суммарное время ожидания."}},
+			Recommendations:   []ProblemRecommendation{{Action: "Проверить место вызова, убрать лишние повторы и сократить время ответа маршрута", Rationale: "Исправление уменьшит задержку пользователя, а при повторных запросах - ещё и сетевую нагрузку.", Verification: "Повторить тот же сценарий и сравнить число запросов, ошибки, задержку верхних 5% запросов и суммарное время ожидания."}},
 			Limitations:       limits, Drilldowns: []ProblemDrilldown{{Label: "Сеть", Anchor: "network", Filter: route.Route}},
 		})
 	}
@@ -122,7 +120,7 @@ func isProbableLongPoll(route RouteStats, runDurationMS uint64, cfg ProblemDetec
 	if runDurationMS/count < 4_000 {
 		return false
 	}
-	minimumHoldMS := max(uint64(2_500), cfg.HTTPSlowMS*4)
+	minimumHoldMS := max(uint64(2_500), saturatingMultiply(cfg.HTTPSlowMS, 4))
 	if route.P95MS < minimumHoldMS {
 		return false
 	}
@@ -244,7 +242,7 @@ func (b *problemBuilder) detectWebSockets() {
 			Evidence:  evidence,
 			Frequency: &ProblemFrequency{Count: connection.Opened, RatePerSec: ratePerSecond(connection.Opened, b.summary.DurationMS)},
 			Cost:      &ProblemCost{Bytes: nonZeroU64Ptr(connection.ReceivedBytes)},
-			PriorityBreakdown: priority(24, 17, min(20, 5+int(connection.Opened)), locationBreadth(where), boolCount(failureStorm, reconnectStorm, slowConnect, rapidChurn),
+			PriorityBreakdown: priority(24, 17, boundedUint64Score(connection.Opened, 5, 1, 20), locationBreadth(where), boolCount(failureStorm, reconnectStorm, slowConnect, rapidChurn),
 				"канал реального времени недоступен или запаздывает", "обрывы, повторные подключения или медленное соединение", "число открытий в прогоне", "маршрут и контекст известны", "сочетание симптомов WebSocket"),
 			Recommendations: []ProblemRecommendation{{
 				Action:       "Проверить причину закрытия и политику переподключения; добавить экспоненциальную задержку со случайным разбросом и ограничением числа попыток",

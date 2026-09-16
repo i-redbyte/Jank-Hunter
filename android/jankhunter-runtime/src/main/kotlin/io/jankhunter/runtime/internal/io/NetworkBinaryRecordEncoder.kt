@@ -9,6 +9,11 @@ internal class NetworkBinaryRecordEncoder(
 ) {
     fun http(owner: String?, route: String?, event: JankHunterHttpEvent, flags: Long) {
         val safeDurationMs = nonNegative(event.durationMs)
+        val observedFirstByte = flags and Jhlog.FLAG_HTTP_TTFB_OBSERVED != 0L
+        val knownFirstByte = observedFirstByte && flags and Jhlog.FLAG_HTTP_TTFB_KNOWN != 0L &&
+            event.ttfbMs in 0L..safeDurationMs
+        val safeFlags = if (knownFirstByte) flags else flags and Jhlog.FLAG_HTTP_TTFB_KNOWN.inv()
+        val firstByteMs = if (observedFirstByte && !knownFirstByte) 0L else clampDuration(event.ttfbMs, safeDurationMs)
         val initiator = event.contextSnapshot
         val initiatorAlias = if (initiator?.initiatorPresent == true) {
             sink.defineStableSymbol(initiator.initiatorId, initiator.initiatorName)
@@ -33,7 +38,7 @@ internal class NetworkBinaryRecordEncoder(
             .uvarint(clampDuration(event.connectMs, safeDurationMs))
             .uvarint(clampDuration(event.tlsMs, safeDurationMs))
             .uvarint(clampDuration(event.requestMs, safeDurationMs))
-            .uvarint(clampDuration(event.ttfbMs, safeDurationMs))
+            .uvarint(firstByteMs)
             .uvarint(clampDuration(event.responseMs, safeDurationMs))
             .uvarint(event.statusCode.takeIf { it in MIN_HTTP_STATUS..MAX_HTTP_STATUS }?.toLong() ?: 0L)
             .uvarint(event.failurePhase.coerceIn(0, Jhlog.HTTP_FAILURE_PHASE_CANCELLED.toInt()).toLong())
@@ -48,7 +53,7 @@ internal class NetworkBinaryRecordEncoder(
             .uvarint(event.connectFailures.coerceIn(0, safeConnectAttempts).toLong())
             .uvarint(event.tlsFailures.coerceIn(0, safeTlsAttempts).toLong())
             .uvarint(event.redirects.coerceIn(0, safeAttempts).toLong())
-        sink.emitSemantic(Jhlog.TYPE_HTTP, flags, payload, sink.producerContext(owner))
+        sink.emitSemantic(Jhlog.TYPE_HTTP, safeFlags, payload, sink.producerContext(owner))
     }
 
     fun webSocket(owner: String?, event: JankHunterWebSocketEvent) {

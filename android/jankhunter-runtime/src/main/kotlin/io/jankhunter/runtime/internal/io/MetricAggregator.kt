@@ -29,7 +29,7 @@ internal class MetricAggregator(
     private val producerStripeMask = lifecycleLocks.size - 1
 
     @Volatile
-    private var active = Batch(initialMapCapacity)
+    private var active = Batch(initialMapCapacity, if (lruEvictionEnabled) capacity else 0)
 
     fun counter(name: String?, value: Long) {
         if (value == 0L) return
@@ -74,6 +74,14 @@ internal class MetricAggregator(
     }
 
     fun gauge(name: String?, value: Long, mode: MetricAggregationMode = MetricAggregationMode.AVERAGE) {
+        gaugeInternal(name, value, mode)
+    }
+
+    fun gaugeClassified(name: String?, value: Long) {
+        gaugeInternal(name, value, null)
+    }
+
+    private fun gaugeInternal(name: String?, value: Long, requestedMode: MetricAggregationMode?) {
         val producerLock = producerLock()
         producerLock.lock()
         try {
@@ -90,16 +98,17 @@ internal class MetricAggregator(
             }
             while (true) {
                 val existing = batch.gauges[normalizedName]
-                if (existing != null && existing.add(value, mode)) return
+                if (existing != null && existing.add(value, requestedMode)) return
 
                 synchronized(batch.admissionLock) {
                     val raced = batch.gauges[normalizedName]
                     if (raced != null) {
-                        if (raced.add(value, mode)) return
+                        if (raced.add(value, requestedMode)) return
                     } else {
                         if (!admitLocked(batch)) return
-                        val created = GaugeValue(lruEvictionEnabled)
-                        if (!created.add(value, mode)) {
+                        val mode = requestedMode ?: MetricSemantics.gaugeMode(normalizedName)
+                        val created = GaugeValue(lruEvictionEnabled, mode)
+                        if (!created.add(value, null)) {
                             saturatedAddAndGet(batch.dropped, 1L)
                             return
                         }
@@ -134,7 +143,7 @@ internal class MetricAggregator(
         flushLocks.forEach { it.lock() }
         return try {
             val drained = active
-            active = Batch(initialMapCapacity)
+            active = Batch(initialMapCapacity, if (lruEvictionEnabled) capacity else 0)
             drained
         } finally {
             for (index in flushLocks.indices.reversed()) {
@@ -151,29 +160,23 @@ internal class MetricAggregator(
 
     private fun emitGauge(sink: Sink, name: String, gauge: GaugeSnapshot) {
         when (gauge.mode) {
-            MetricAggregationMode.LAST,
-            MetricAggregationMode.STATE -> {
+            MetricAggregationMode.LAST -> {
                 sink.gauge(name, gauge.last, gauge.count, gauge.last, gauge.last, gauge.mode)
             }
+            MetricAggregationMode.STATE -> {
+                sink.gauge(name, gauge.last, gauge.count, gauge.last, gauge.max, gauge.mode)
+            }
             MetricAggregationMode.BOOLEAN_RATE -> {
-                val truePct = ((gauge.total.toDouble() * 100.0) / gauge.count.toDouble()).toLong()
-                sink.gauge(name, truePct, gauge.count, gauge.total, gauge.max, gauge.mode)
+                val truePct = ((metricSumAsDouble(gauge.total, gauge.totalHigh) * 100.0) / gauge.count.toDouble()).toLong()
+                sink.gauge(name, truePct, gauge.count, gauge.total, gauge.max, gauge.mode, gauge.totalHigh)
             }
             MetricAggregationMode.UNKNOWN,
             MetricAggregationMode.AVERAGE -> {
-                sink.gauge(name, roundedAverage(gauge.total, gauge.count), gauge.count, gauge.total, gauge.max, gauge.mode)
+                sink.gauge(name, roundedMetricAverage(gauge.total, gauge.totalHigh, gauge.count), gauge.count, gauge.total, gauge.max, gauge.mode, gauge.totalHigh)
             }
         }
     }
 
-    private fun roundedAverage(total: Long, count: Long): Long {
-        val quotient = total / count
-        val remainder = total % count
-        val halfRoundedUp = count / 2L + count % 2L
-        return if (remainder >= halfRoundedUp && quotient < Long.MAX_VALUE) quotient + 1L else quotient
-    }
-
-    /** Called with [Batch.admissionLock] held. */
     private fun admitLocked(batch: Batch): Boolean {
         if (capacity <= 0) {
             saturatedAddAndGet(batch.dropped, 1L)
@@ -192,25 +195,25 @@ internal class MetricAggregator(
             return false
         }
 
-        val candidates = ArrayList<EvictionCandidate>(batch.size())
-        batch.counters.forEach { (name, value) ->
-            candidates += EvictionCandidate(name, value, counter = true, value.lastAccess())
-        }
-        batch.gauges.forEach { (name, value) ->
-            candidates += EvictionCandidate(name, value, counter = false, value.lastAccess())
-        }
-        candidates.sortBy(EvictionCandidate::lastAccess)
-        for (candidate in candidates) {
-            val lostSamples = candidate.value.tryRetire() ?: continue
-            val removed = if (candidate.counter) {
-                removeRetired(batch.counters, candidate)
-            } else {
-                removeRetired(batch.gauges, candidate)
+        val candidates = batch.evictionScratch()
+        candidates.prepare(batch.counters, batch.gauges)
+        try {
+            for (index in 0 until candidates.size) {
+                val name = candidates.name(index)
+                val value = candidates.value(index)
+                val lostSamples = value.tryRetire() ?: continue
+                val removed = if (candidates.isCounter(index)) {
+                    removeRetired(batch.counters, name, value)
+                } else {
+                    removeRetired(batch.gauges, name, value)
+                }
+                if (removed) {
+                    saturatedAddAndGet(batch.dropped, lostSamples.coerceAtLeast(1L))
+                    return true
+                }
             }
-            if (removed) {
-                saturatedAddAndGet(batch.dropped, lostSamples.coerceAtLeast(1L))
-                return true
-            }
+        } finally {
+            candidates.clear()
         }
         // Every candidate is being updated. Dropping one new high-cardinality sample is safer than
         // blocking an arbitrary application thread or the maintenance flush behind that writer.
@@ -221,26 +224,117 @@ internal class MetricAggregator(
     /** Called with [Batch.admissionLock] held; producers cannot replace a value concurrently. */
     private fun <T : MetricValue> removeRetired(
         metrics: ConcurrentHashMap<String, T>,
-        candidate: EvictionCandidate,
+        name: String,
+        value: MetricValue,
     ): Boolean {
-        if (metrics[candidate.name] !== candidate.value) return false
-        metrics.remove(candidate.name)
+        if (metrics[name] !== value) return false
+        metrics.remove(name)
         return true
     }
 
     interface Sink {
         fun counter(name: String, value: Long)
-        fun gauge(name: String, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode)
+        fun gauge(name: String, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long = 0L)
     }
 
-    private class Batch(initialMapCapacity: Int) {
+    private class Batch(initialMapCapacity: Int, private val evictionCapacity: Int) {
         val counters = ConcurrentHashMap<String, CounterValue>(initialMapCapacity.coerceAtLeast(1))
         val gauges = ConcurrentHashMap<String, GaugeValue>(initialMapCapacity.coerceIn(1, INITIAL_GAUGE_CAPACITY))
         val dropped = AtomicLong()
         val invalidNegative = AtomicLong()
         val admissionLock = Any()
+        private var reusableEvictionScratch: EvictionScratch? = null
 
         fun size(): Int = counters.size + gauges.size
+
+        fun evictionScratch(): EvictionScratch {
+            check(evictionCapacity > 0)
+            return reusableEvictionScratch ?: EvictionScratch(evictionCapacity).also {
+                reusableEvictionScratch = it
+            }
+        }
+    }
+
+    private class EvictionScratch(capacity: Int) {
+        private val names = arrayOfNulls<String>(capacity)
+        private val values = arrayOfNulls<MetricValue>(capacity)
+        private val counterFlags = BooleanArray(capacity)
+        private val lastAccess = LongArray(capacity)
+
+        var size: Int = 0
+            private set
+
+        fun prepare(
+            counters: ConcurrentHashMap<String, CounterValue>,
+            gauges: ConcurrentHashMap<String, GaugeValue>,
+        ) {
+            check(size == 0)
+            counters.forEach { (name, value) -> add(name, value, counter = true) }
+            gauges.forEach { (name, value) -> add(name, value, counter = false) }
+            sortByLastAccess()
+        }
+
+        fun name(index: Int): String = checkNotNull(names[index])
+
+        fun value(index: Int): MetricValue = checkNotNull(values[index])
+
+        fun isCounter(index: Int): Boolean = counterFlags[index]
+
+        fun clear() {
+            for (index in 0 until size) {
+                names[index] = null
+                values[index] = null
+            }
+            size = 0
+        }
+
+        private fun add(name: String, value: MetricValue, counter: Boolean) {
+            check(size < names.size)
+            names[size] = name
+            values[size] = value
+            counterFlags[size] = counter
+            lastAccess[size] = value.lastAccess()
+            size++
+        }
+
+        private fun sortByLastAccess() {
+            for (root in size / 2 - 1 downTo 0) siftDown(root, size)
+            for (end in size - 1 downTo 1) {
+                swap(0, end)
+                siftDown(0, end)
+            }
+        }
+
+        private fun siftDown(start: Int, endExclusive: Int) {
+            var root = start
+            while (true) {
+                val left = root * 2 + 1
+                if (left >= endExclusive) return
+                val right = left + 1
+                val largest = if (right < endExclusive && lastAccess[right] > lastAccess[left]) right else left
+                if (lastAccess[root] >= lastAccess[largest]) return
+                swap(root, largest)
+                root = largest
+            }
+        }
+
+        private fun swap(first: Int, second: Int) {
+            val name = names[first]
+            names[first] = names[second]
+            names[second] = name
+
+            val value = values[first]
+            values[first] = values[second]
+            values[second] = value
+
+            val counter = counterFlags[first]
+            counterFlags[first] = counterFlags[second]
+            counterFlags[second] = counter
+
+            val access = lastAccess[first]
+            lastAccess[first] = lastAccess[second]
+            lastAccess[second] = access
+        }
     }
 
     private sealed class MetricValue(
@@ -297,52 +391,47 @@ internal class MetricAggregator(
         override fun sampleCount(): Long = samples?.get() ?: 0L
     }
 
-    private class GaugeValue(retirementEnabled: Boolean) : MetricValue(retirementEnabled) {
-        private val count = AtomicLong()
-        private val total = AtomicLong()
-        private val max = AtomicLong()
-        private val lastLock = Any()
+    private class GaugeValue(
+        retirementEnabled: Boolean,
+        initialMode: MetricAggregationMode,
+    ) : MetricValue(retirementEnabled) {
+        private val sampleLock = Any()
+        private var count = 0L
+        private var total = 0L
+        private var totalHigh = 0L
+        private var max = 0L
         private var last = 0L
-        private var mode = MetricAggregationMode.AVERAGE
+        private var mode = initialMode
 
-        fun add(value: Long, aggregationMode: MetricAggregationMode): Boolean = update {
-            saturatedAddAndGet(count, 1L)
-            saturatedAddAndGet(total, value)
-            updateMax(max, value)
-            // Keep LAST/STATE value and its aggregation mode from the same sample. This monitor is
-            // per metric; unrelated metrics and all counters remain concurrent.
-            synchronized(lastLock) {
+        fun add(value: Long, requestedMode: MetricAggregationMode?): Boolean = update {
+            // One publication point keeps count, both sum words and last/mode coherent.
+            // This replaces the prior three atomic additions plus the last-value monitor.
+            synchronized(sampleLock) {
+                if (count < Long.MAX_VALUE) count++
+                val previous = total
+                total += value
+                // Samples are nonnegative signed longs: an unsigned carry crosses negative to positive.
+                if (previous < 0L && total >= 0L) totalHigh++
+                if (value > max) max = value
                 last = value
-                mode = aggregationMode
+                if (requestedMode != null) mode = requestedMode
             }
         }
 
-        fun snapshot(): GaugeSnapshot {
-            return GaugeSnapshot(
-                count = count.get(),
-                total = total.get(),
-                max = max.get(),
-                last = last,
-                mode = mode,
-            )
+        fun snapshot(): GaugeSnapshot = synchronized(sampleLock) {
+            GaugeSnapshot(count, total, totalHigh, max, last, mode)
         }
 
-        override fun sampleCount(): Long = count.get()
+        override fun sampleCount(): Long = synchronized(sampleLock) { count }
     }
 
     private data class GaugeSnapshot(
         val count: Long,
         val total: Long,
+        val totalHigh: Long,
         val max: Long,
         val last: Long,
         val mode: MetricAggregationMode,
-    )
-
-    private data class EvictionCandidate(
-        val name: String,
-        val value: MetricValue,
-        val counter: Boolean,
-        val lastAccess: Long,
     )
 
     companion object {
@@ -376,11 +465,5 @@ internal class MetricAggregator(
             }
         }
 
-        private fun updateMax(target: AtomicLong, value: Long) {
-            var current = target.get()
-            while (value > current && !target.compareAndSet(current, value)) {
-                current = target.get()
-            }
-        }
     }
 }

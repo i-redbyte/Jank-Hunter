@@ -10,7 +10,9 @@ import (
 )
 
 func TestInspectRendersInterpretableAndroidComponentsAndIPCSection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "android-components.html")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "android-components.html")
+	mathPath := filepath.Join(directory, "android-components-math.html")
 	summary := analyze.Summary{
 		Title: "components.jhlog", CollectionQuality: sampleCollectionQuality(),
 		AndroidComponents: &analyze.AndroidComponentAnalysis{
@@ -29,7 +31,7 @@ func TestInspectRendersInterpretableAndroidComponentsAndIPCSection(t *testing.T)
 				Flows:      []analyze.AndroidBinderFlow{{Descriptor: "com.example.ISync", Method: "refresh", TransactionCode: 7, ClientProcess: "main", ServerProcess: ":sync", Confidence: "high", ClaimLevel: "correlated", Evidence: "один запуск, дескриптор и код"}}},
 		},
 	}
-	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{Links: ReportLinks{Math: filepath.Base(mathPath)}}); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := os.ReadFile(path)
@@ -40,11 +42,28 @@ func TestInspectRendersInterpretableAndroidComponentsAndIPCSection(t *testing.T)
 	for _, expected := range []string{
 		`href="#android-components"`, `id="android-components"`, "Компоненты Android и IPC",
 		"Служба переднего плана без активного окна", "com.example.SyncService", "com.example.SyncReceiver",
-		"com.example.ISync", "refresh", "вероятная, а не точная связь", "Статическое покрытие",
-		"наблюдается 1 из 2 ожидаемых процессов",
+		"com.example.ISync", "refresh", "вероятная связь, а не доказанная причина",
 	} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("Android Components report misses %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"Статическое покрытие", "наблюдается 1 из 2 ожидаемых процессов"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("problem-oriented Android Components report contains %q", forbidden)
+		}
+	}
+	if err := WriteMathInspectWithOptions(mathPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{Main: filepath.Base(path)}}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err = os.ReadFile(mathPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mathHTML := string(payload)
+	for _, expected := range []string{"Техническая проверка Android-компонентов", "наблюдается 1 из 2 ожидаемых процессов"} {
+		if !strings.Contains(mathHTML, expected) {
+			t.Fatalf("mathematical Android Components report misses %q", expected)
 		}
 	}
 }
@@ -66,7 +85,7 @@ func TestCompareRendersAndroidComponentsMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(payload)
-	for _, expected := range []string{`href="#android-components-compare"`, `id="android-components-compare"`, "Сравнение компонентов Android и IPC", "Граница верхних 5% задержек клиента Binder", "Сопоставлены одинаковые наборы процессов."} {
+	for _, expected := range []string{`href="#android-components-compare"`, `id="android-components-compare"`, "Что изменилось в Android-компонентах и IPC", "Граница верхних 5% задержек клиента Binder", "Сопоставлены одинаковые наборы процессов."} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("Android Components compare report misses %q", expected)
 		}

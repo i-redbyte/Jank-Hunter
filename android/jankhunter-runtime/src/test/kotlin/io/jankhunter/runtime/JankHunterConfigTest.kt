@@ -350,6 +350,19 @@ class JankHunterConfigTest {
     }
 
     @Test
+    fun eagerRuntimeCapacitiesHaveHardUpperBounds() {
+        val config = JankHunterConfig.builder()
+            .maxQueueSize(Int.MAX_VALUE)
+            .maxDictionaryEntries(Int.MAX_VALUE)
+            .maxDictionaryValueBytes(Int.MAX_VALUE)
+            .build()
+
+        assertEquals(262_144, config.maxQueueSize())
+        assertEquals(65_536, config.maxDictionaryEntries())
+        assertEquals(16_384, config.maxDictionaryValueBytes())
+    }
+
+    @Test
     fun retainedHeapDumpEnablementIsOneExplicitDecision() {
         val enabled = JankHunterConfig.builder()
             .retainedHeapDumpEnabled(true)

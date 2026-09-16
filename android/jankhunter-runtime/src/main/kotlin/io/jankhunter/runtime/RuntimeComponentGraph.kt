@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
+import io.jankhunter.runtime.internal.system.isRuntimeMainThread
 import java.util.concurrent.TimeUnit
 
 /**
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit
 internal class RuntimeComponentGraph(
     nowMs: RuntimeLongSource,
     nowUs: RuntimeLongSource,
+    blockingMetricDrains: RuntimeTaskExecutor = RuntimeMetricDrainExecutor(),
 ) {
     val state = RuntimeState()
     val contextTracker = ContextTracker()
@@ -36,13 +38,14 @@ internal class RuntimeComponentGraph(
         telemetryAccess::ensureContextRecorded,
         { task -> state.maintenanceScheduler?.execute(task) == true },
         { delayMs, task -> state.maintenanceScheduler?.executeDelayed(delayMs, task) == true },
-        { timeoutMs, task -> state.maintenanceScheduler?.executeAndWait(timeoutMs, task) == true },
+        blockingMetricDrains,
     )
     val sampling = RuntimeSamplingService(nowMs)
     val runtimeHookEvents = RuntimeHookEventTransport(
         maxCounterKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
         maxLogSpamKeys = { config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS },
         exactAdmission = { config?.exactEventCollectionEnabled() != false },
+        admissionWaitNanos = ::admissionWaitNanos,
     )
     val runtimeCallGraph = RuntimeCallGraph(
         nowMs = nowMs,
@@ -50,15 +53,7 @@ internal class RuntimeComponentGraph(
         captureOperationId = contextTracker::currentOperationId,
         maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
         exactAdmission = { config?.exactEventCollectionEnabled() != false },
-        admissionWaitNanos = {
-            val activeConfig = config
-            val waitMs = if (Thread.currentThread().name == "main") {
-                activeConfig?.mainThreadAdmissionWaitMs() ?: 0L
-            } else {
-                activeConfig?.backgroundAdmissionWaitMs() ?: 5L
-            }
-            TimeUnit.MILLISECONDS.toNanos(waitMs)
-        },
+        admissionWaitNanos = ::admissionWaitNanos,
     )
     val semanticTelemetry = RuntimeSemanticTelemetry(telemetryAccess, runtimeCallGraph)
     val workerTelemetry = RuntimeWorkerTelemetry(telemetryAccess, semanticTelemetry)
@@ -69,8 +64,8 @@ internal class RuntimeComponentGraph(
     val binderTelemetry = RuntimeBinderTelemetry(telemetryAccess, nowUs)
     val manualDatabaseTracing = RuntimeManualDatabaseTracing(databaseTelemetry)
     val ioTelemetry = RuntimeIOTelemetry(telemetryAccess)
-    val asyncTelemetry = RuntimeAsyncTelemetry(telemetryAccess, metrics, operationTelemetry)
-    val handlerHooks = RuntimeHandlerHooks(telemetryAccess, asyncTelemetry)
+    val asyncTelemetry = RuntimeAsyncTelemetry(telemetryAccess, metrics, operationTelemetry, nowMs)
+    val handlerHooks = RuntimeHandlerHooks(telemetryAccess)
     val retentionTelemetry = RuntimeRetentionTelemetry(state, telemetryAccess, metrics, nowMs)
     val contextTelemetry = RuntimeContextTelemetry(
         state,
@@ -99,10 +94,9 @@ internal class RuntimeComponentGraph(
     val collectors: RuntimeCollectorService = RuntimeCollectorService(
         state,
         collectorTelemetry,
-        retentionTelemetry::recordWatchedRetained,
-        retentionTelemetry::dumpWatchedRetainedHeap,
+        retentionTelemetry::bindWatcher,
     )
-    val storageValve = RuntimeStorageValve(state, collectors)
+    val storageValve = RuntimeStorageValve(state)
     private val writerFactory = AsyncLogWriterFactory()
     val session: RuntimeSessionController = RuntimeSessionController(
         state,
@@ -112,6 +106,7 @@ internal class RuntimeComponentGraph(
         runtimeHookEvents,
         runtimeCallGraph,
         handlerHooks,
+        asyncTelemetry,
         collectors,
         writerFactory,
         nowMs,
@@ -148,7 +143,6 @@ internal class RuntimeComponentGraph(
         contextTelemetry,
         operationTelemetry,
         retentionTelemetry,
-        { config },
     )
 
     val writer: AsyncLogWriter?
@@ -156,6 +150,16 @@ internal class RuntimeComponentGraph(
 
     val config: JankHunterConfig?
         get() = telemetryAccess.config
+
+    private fun admissionWaitNanos(): Long {
+        val activeConfig = config
+        val waitMs = if (isRuntimeMainThread()) {
+            activeConfig?.mainThreadAdmissionWaitMs() ?: 0L
+        } else {
+            activeConfig?.backgroundAdmissionWaitMs() ?: 5L
+        }
+        return TimeUnit.MILLISECONDS.toNanos(waitMs)
+    }
 
     private companion object {
         const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048

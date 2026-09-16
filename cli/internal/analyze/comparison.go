@@ -13,6 +13,7 @@ import (
 func Compare(baseline, candidate Summary) Comparison {
 	comparison := Comparison{Baseline: baseline, Candidate: candidate}
 	confidence := confidence(baseline, candidate)
+	environmentSamples := uint64(min(AcquisitionEvidenceFor(baseline).IndependentGroups, AcquisitionEvidenceFor(candidate).IndependentGroups))
 	baselineLogSpam := totalLogSpam(baseline)
 	candidateLogSpam := totalLogSpam(candidate)
 	baselineProblemWindows := totalProblemWindows(baseline)
@@ -22,18 +23,18 @@ func Compare(baseline, candidate Summary) Comparison {
 		observedDeltaFloat("HTTP failure rate", percentCount(baseline.HTTPFailed, baseline.HTTPCount), percentCount(candidate.HTTPFailed, candidate.HTTPCount), "п.п.", true, uint64(baseline.HTTPCount), uint64(candidate.HTTPCount), "HTTP-запросы не зафиксированы"),
 		observedDeltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, baseline.UIFrames, candidate.UIFrames, "UI-кадры не зафиксированы"),
 		observedDeltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, baseline.UIFPSMeasuredFrames, candidate.UIFPSMeasuredFrames, "недостаточно непрерывных UI-кадров для оценки FPS"),
-		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
+		stallDurationDelta(baseline, candidate),
 		observedDelta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "КБ", true, uint64(baseline.MemoryCount), uint64(candidate.MemoryCount), "PSS не измерялся"),
 		observedDelta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "КБ", false, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки контекста памяти отсутствуют"),
-		observedDelta("UID RX delta", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки сетевого контекста отсутствуют"),
-		observedDelta("UID TX delta", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки сетевого контекста отсутствуют"),
+		trafficDelta(baseline, candidate, 0),
+		trafficDelta(baseline, candidate, 1),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "шт", true, minUint64(baseline.Retained, candidate.Retained)),
 		durationRateDelta("Log spam", baselineLogSpam, candidateLogSpam, baseline.DurationMS, candidate.DurationMS, minUint64(baselineLogSpam, candidateLogSpam)),
 		durationRateDelta("Problem windows", baselineProblemWindows, candidateProblemWindows, baseline.DurationMS, candidate.DurationMS, minUint64(baselineProblemWindows, candidateProblemWindows)),
-		mixDelta("Process mix", baseline.Processes, candidate.Processes, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
-		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
-		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
-		mixDelta("Device mix", baseline.Devices, candidate.Devices, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
+		mixDelta("Process mix", baseline.Processes, candidate.Processes, environmentSamples),
+		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, environmentSamples),
+		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, environmentSamples),
+		mixDelta("Device mix", baseline.Devices, candidate.Devices, environmentSamples),
 		mixDelta("Network mix", baseline.Network, candidate.Network, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		mixDelta("Cohort mix", baseline.Cohorts, candidate.Cohorts, minUint64(uint64(baseline.EventCount), uint64(candidate.EventCount))),
 	)
@@ -128,7 +129,7 @@ func observedDeltaFloat(name string, before, after float64, unit string, higherI
 func markDeltaUnavailable(result Delta, baselineSamples, candidateSamples uint64, reason string) Delta {
 	result.Change = "не сравнивается"
 	result.Severity = "ok"
-	result.Interval = fmt.Sprintf("база=%d, кандидат=%d", baselineSamples, candidateSamples)
+	result.Interval = fmt.Sprintf("база=%d, проверяемый прогон=%d", baselineSamples, candidateSamples)
 	result.Comparable = false
 	result.ComparisonNote = reason
 	result.ChangeAbs = 0
@@ -210,7 +211,7 @@ func relativeDeltaFloat(name string, before, after float64, unit string, higherI
 func totalLogSpam(summary Summary) uint64 {
 	var total uint64
 	for _, item := range summary.LogSpam {
-		total += item.Count
+		total = saturatingUint64Sum(total, item.Count)
 	}
 	return total
 }
@@ -225,7 +226,9 @@ func percentCount(part, total int) float64 {
 func totalProblemWindows(summary Summary) uint64 {
 	var total uint64
 	for _, item := range summary.ProblemWindows {
-		total += uint64(item.Windows)
+		if item.Windows > 0 {
+			total = saturatingUint64Sum(total, uint64(item.Windows))
+		}
 	}
 	return total
 }
@@ -241,7 +244,7 @@ func cohortWarnings(baseline, candidate Summary) []string {
 		{name: "устройств", baseline: baseline.Devices, candidate: candidate.Devices},
 		{name: "процессов", baseline: baseline.Processes, candidate: candidate.Processes},
 		{name: "сетей", baseline: baseline.Network, candidate: candidate.Network},
-		{name: "когорт", baseline: baseline.Cohorts, candidate: candidate.Cohorts},
+		{name: "групп запусков", baseline: baseline.Cohorts, candidate: candidate.Cohorts},
 	}
 	var warnings []string
 	for _, check := range checks {
@@ -251,7 +254,7 @@ func cohortWarnings(baseline, candidate Summary) []string {
 		before := namedShareSummary(check.baseline)
 		after := namedShareSummary(check.candidate)
 		if namedDistributionDistance(check.baseline, check.candidate) > 0.05 {
-			warnings = append(warnings, fmt.Sprintf("Состав %s отличается: база [%s], кандидат [%s].", check.name, before, after))
+			warnings = append(warnings, fmt.Sprintf("Состав %s отличается: база [%s], проверяемый прогон [%s].", check.name, before, after))
 		}
 	}
 	return warnings
@@ -270,7 +273,7 @@ func durationComparisonWarnings(baseline, candidate Summary) []string {
 		return nil
 	}
 	return []string{fmt.Sprintf(
-		"Длительность прогонов отличается больше чем на 20%%: база %s, кандидат %s. Максимумы и редкие события могли получить разную экспозицию.",
+		"Длительность прогонов отличается больше чем на 20%%: база %s, проверяемый прогон %s. Максимумы и редкие события наблюдались разное время.",
 		humanDurationMS(baseline.DurationMS),
 		humanDurationMS(candidate.DurationMS),
 	)}
@@ -310,19 +313,17 @@ func comparisonScopeConfidenceCap(baseline, candidate Summary) string {
 }
 
 func sampleConfidence(baseline, candidate Summary) string {
-	minLogs := baseline.LogCount
-	if candidate.LogCount < minLogs {
-		minLogs = candidate.LogCount
+	baseGroups, nextGroups := AcquisitionEvidenceFor(baseline), AcquisitionEvidenceFor(candidate)
+	if !baseGroups.IdentityComplete || !nextGroups.IdentityComplete {
+		return "low"
 	}
-	minEvents := baseline.EventCount
-	if candidate.EventCount < minEvents {
-		minEvents = candidate.EventCount
-	}
+	minGroups := min(baseGroups.IndependentGroups, nextGroups.IndependentGroups)
+	minEvents := min(comparisonObservationCount(baseline), comparisonObservationCount(candidate))
 	sampleLevel := "low"
 	switch {
-	case minLogs >= 5 && minEvents >= 500:
+	case minGroups >= 5 && minEvents >= 500:
 		sampleLevel = "high"
-	case minLogs >= 2 && minEvents >= 80:
+	case minGroups >= 2 && minEvents >= 80:
 		sampleLevel = "medium"
 	}
 	return sampleLevel
@@ -346,7 +347,7 @@ func comparisonQualityWarnings(baseline, candidate Summary) []string {
 			baseScope.ExpectedProcessCount != candidateScope.ExpectedProcessCount ||
 			baseScope.ExpectedProcessFingerprint != candidateScope.ExpectedProcessFingerprint) {
 		warnings = append(warnings, fmt.Sprintf(
-			"Process scope отличается: база %s (%d), кандидат %s (%d); сравнение ограничено низким доверием.",
+			"Охват процессов отличается: база %s (%d), проверяемый прогон %s (%d). Надёжность сравнения низкая.",
 			baseScope.ProcessScope,
 			baseScope.AllowedProcessCount,
 			candidateScope.ProcessScope,
@@ -358,14 +359,14 @@ func comparisonQualityWarnings(baseline, candidate Summary) []string {
 		summary Summary
 	}{
 		{label: "базы", summary: baseline},
-		{label: "кандидата", summary: candidate},
+		{label: "проверяемого прогона", summary: candidate},
 	} {
 		quality := item.summary.CollectionQuality
 		if quality.Level == "" || quality.Level == "high" {
 			continue
 		}
 		if len(quality.Reasons) == 0 {
-			warnings = append(warnings, fmt.Sprintf("Качество данных %s ограничивает доверие уровнем %s.", item.label, quality.Level))
+			warnings = append(warnings, fmt.Sprintf("Из-за качества данных %s надёжность ограничена уровнем %s.", item.label, quality.Level))
 			continue
 		}
 		for _, reason := range quality.Reasons {
@@ -390,8 +391,10 @@ func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration u
 		item = &OwnerStats{Owner: owner, Kind: kind}
 		stats[key] = item
 	}
-	item.Count++
-	item.TotalMS += duration
+	if item.Count < int(^uint(0)>>1) {
+		item.Count++
+	}
+	item.TotalMS = saturatingUint64Sum(item.TotalMS, duration)
 	if duration > item.MaxMS {
 		item.MaxMS = duration
 	}
@@ -437,10 +440,13 @@ func fpsMeasurementStatus(frames uint64, measuredWindows int) string {
 
 func sortRoutes(routes []RouteStats) {
 	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].P95MS == routes[j].P95MS {
+		if routes[i].P95MS != routes[j].P95MS {
+			return routes[i].P95MS > routes[j].P95MS
+		}
+		if routes[i].Count != routes[j].Count {
 			return routes[i].Count > routes[j].Count
 		}
-		return routes[i].P95MS > routes[j].P95MS
+		return routes[i].Route < routes[j].Route
 	})
 }
 
@@ -455,8 +461,17 @@ func sortNetworkCalls(calls []NetworkCallStats) {
 		if calls[i].Route != calls[j].Route {
 			return calls[i].Route < calls[j].Route
 		}
+		if calls[i].Service != calls[j].Service {
+			return calls[i].Service < calls[j].Service
+		}
 		if calls[i].Initiator != calls[j].Initiator {
 			return calls[i].Initiator < calls[j].Initiator
+		}
+		if calls[i].Screen != calls[j].Screen {
+			return calls[i].Screen < calls[j].Screen
+		}
+		if calls[i].Operation != calls[j].Operation {
+			return calls[i].Operation < calls[j].Operation
 		}
 		return calls[i].Owner < calls[j].Owner
 	})
@@ -464,10 +479,13 @@ func sortNetworkCalls(calls []NetworkCallStats) {
 
 func sortScreens(screens []ScreenStats) {
 	sort.Slice(screens, func(i, j int) bool {
-		if screens[i].JankRatePct == screens[j].JankRatePct {
+		if screens[i].JankRatePct != screens[j].JankRatePct {
+			return screens[i].JankRatePct > screens[j].JankRatePct
+		}
+		if screens[i].FrameP95MS != screens[j].FrameP95MS {
 			return screens[i].FrameP95MS > screens[j].FrameP95MS
 		}
-		return screens[i].JankRatePct > screens[j].JankRatePct
+		return screens[i].Screen < screens[j].Screen
 	})
 }
 
@@ -509,10 +527,19 @@ func sortIOOperations(operations []IOStats) {
 
 func sortOwners(owners []OwnerStats) {
 	sort.Slice(owners, func(i, j int) bool {
-		if owners[i].MaxMS == owners[j].MaxMS {
+		if owners[i].MaxMS != owners[j].MaxMS {
+			return owners[i].MaxMS > owners[j].MaxMS
+		}
+		if owners[i].TotalMS != owners[j].TotalMS {
 			return owners[i].TotalMS > owners[j].TotalMS
 		}
-		return owners[i].MaxMS > owners[j].MaxMS
+		if owners[i].Count != owners[j].Count {
+			return owners[i].Count > owners[j].Count
+		}
+		if owners[i].Owner != owners[j].Owner {
+			return owners[i].Owner < owners[j].Owner
+		}
+		return owners[i].Kind < owners[j].Kind
 	})
 }
 
@@ -520,10 +547,19 @@ func sortSignalContexts(contexts []SignalContextStats) {
 	sort.Slice(contexts, func(i, j int) bool {
 		left := signalContextSeverityScore(contexts[i])
 		right := signalContextSeverityScore(contexts[j])
-		if left == right {
+		if left != right {
+			return left > right
+		}
+		if contexts[i].Operation != contexts[j].Operation {
 			return contexts[i].Operation < contexts[j].Operation
 		}
-		return left > right
+		if contexts[i].Screen != contexts[j].Screen {
+			return contexts[i].Screen < contexts[j].Screen
+		}
+		if contexts[i].Owner != contexts[j].Owner {
+			return contexts[i].Owner < contexts[j].Owner
+		}
+		return contexts[i].RouteSample < contexts[j].RouteSample
 	})
 }
 
@@ -539,45 +575,94 @@ func signalContextSeverityScore(context SignalContextStats) uint64 {
 
 func sortLogSpam(items []LogSpamStats) {
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Count == items[j].Count {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		if items[i].Source != items[j].Source {
 			return items[i].Source < items[j].Source
 		}
-		return items[i].Count > items[j].Count
+		if items[i].Level != items[j].Level {
+			return items[i].Level < items[j].Level
+		}
+		if items[i].Screen != items[j].Screen {
+			return items[i].Screen < items[j].Screen
+		}
+		if items[i].Operation != items[j].Operation {
+			return items[i].Operation < items[j].Operation
+		}
+		return items[i].Owner < items[j].Owner
 	})
 }
 
 func sortProblems(items []ProblemWindowStats) {
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].MaxMS == items[j].MaxMS {
+		if items[i].MaxMS != items[j].MaxMS {
+			return items[i].MaxMS > items[j].MaxMS
+		}
+		if items[i].Count != items[j].Count {
 			return items[i].Count > items[j].Count
 		}
-		return items[i].MaxMS > items[j].MaxMS
+		if items[i].TotalWindowMS != items[j].TotalWindowMS {
+			return items[i].TotalWindowMS > items[j].TotalWindowMS
+		}
+		if items[i].Windows != items[j].Windows {
+			return items[i].Windows > items[j].Windows
+		}
+		if items[i].Kind != items[j].Kind {
+			return items[i].Kind < items[j].Kind
+		}
+		if items[i].Screen != items[j].Screen {
+			return items[i].Screen < items[j].Screen
+		}
+		if items[i].Operation != items[j].Operation {
+			return items[i].Operation < items[j].Operation
+		}
+		return items[i].Owner < items[j].Owner
 	})
 }
 
 func sortRuntimeCalls(items []RuntimeCallStats) {
 	sort.Slice(items, func(i, j int) bool {
-		left := items[i].TotalMS + items[i].MaxMS*10 + items[i].Count
-		right := items[j].TotalMS + items[j].MaxMS*10 + items[j].Count
+		left := runtimeCallPriority(items[i])
+		right := runtimeCallPriority(items[j])
 		if left == right {
-			if items[i].Caller == items[j].Caller {
+			if items[i].Caller != items[j].Caller {
+				return items[i].Caller < items[j].Caller
+			}
+			if items[i].Callee != items[j].Callee {
 				return items[i].Callee < items[j].Callee
 			}
-			return items[i].Caller < items[j].Caller
+			if items[i].Screen != items[j].Screen {
+				return items[i].Screen < items[j].Screen
+			}
+			return items[i].Operation < items[j].Operation
 		}
 		return left > right
 	})
 }
 
+func runtimeCallPriority(item RuntimeCallStats) uint64 {
+	return saturatingUint64Sum(item.TotalMS, saturatingMultiply(item.MaxMS, 10), item.Count)
+}
+
 func sortMemoryLeaks(items []MemoryLeakSuspect) {
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Score == items[j].Score {
-			if items[i].MaxAgeMS == items[j].MaxAgeMS {
-				return items[i].ClassName < items[j].ClassName
-			}
+		if items[i].Score != items[j].Score {
+			return items[i].Score > items[j].Score
+		}
+		if items[i].MaxAgeMS != items[j].MaxAgeMS {
 			return items[i].MaxAgeMS > items[j].MaxAgeMS
 		}
-		return items[i].Score > items[j].Score
+		if items[i].ClassName != items[j].ClassName {
+			return items[i].ClassName < items[j].ClassName
+		}
+		if items[i].Holder != items[j].Holder {
+			return items[i].Holder < items[j].Holder
+		}
+		if items[i].Screen != items[j].Screen {
+			return items[i].Screen < items[j].Screen
+		}
+		return items[i].Operation < items[j].Operation
 	})
 }
 
@@ -590,10 +675,19 @@ func sortNamed(values []NamedValue) {
 	})
 }
 
+func sortGauges(values []NamedGauge) {
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].Value == values[j].Value {
+			return values[i].Name < values[j].Name
+		}
+		return values[i].Value > values[j].Value
+	})
+}
+
 func namedValueTotal(values []NamedValue) uint64 {
 	var total uint64
 	for _, value := range values {
-		total += value.Value
+		total = saturatingUint64Sum(total, value.Value)
 	}
 	return total
 }

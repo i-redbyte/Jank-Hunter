@@ -97,7 +97,7 @@ func TestAnalyzeCompareReportsAppearedNetworkLoop(t *testing.T) {
 	t.Fatalf("appeared network loop delta was not reported: %+v", report.NetworkLoopDeltas)
 }
 
-func TestNetworkLoopExplanationMakesMissingOwnerActionable(t *testing.T) {
+func TestNetworkLoopMissingOwnerActionBelongsToCollectionQuality(t *testing.T) {
 	loop := NetworkLoopFinding{
 		Route: "POST /messages",
 		Owner: "unknown",
@@ -110,8 +110,11 @@ func TestNetworkLoopExplanationMakesMissingOwnerActionable(t *testing.T) {
 	if strings.Contains(strings.ToLower(visible), "unknown") {
 		t.Fatalf("missing owner leaked as unknown: %s", visible)
 	}
-	if !strings.Contains(visible, "место запуска") || !strings.Contains(visible, "инструментирован") {
-		t.Fatalf("missing owner explanation is not actionable: %s", visible)
+	if !strings.Contains(visible, "место запуска") || strings.Contains(visible, "ASM-хуки") {
+		t.Fatalf("technical collection guidance escaped into a problem explanation: %s", visible)
+	}
+	if !strings.Contains(NetworkLoopAttributionExplanation([]NetworkLoopFinding{loop}), "ASM-хуки") {
+		t.Fatal("missing actionable collection guidance in quality")
 	}
 }
 
@@ -151,9 +154,12 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dns-loop.jhlog")
-	file, writer, err := jhlog.Create(path)
+	file, writer, err := jhlog.CreateWithHeader(path, completeHTTPTestHeader())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
+	}
+	if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventSession, TimeMS: baseMS + 1, Session: &jhlog.SessionEvent{CollectorFlags: uint64(jhlog.CollectorHTTP)}}); err != nil {
+		t.Fatal(err)
 	}
 	for _, entry := range []jhlog.DictionaryEntry{
 		{Kind: jhlog.DictOwner, ID: 1, Value: "ConfigRepository.refresh"},
@@ -201,6 +207,10 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 				t.Fatalf("WriteEvent(http) error = %v", err)
 			}
 		}
+	}
+	writer.SetQualitySnapshot(jhlog.QualitySnapshot{CapturedElapsedUS: (baseMS + 25001) * 1000, Counters: map[uint64]uint64{jhlog.QualityCollectionWindowStartElapsedMS: baseMS + 1, jhlog.QualityCollectionWindowEndElapsedMS: baseMS + 25001}})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

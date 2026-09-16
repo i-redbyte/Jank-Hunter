@@ -1,6 +1,7 @@
 package io.jankhunter.gradle
 
 import java.io.File
+import java.io.Writer
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -8,24 +9,42 @@ import java.util.Locale
 
 internal object InstrumentationArtifactFiles {
     fun writeClassShard(directoryPath: String, className: String, text: String) {
-        if (directoryPath.isBlank()) return
-        val directory = File(directoryPath)
-        directory.mkdirs()
-        val shard = File(directory, shardName(className))
+        val shard = classShard(directoryPath, className) ?: return
         if (text.isBlank()) {
-            shard.delete()
+            Files.deleteIfExists(shard.toPath())
             return
         }
-        val tmp = File(shard.parentFile, "${shard.name}.${System.nanoTime()}.tmp")
-        tmp.writeText(text)
-        replaceAtomically(tmp, shard)
+        writeTextAtomically(shard, text)
+    }
+
+    fun writeClassShard(directoryPath: String, className: String, write: (Writer) -> Unit) {
+        val shard = classShard(directoryPath, className) ?: return
+        writeAtomically(shard, write)
     }
 
     fun writeAtomically(file: File, text: String) {
-        file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, "${file.name}.${System.nanoTime()}.tmp")
-        tmp.writeText(text)
-        replaceAtomically(tmp, file)
+        writeAtomically(file) { writer -> writer.write(text) }
+    }
+
+    private fun writeTextAtomically(target: File, text: String) {
+        writeAtomically(target) { writer -> writer.write(text) }
+    }
+
+    private fun writeAtomically(target: File, write: (Writer) -> Unit) {
+        val parent = requireNotNull(target.absoluteFile.parentFile) { "Artifact target must have a parent: $target" }
+        Files.createDirectories(parent.toPath())
+        val tmp = Files.createTempFile(parent.toPath(), ".${target.name}.", ".tmp").toFile()
+        try {
+            tmp.bufferedWriter().use(write)
+            replaceAtomically(tmp, target)
+        } catch (error: Throwable) {
+            try {
+                Files.deleteIfExists(tmp.toPath())
+            } catch (cleanupError: Exception) {
+                error.addSuppressed(cleanupError)
+            }
+            throw error
+        }
     }
 
     private fun replaceAtomically(tmp: File, target: File) {
@@ -40,19 +59,18 @@ internal object InstrumentationArtifactFiles {
             replaceNonAtomically(tmp, target)
         } catch (_: UnsupportedOperationException) {
             replaceNonAtomically(tmp, target)
-        } catch (error: Exception) {
-            tmp.delete()
-            throw error
         }
     }
 
     private fun replaceNonAtomically(tmp: File, target: File) {
-        try {
-            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } catch (error: Exception) {
-            tmp.delete()
-            throw error
-        }
+        Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    private fun classShard(directoryPath: String, className: String): File? {
+        if (directoryPath.isBlank()) return null
+        val directory = File(directoryPath)
+        Files.createDirectories(directory.toPath())
+        return File(directory, shardName(className))
     }
 
     fun readJsonlLines(directory: File): List<String> {
@@ -70,9 +88,24 @@ internal object InstrumentationArtifactFiles {
     }
 
     fun mergeJsonl(directory: File?, outputFile: File) {
-        outputFile.parentFile?.mkdirs()
-        val lines = directory?.let(::readJsonlLines).orEmpty()
-        outputFile.writeText(lines.joinToString(separator = "\n", postfix = if (lines.isEmpty()) "" else "\n"))
+        writeAtomically(outputFile) { writer ->
+            if (directory?.isDirectory != true) return@writeAtomically
+            directory
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "jsonl" }
+                .sortedBy { it.relativeTo(directory).invariantSeparatorsPath }
+                .forEach { file ->
+                    file.useLines { lines ->
+                        lines.forEach { line ->
+                            val trimmed = line.trim()
+                            if (trimmed.isNotEmpty()) {
+                                writer.write(trimmed)
+                                writer.write("\n")
+                            }
+                        }
+                    }
+                }
+        }
     }
 
     private fun shardName(className: String): String {

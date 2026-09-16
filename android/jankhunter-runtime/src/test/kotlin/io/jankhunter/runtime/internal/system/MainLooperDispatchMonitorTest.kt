@@ -6,11 +6,31 @@ import io.jankhunter.runtime.RuntimeLongSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MainLooperDispatchMonitorTest {
+    @Test
+    fun startDoesNotReplacePrinterWhenCurrentPrinterCannotBeRead() {
+        var installations = 0
+        val failuresBefore = RuntimeHookFailureTracker.total()
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { error("hidden API denied") },
+            setMessageLogging = { installations++ },
+            clockMs = { 0L },
+            recordDispatch = { _, _, _ -> },
+        )
+
+        monitor.start()
+
+        assertEquals(0, installations)
+        assertEquals(failuresBefore + 1L, RuntimeHookFailureTracker.total())
+    }
+
     @Test
     fun dispatchRecorderAndClockUsePrimitivePorts() {
         val recorder = MainLooperDispatchMonitor::class.java.getDeclaredField("recordDispatch")
@@ -117,6 +137,47 @@ class MainLooperDispatchMonitorTest {
     }
 
     @Test
+    fun successfulStopReleasesPreviousPrinterReference() {
+        val previous = Printer { }
+        var installed: Printer? = previous
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { installed },
+            setMessageLogging = { installed = it },
+            clockMs = { 0L },
+            recordDispatch = { _, _, _ -> },
+        )
+
+        monitor.start()
+        monitor.stop()
+
+        val field = MainLooperDispatchMonitor::class.java.getDeclaredField("previousPrinter")
+        field.isAccessible = true
+        assertNull(field.get(monitor))
+    }
+
+    @Test
+    fun chainedPrinterDoesNotSwallowFatalVmFailure() {
+        val fatal = FatalPrinterError()
+        val previous = Printer { throw fatal }
+        var installed: Printer? = previous
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { installed },
+            setMessageLogging = { installed = it },
+            clockMs = { 0L },
+            recordDispatch = { _, _, _ -> },
+        )
+        monitor.start()
+
+        val actual = assertThrows(FatalPrinterError::class.java) {
+            checkNotNull(installed).println("dispatch")
+        }
+
+        assertSame(fatal, actual)
+    }
+
+    @Test
     fun stopDoesNotReplacePrinterInstalledByAnotherProfiler() {
         var installed: Printer? = null
         val other = Printer { }
@@ -218,4 +279,6 @@ class MainLooperDispatchMonitorTest {
         assertNotNull(installed)
         assertEquals(before + 1L, RuntimeHookFailureTracker.total())
     }
+
+    private class FatalPrinterError : VirtualMachineError()
 }

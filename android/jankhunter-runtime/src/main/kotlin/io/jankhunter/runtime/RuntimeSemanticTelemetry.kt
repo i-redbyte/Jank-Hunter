@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import android.os.Looper
 import android.os.SystemClock
+import io.jankhunter.runtime.internal.io.AsyncLogWriter
 
 internal class RuntimeSemanticTelemetry(
     private val access: RuntimeTelemetryAccess,
@@ -9,7 +10,7 @@ internal class RuntimeSemanticTelemetry(
 ) {
     fun enter(kind: Int): Long {
         return RuntimeHookGuard.value(0L) {
-            if (!access.isActive() || !isEnabled(kind)) 0L else {
+            if (!isEnabled(kind)) 0L else {
                 SystemClock.elapsedRealtimeNanos().coerceAtLeast(1L)
             }
         }
@@ -47,15 +48,14 @@ internal class RuntimeSemanticTelemetry(
     }
 
     fun isEnabled(kind: Int): Boolean {
-        val active = access.config ?: return false
         return when (kind) {
             JankHunterSemanticWork.COMPOSE_COMPOSITION,
             JankHunterSemanticWork.COMPOSE_MEASURE,
             JankHunterSemanticWork.COMPOSE_LAYOUT,
             JankHunterSemanticWork.COMPOSE_DRAW,
-            -> active.composeTracingEnabled()
-            JankHunterSemanticWork.ROOM_DAO -> active.roomTracingEnabled()
-            JankHunterSemanticWork.WORKER -> active.workerTracingEnabled()
+            -> access.isFeatureActive(JankHunterRuntimeFeature.COMPOSE)
+            JankHunterSemanticWork.ROOM_DAO -> access.isFeatureActive(JankHunterRuntimeFeature.ROOM)
+            JankHunterSemanticWork.WORKER -> access.isFeatureActive(JankHunterRuntimeFeature.WORKERS)
             else -> false
         }
     }
@@ -67,7 +67,7 @@ internal class RuntimeSemanticTelemetry(
         outcome: JankHunterWorkerOutcome? = null,
     ) {
         val normalized = name.trim().takeIf(String::isNotEmpty) ?: UNKNOWN
-        val targetId = JankHunterSemanticWork.stableId("jankhunter.semantic.target.v1\u0000$normalized")
+        val targetId = JankHunterSemanticWork.stableId(SEMANTIC_TARGET_PREFIX, normalized)
         recordBoundary(kind, targetId, normalized, durationNanos, outcome)
     }
 
@@ -77,17 +77,19 @@ internal class RuntimeSemanticTelemetry(
         calleeName: String,
         durationNanos: Long,
         outcome: JankHunterWorkerOutcome?,
+        expectedWriter: AsyncLogWriter? = null,
     ) {
         val mainLooper = Looper.getMainLooper()
         val mainThread = mainLooper != null && Looper.myLooper() === mainLooper
-        val callerName = JankHunterSemanticWork.callerLabel(kind, mainThread, outcome) ?: return
+        val caller = JankHunterSemanticWork.caller(kind, mainThread, outcome) ?: return
         runtimeCallGraph.recordSemantic(
-            callerId = JankHunterSemanticWork.stableId(callerName),
-            callerName = callerName,
+            callerId = caller.id,
+            callerName = caller.name,
             calleeId = calleeId,
             calleeName = calleeName,
             durationMs = durationNanos.coerceAtLeast(0L) / NANOS_PER_MILLISECOND,
-            enabled = access.isActive() && isEnabled(kind),
+            enabled = isEnabled(kind),
+            expectedWriter = expectedWriter,
         )
     }
 
@@ -103,6 +105,7 @@ internal class RuntimeSemanticTelemetry(
     private companion object {
         const val NANOS_PER_MILLISECOND = 1_000_000L
         const val UNKNOWN = "unknown"
+        const val SEMANTIC_TARGET_PREFIX = "jankhunter.semantic.target.v1\u0000"
     }
 }
 

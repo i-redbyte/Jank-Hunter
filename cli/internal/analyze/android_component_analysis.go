@@ -439,7 +439,7 @@ func (a *androidComponentAnalysisAccumulator) addReceiver(component, action stri
 			aggregate.stats.Failures++
 			a.addFinding("android.receiver.failure", key.component+"\x00"+key.action+"\x00"+key.process, AndroidComponentFinding{
 				ID: "android.receiver.failure", Severity: "high", Title: "Ошибка BroadcastReceiver",
-				Explanation: "Инструментированный onReceive завершился исключением.",
+				Explanation: "onReceive с добавленным ASM-хуком завершился исключением.",
 				Component:   key.component, Action: key.action, Process: key.process, ClaimLevel: "linked",
 			}, value.DurationUS)
 		}
@@ -815,7 +815,7 @@ func binderRecordsOverlap(client, server androidBinderRecord) bool {
 
 func binderCorrelationEvidence(oneway bool, confidence string) string {
 	if oneway {
-		return "Уникальный серверный кандидат с тем же запуском приложения, дескриптором и кодом найден в ограниченном окне после одностороннего клиентского вызова; общего идентификатора вызова нет."
+		return "Найден единственный серверный вызов с тем же запуском приложения, дескриптором и кодом вскоре после одностороннего клиентского вызова. Общего ID вызова нет."
 	}
 	if confidence == "high" {
 		return "Уникальный серверный интервал с тем же запуском приложения, дескриптором, кодом и известным методом AIDL вложен во временное окно клиентского вызова; общего идентификатора вызова нет."
@@ -855,8 +855,13 @@ func (a *androidBinderAccumulator) findings() []AndroidComponentFinding {
 				a.stats.AmbiguousClients, a.stats.UnmatchedClients, a.stats.UnmatchedServers,
 				a.stats.UncorrelatableEvents, a.stats.CorrelationDroppedEvents,
 			),
-			Count: a.stats.AmbiguousClients + a.stats.UnmatchedClients + a.stats.UnmatchedServers +
-				a.stats.UncorrelatableEvents + a.stats.CorrelationDroppedEvents,
+			Count: saturatingUint64Sum(
+				a.stats.AmbiguousClients,
+				a.stats.UnmatchedClients,
+				a.stats.UnmatchedServers,
+				a.stats.UncorrelatableEvents,
+				a.stats.CorrelationDroppedEvents,
+			),
 			ClaimLevel: "unknown",
 		})
 	}
@@ -940,7 +945,7 @@ func (b *problemBuilder) detectAndroidComponents() {
 			cost.MainThreadBlockedMS = cost.WallTimeMS
 		}
 		limitations = append(limitations,
-			"Parcel payload, extras, raw UID/PID and exception messages are intentionally unavailable.",
+			"Содержимое Parcel, extras, исходные UID/PID и сообщения исключений намеренно не записываются.",
 		)
 		b.add(ProblemFinding{
 			DetectorID: source.ID, DetectorVersion: b.cfg.Version,
@@ -954,7 +959,7 @@ func (b *problemBuilder) detectAndroidComponents() {
 			Impact: androidFindingImpact(source.ID), Evidence: evidence,
 			Frequency: &ProblemFrequency{Count: source.Count}, Cost: cost,
 			PriorityBreakdown: priority(
-				impact, magnitude, min(20, 4+int(source.Count)*2), 3, 2,
+				impact, magnitude, boundedUint64Score(source.Count, 4, 2, 20), 3, 2,
 				"влияние Android component/IPC boundary", "тип и длительность наблюдаемого события",
 				"число типизированных наблюдений", "конкретный component или interface", "component/IPC контекст",
 			),
@@ -1000,27 +1005,27 @@ func androidFindingRecommendation(id string) ProblemRecommendation {
 	switch id {
 	case "android.binder.main_thread_slow":
 		return ProblemRecommendation{
-			Action:       "Убрать синхронный Binder round-trip с главного потока либо сократить server critical path",
-			Rationale:    "IPC включает scheduling и работу другого процесса, поэтому задержка напрямую блокирует вызывающий UI thread.",
-			Verification: "Повторить сценарий и проверить отсутствие main-thread transact ≥16 мс и улучшение frame/stall tail.",
+			Action:       "Уберите синхронный Binder-вызов с главного потока или сократите работу принимающего процесса.",
+			Rationale:    "IPC ждёт планировщик и другой процесс, поэтому задержка блокирует UI thread.",
+			Verification: "Повторите сценарий: на главном потоке не должно остаться Binder-вызовов дольше 16 мс, а долгие кадры и паузы должны сократиться.",
 		}
 	case "android.binder.failure", "android.binder.unhandled":
 		return ProblemRecommendation{
-			Action:       "Проверить version/transaction mapping, обработать binder death и сделать повтор безопасным",
-			Rationale:    "Typed outcome локализует сбой на IPC boundary без доступа к payload.",
-			Verification: "Повторить тот же AIDL-метод и убедиться, что failure/unhandled события исчезли.",
+			Action:       "Проверьте соответствие версии и transaction code, обработайте смерть Binder и сделайте повтор безопасным.",
+			Rationale:    "Записан сбой на границе IPC, но содержимое вызова недоступно.",
+			Verification: "Повторите тот же AIDL-метод и убедитесь, что события ошибки исчезли.",
 		}
 	case "android.receiver.async_deadline_risk", "android.receiver.sync_slow":
 		return ProblemRecommendation{
-			Action:       "Оставить в onReceive только маршрутизацию, тяжёлую работу передать scheduler/Worker и гарантировать PendingResult.finish в finally",
+			Action:       "Оставьте в onReceive только маршрутизацию. Тяжёлую работу передайте Worker, а PendingResult.finish гарантированно вызывайте в finally.",
 			Rationale:    "BroadcastReceiver ограничен системным временем выполнения и блокирует жизненный цикл процесса.",
-			Verification: "Повторить action и проверить p95/max receiver duration и отсутствие открытых flow в конце capture.",
+			Verification: "Повторите действие и проверьте верхние 5%, максимальную длительность receiver и отсутствие незавершённых операций в конце записи.",
 		}
 	default:
 		return ProblemRecommendation{
-			Action:       "Сократить синхронную работу callback и явно обработать lifecycle failure/timeout",
-			Rationale:    "Component callback является системной границей с ограниченным временем и контролируемым потоком.",
-			Verification: "Повторить component flow и сравнить число ошибок, timeout и верхнюю границу длительности.",
+			Action:       "Сократите синхронную работу callback и явно обработайте ошибки lifecycle и таймауты.",
+			Rationale:    "Системный callback имеет ограниченное время выполнения и работает на заданном потоке.",
+			Verification: "Повторите сценарий компонента и сравните число ошибок, таймаутов и максимальную длительность.",
 		}
 	}
 }

@@ -35,11 +35,7 @@ func workerRows(summary analyze.Summary) []workerReportRow {
 			Severity:    severity,
 			Context:     context,
 			ContextHelp: contextHelp,
-			Lifecycle: fmt.Sprintf(
-				"поставлено в очередь %d · запущено %d · завершено %d · неполных цепочек %d",
-				worker.Enqueued, worker.Started, worker.Finished,
-				worker.MissingEnqueue+worker.MissingStart+worker.MissingFinish,
-			),
+			Lifecycle:   workerLifecycleDescription(worker),
 			Outcomes: fmt.Sprintf(
 				"успешно %d · ошибок %d · повторов %d · отмен %d",
 				worker.Success, worker.Failures, worker.Retries, worker.Cancelled,
@@ -120,4 +116,13 @@ func workerMemoryDescription(worker analyze.WorkerStats) string {
 		"изменение PSS в среднем %+d КБ · максимум в окне %s · %d пар",
 		worker.AvgPSSDeltaKB, humanDataSizeKB(worker.MaxPSSDuringKB), worker.MemoryPairs,
 	)
+}
+
+func workerLifecycleDescription(worker analyze.WorkerStats) string {
+	text := fmt.Sprintf("поставлено в очередь %d · запущено %d · завершено %d · неполных цепочек %d",
+		worker.Enqueued, worker.Started, worker.Finished, worker.MissingEnqueue+worker.MissingStart+worker.MissingFinish)
+	if worker.RegisteredObserved > 0 {
+		text += fmt.Sprintf(" · регистрация подтверждена %d", worker.RegisteredObserved)
+	}
+	return text
 }

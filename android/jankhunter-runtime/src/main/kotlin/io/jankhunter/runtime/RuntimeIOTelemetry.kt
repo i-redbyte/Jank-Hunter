@@ -7,7 +7,7 @@ import io.jankhunter.runtime.internal.io.Jhlog
 internal class RuntimeIOTelemetry(
     private val access: RuntimeTelemetryAccess,
 ) {
-    fun isEnabled(): Boolean = access.config?.bytecodeIoTracingEnabled() == true
+    fun isEnabled(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.BYTECODE_IO)
 
     fun record(
         operation: JankHunterIOOperation,
@@ -16,7 +16,7 @@ internal class RuntimeIOTelemetry(
         ownerName: String?,
         outcome: JankHunterIOOutcome,
     ) {
-        if (access.config?.ioTracingEnabled() != true) return
+        if (!access.isFeatureActive(JankHunterRuntimeFeature.RUNTIME_IO)) return
         RuntimeHookGuard.run {
             recordInternal(operation, durationNanos, bytes, ownerName, outcome, 0L, null)
         }
@@ -28,7 +28,7 @@ internal class RuntimeIOTelemetry(
         ownerName: String?,
         block: () -> T,
     ): T {
-        if (access.config?.ioTracingEnabled() != true) return block()
+        if (!access.isFeatureActive(JankHunterRuntimeFeature.RUNTIME_IO)) return block()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         var outcome = JankHunterIOOutcome.FAILURE
         try {

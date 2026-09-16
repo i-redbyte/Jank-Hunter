@@ -90,6 +90,7 @@ func writeInspectReportSetUsing(
 	} else {
 		mathOptions := companionOptions
 		mathOptions.Links.Influence = links.Influence
+		mathOptions.Links.Leaks = links.Leaks
 		if err := writers.math(reportPaths.Math, mathReport, mathOptions); err != nil {
 			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет inspect не записан", err))
 		} else {
@@ -157,7 +158,7 @@ func writeCompareReportSetFiles(
 		links.Leaks = filepath.Base(reportPaths.Leaks)
 	}
 	if comparison.Candidate.Influence.Available {
-		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, comparison.Candidate.Influence, "Граф влияния кода: кандидат", companionOptions); err != nil {
+		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, comparison.Candidate.Influence, "Граф влияния кода: проверяемый прогон", companionOptions); err != nil {
 			generationWarnings = append(generationWarnings, warnReportGeneration("граф влияния compare не записан", err))
 		} else {
 			links.Influence = filepath.Base(reportPaths.Influence)
@@ -200,6 +201,7 @@ func writeCompareReportSetFiles(
 	} else {
 		mathReportOptions := companionOptions
 		mathReportOptions.Links.Influence = links.Influence
+		mathReportOptions.Links.Leaks = links.Leaks
 		if err := report.WriteMathCompareWithOptions(reportPaths.Math, mathReport, mathReportOptions); err != nil {
 			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет compare не записан", err))
 		} else {

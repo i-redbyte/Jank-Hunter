@@ -78,3 +78,19 @@ func TestInspectRendersTypedWorkerLifecycleAsSeparateProblemFirstDetail(t *testi
 		}
 	}
 }
+
+func TestWorkerRegistrationReportExplainsUnknownEnqueueTime(t *testing.T) {
+	s := analyze.Summary{WorkerAnalysis: &analyze.WorkerAnalysis{RegisteredObserved: 2,
+		Workers: []analyze.WorkerStats{{Worker: "unknown", RegisteredObserved: 2}}}}
+	rows := workerRows(s)
+	if len(rows) != 1 || !strings.Contains(rows[0].Lifecycle, "регистрация подтверждена 2") {
+		t.Fatalf("missing registration evidence: %+v", rows)
+	}
+	path := filepath.Join(t.TempDir(), "observed.html")
+	if err := WriteInspectWithOptions(path, s, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Регистрация подтверждена запросом", "Время постановки по этому наблюдению неизвестно"} {
+		assertHTMLContains(t, path, want)
+	}
+}

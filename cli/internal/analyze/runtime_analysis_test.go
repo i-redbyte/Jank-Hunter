@@ -32,6 +32,12 @@ func TestInspectBuildsAsyncGCAndStartupAnalysisFromBoundedMetrics(t *testing.T) 
 		20: "screen.transition.Feed.to.Checkout.count",
 		21: "app.lifecycle.ui_visible.count",
 		22: "app.lifecycle.ui_hidden.count",
+		23: "owner.FeedRepository.coroutine.active_duration_ms",
+		24: "owner.FeedRepository.coroutine.suspended_duration_ms",
+		26: "owner.FeedRepository.coroutine.suspension.count",
+		27: "owner.FeedRepository.coroutine.thread_migration.count",
+		28: "owner.FeedRepository.coroutine.segmented_failure.count",
+		29: "owner.FeedRepository.coroutine.segmented_cancellation.count",
 	}
 	metric := func(eventType jhlog.EventType, timeMS, ref, value, count, sum, maximum uint64) jhlog.Event {
 		return jhlog.Event{Type: eventType, TimeMS: timeMS, Metric: &jhlog.MetricEvent{
@@ -49,6 +55,12 @@ func TestInspectBuildsAsyncGCAndStartupAnalysisFromBoundedMetrics(t *testing.T) 
 		metric(jhlog.EventCounter, 100, 8, 2, 0, 0, 0),
 		metric(jhlog.EventGauge, 200, 9, 500, 2, 1_000, 700),
 		metric(jhlog.EventCounter, 200, 10, 1, 0, 0, 0),
+		metric(jhlog.EventGauge, 200, 23, 90, 2, 180, 120),
+		metric(jhlog.EventGauge, 200, 24, 410, 2, 820, 580),
+		metric(jhlog.EventCounter, 200, 26, 3, 0, 0, 0),
+		metric(jhlog.EventCounter, 200, 27, 1, 0, 0, 0),
+		metric(jhlog.EventCounter, 200, 28, 1, 0, 0, 0),
+		metric(jhlog.EventCounter, 200, 29, 1, 0, 0, 0),
 		{Type: jhlog.EventUIWindow, TimeMS: 1_000, UIWindow: &jhlog.UIWindowEvent{
 			WindowMS: 1_000, FrameCount: 60, JankCount: 10,
 		}},
@@ -83,7 +95,11 @@ func TestInspectBuildsAsyncGCAndStartupAnalysisFromBoundedMetrics(t *testing.T) 
 	}
 	task := async.Tasks[0]
 	if task.Kind != "coroutine" || task.Owner != "FeedRepository" || task.DurationSamples != 2 ||
-		task.AvgDurationMS != 500 || task.MaxDurationMS != 700 || task.Failures != 1 {
+		task.AvgDurationMS != 500 || task.MaxDurationMS != 700 || task.Failures != 1 ||
+		task.SegmentedSamples != 2 || task.ActiveSamples != 2 || task.AvgActiveMS != 90 ||
+		task.MaxActiveMS != 120 || task.SuspendedSamples != 2 || task.AvgSuspendedMS != 410 ||
+		task.MaxSuspendedMS != 580 || task.Suspensions != 3 || task.ThreadMigrations != 1 ||
+		task.SegmentedFailures != 1 || task.Cancellations != 1 {
 		t.Fatalf("async task analysis = %+v", task)
 	}
 
@@ -117,6 +133,28 @@ func TestRuntimeAnalysisDoesNotInventModelsWithoutRelevantMetrics(t *testing.T) 
 	}}}})
 	if summary.AsyncAnalysis != nil || summary.GCAnalysis != nil || summary.StartupAnalysis != nil {
 		t.Fatalf("unexpected runtime analysis: async=%+v gc=%+v startup=%+v", summary.AsyncAnalysis, summary.GCAnalysis, summary.StartupAnalysis)
+	}
+}
+
+func TestAsyncAnalysisKeepsLegacyCoroutineMetricsWithoutInventingSegments(t *testing.T) {
+	dict := map[uint64]string{
+		1: "owner.legacy.coroutine.worker.coroutine.duration_ms",
+		2: "owner.legacy.coroutine.worker.coroutine.failure.count",
+	}
+	events := []jhlog.Event{
+		{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(1), Count: 2, Sum: 600, Max: 400}},
+		{Type: jhlog.EventCounter, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(2), Value: 1}},
+	}
+
+	summary := inspectLogsForTest("legacy", []jhlog.Log{{Dict: dict, Events: events}})
+	if summary.AsyncAnalysis == nil || len(summary.AsyncAnalysis.Tasks) != 1 {
+		t.Fatalf("async analysis = %+v", summary.AsyncAnalysis)
+	}
+	task := summary.AsyncAnalysis.Tasks[0]
+	if task.Owner != "legacy.coroutine.worker" || task.DurationSamples != 2 || task.AvgDurationMS != 300 ||
+		task.MaxDurationMS != 400 || task.Failures != 1 || task.SegmentedSamples != 0 || task.ActiveSamples != 0 ||
+		task.SuspendedSamples != 0 || task.Suspensions != 0 || task.ThreadMigrations != 0 {
+		t.Fatalf("legacy async task analysis = %+v", task)
 	}
 }
 

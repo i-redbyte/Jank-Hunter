@@ -57,7 +57,7 @@ func assertInvestigationPriorityExplanation(t *testing.T, path string) {
 	html := string(payload)
 	for _, expected := range []string{
 		"Индекс приоритета расследования", "38", "20 / 40", "8 / 25", "5 / 20", "3 / 10", "2 / 5",
-		"не вероятность", "не ожидаемый ущерб", "Достоверность и уровень связи учитываются отдельно",
+		"не вероятность ошибки", "Чем выше число, тем раньше стоит изучить проблему", "Расчёт раскрыт в карточке",
 	} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("priority explanation misses %q", expected)

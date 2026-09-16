@@ -22,13 +22,7 @@ internal class AsyncLogWriterFactory(
     ): AsyncLogWriter {
         val sessionStartMs = currentTimeMs.getAsLong().coerceAtLeast(0L)
         val localDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(sessionStartMs))
-        if (config.deleteObsoleteJhlogFormats()) {
-            try {
-                ObsoleteSessionLogCleaner.clean(directory, config.binaryStorage())
-            } catch (error: Throwable) {
-                if (error.isFatal()) throw error
-            }
-        }
+        val quality = LogQualityCounters()
         return AsyncLogWriter(
             directory = directory,
             config = config,
@@ -39,16 +33,29 @@ internal class AsyncLogWriterFactory(
             sessionLocalDate = localDate,
             collectorStartElapsedUs = nowElapsedUs(),
             currentTimeMs = currentTimeMs,
-            quality = LogQualityCounters(),
-            logGrowthManager = createLogGrowthManager(
-                directory,
-                config,
-                processName,
-                expectedProcesses,
-                rosterDeclarationComplete,
-            ),
+            quality = quality,
+            prepareSession = {
+                prepareSession(directory, config, processName, expectedProcesses, rosterDeclarationComplete)
+            },
             onTerminalStop = onTerminalStop,
         )
+    }
+
+    private fun prepareSession(
+        directory: File,
+        config: JankHunterConfig,
+        processName: String,
+        expectedProcesses: Set<String>,
+        rosterDeclarationComplete: Boolean,
+    ): LogGrowthManager? {
+        if (config.deleteObsoleteJhlogFormats()) {
+            try {
+                ObsoleteSessionLogCleaner.clean(directory, config.binaryStorage())
+            } catch (error: Throwable) {
+                if (error.isFatal()) throw error
+            }
+        }
+        return createLogGrowthManager(directory, config, processName, expectedProcesses, rosterDeclarationComplete)
     }
 
     private fun createLogGrowthManager(

@@ -15,6 +15,9 @@ internal class RuntimeManualDatabaseTracing(
         if (!telemetry.isEnabled()) return null
         val sourceName = normalizeSourceAlias(sourceAlias) ?: return null
         val query = RuntimeSqlNormalizer.normalize(sqlTemplate)
+        val startedNanos = SystemClock.elapsedRealtimeNanos().coerceAtLeast(1L)
+        val operationToken = telemetry.enterAt(startedNanos)
+        if (operationToken == 0L) return null
         return JankHunterDatabaseCallToken(
             sourceId = sourceId(sourceName),
             sourceName = sourceName,
@@ -22,7 +25,8 @@ internal class RuntimeManualDatabaseTracing(
             fingerprint = RuntimeSqlNormalizer.fingerprint(query),
             operation = operation.wireValue,
             boundary = boundary.wireValue,
-            startedNanos = SystemClock.elapsedRealtimeNanos().coerceAtLeast(1L),
+            startedNanos = startedNanos,
+            operationToken = operationToken,
         )
     }
 
@@ -32,7 +36,11 @@ internal class RuntimeManualDatabaseTracing(
         resultCount: Long,
         failure: Throwable?,
     ) {
-        if (token == null || !token.completeOnce()) return
+        if (token == null) return
+        if (!token.completeOnce()) {
+            telemetry.rejectDuplicateCompletion()
+            return
+        }
         telemetry.recordManual(token, resultKind, resultCount, failure)
     }
 
@@ -65,7 +73,11 @@ internal class RuntimeManualDatabaseTracing(
         outcome: JankHunterDatabaseTransactionOutcome,
         failure: Throwable?,
     ) {
-        if (token == null || !token.completeOnce()) return
+        if (token == null) return
+        if (!token.completeOnce()) {
+            telemetry.rejectDuplicateCompletion()
+            return
+        }
         telemetry.endManualTransaction(token, outcome, failure)
     }
 
@@ -76,11 +88,12 @@ internal class RuntimeManualDatabaseTracing(
     }
 
     private fun sourceId(sourceName: String): Long {
-        val value = JankHunterSemanticWork.stableId("jankhunter.database.manual.v1\u0000$sourceName")
+        val value = JankHunterSemanticWork.stableId(DATABASE_SOURCE_PREFIX, sourceName)
         return if (value == 0L) 1L else value
     }
 
     private companion object {
+        const val DATABASE_SOURCE_PREFIX = "jankhunter.database.manual.v1\u0000"
         const val MAX_SOURCE_ALIAS_CHARS = 320
     }
 }

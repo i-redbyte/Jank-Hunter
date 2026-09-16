@@ -608,6 +608,13 @@
   gap: 6px;
   margin-left: auto;
 }
+.influence-zoom-tools [data-influence-zoom-value] {
+  min-width: 64px;
+}
+.influence-zoom-tools button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .influence-viewport {
   position: relative;
   width: 100%;

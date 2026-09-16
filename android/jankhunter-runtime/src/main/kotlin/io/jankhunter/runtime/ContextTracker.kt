@@ -7,6 +7,7 @@ internal class ContextTracker(
     private val owner = ThreadLocal<String>()
     private val operation = ThreadLocal<JankHunterOperation>()
     private val propagatedOperationId = PrimitiveLongThreadLocal()
+    private val capturedContext = ThreadLocal<CapturedContextCell>()
 
     @Volatile
     private var screen = initialScreen
@@ -76,11 +77,16 @@ internal class ContextTracker(
         screenOverride: String? = null,
         ownerOverride: String? = null,
     ): JankHunterContext {
-        return JankHunterContext(
-            screen = capturedScreen(screenOverride),
-            owner = capturedOwner(ownerOverride),
-            operationId = currentOperationId(),
-        )
+        val screen = capturedScreen(screenOverride)
+        val owner = capturedOwner(ownerOverride)
+        val operationId = currentOperationId()
+        val cell = capturedContext.get()
+        val current = cell?.value
+        if (current != null && current.matches(screen, owner, operationId)) return current
+
+        val created = JankHunterContext(screen, owner, operationId)
+        if (cell == null) capturedContext.set(CapturedContextCell(created)) else cell.value = created
+        return created
     }
 
     fun capturedScreen(override: String?): String? {
@@ -91,7 +97,7 @@ internal class ContextTracker(
         return normalizedContextValue(firstContextValue(override, owner.get()))
     }
 
-    fun <T> callWithContext(
+    inline fun <T> callWithContext(
         context: JankHunterContext,
         ownerName: String?,
         onContextChanged: () -> Unit,
@@ -102,18 +108,21 @@ internal class ContextTracker(
         val previousOperation = operation.get()
         val previousPropagatedOperationId = propagatedOperationId.get()
         RuntimeHookGuard.run {
-            setThreadLocal(screenOverride, context.screen)
-            setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
-            operation.remove()
+            // Null in a captured snapshot means unknown, not a later global screen.
+            screenOverride.set(context.screen ?: "unknown")
+            owner.set(normalizedContextValue(firstContextValue(ownerName, context.owner)))
+            // Keep the empty slot: get() after remove() allocates a new ThreadLocal entry.
+            // A null value releases the operation just as remove() does.
+            operation.set(null)
             propagatedOperationId.set(context.operationId)
         }
         RuntimeHookGuard.run(onContextChanged)
         try {
             return block()
         } finally {
-            RuntimeHookGuard.run { setThreadLocal(screenOverride, previousScreenOverride) }
-            RuntimeHookGuard.run { setThreadLocal(owner, previousOwner) }
-            RuntimeHookGuard.run { setThreadLocal(operation, previousOperation) }
+            RuntimeHookGuard.run { screenOverride.set(previousScreenOverride) }
+            RuntimeHookGuard.run { owner.set(previousOwner) }
+            RuntimeHookGuard.run { operation.set(previousOperation) }
             RuntimeHookGuard.run { propagatedOperationId.set(previousPropagatedOperationId) }
             RuntimeHookGuard.run(onContextChanged)
         }
@@ -138,24 +147,27 @@ internal class ContextTracker(
             current = next
         }
     }
+
+    private fun JankHunterContext.matches(screen: String?, owner: String?, operationId: Long): Boolean {
+        return this.screen == screen && this.owner == owner && this.operationId == operationId
+    }
+
+    private class CapturedContextCell(var value: JankHunterContext)
 }
 
 /** Reuses one mutable cell per participating thread instead of boxing every propagated ID. */
-private class PrimitiveLongThreadLocal {
+internal class PrimitiveLongThreadLocal {
     private val local = ThreadLocal<Cell>()
 
     fun get(): Long = local.get()?.value ?: 0L
 
     fun set(value: Long) {
-        if (value <= 0L) {
-            local.remove()
-            return
-        }
         val cell = local.get()
         if (cell == null) {
-            local.set(Cell(value))
+            if (value > 0L) local.set(Cell(value))
         } else {
-            cell.value = value
+            // Retain one primitive cell per participating thread, including between scopes.
+            cell.value = value.coerceAtLeast(0L)
         }
     }
 

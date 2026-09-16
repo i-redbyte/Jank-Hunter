@@ -78,6 +78,7 @@ internal class JankHunterClassVisitor(
     private val diagnosticsOnlyWhenHookApplied: Boolean = false,
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
+    private val lambdaCaptures = if (config.classGraph) LambdaCaptureClassBuilder(className) else null
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
     private val roomPolicy = RoomDaoInstrumentationPolicy(config.roomTracing, config.databaseTracing)
@@ -90,6 +91,8 @@ internal class JankHunterClassVisitor(
     }
     private var kotlinGeneratedMethods = KotlinGeneratedMethodIndex.EMPTY
     private var superName: String? = null
+    private var enclosingOwner: String? = null
+    private var enclosingMethod: String? = null
     private var classAccess: Int = 0
     private var autoInitMethodPresent = false
     private var alreadyInstrumented = false
@@ -106,6 +109,7 @@ internal class JankHunterClassVisitor(
     ) {
         this.superName = superName
         this.classAccess = access
+        lambdaCaptures?.recordClass(access, name, superName, interfaces)
         androidComponentCatalog.recordClass(access)
         name?.let { classHierarchy.add(it.replace('.', '/')) }
         superName?.let {
@@ -119,8 +123,16 @@ internal class JankHunterClassVisitor(
         super.visit(version, access, name, signature, superName, interfaces)
     }
 
+    override fun visitOuterClass(owner: String?, name: String?, descriptor: String?) {
+        enclosingOwner = owner
+        enclosingMethod = name
+        lambdaCaptures?.recordOuterClass(owner, name, descriptor)
+        super.visitOuterClass(owner, name, descriptor)
+    }
+
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
-        val delegate = super.visitAnnotation(descriptor, visible)
+        val downstream = super.visitAnnotation(descriptor, visible)
+        val delegate = lambdaCaptures?.annotationVisitor(descriptor, downstream) ?: downstream
         if (descriptor == instrumentationMarkerDescriptor) {
             alreadyInstrumented = true
             return delegate
@@ -141,6 +153,7 @@ internal class JankHunterClassVisitor(
         signature: String?,
         value: Any?,
     ): FieldVisitor? {
+        lambdaCaptures?.recordField(access, name, descriptor)
         name?.let { androidComponentCatalog.recordField(access, it, descriptor, value) }
         if (descriptor == ROOM_DATABASE_DESCRIPTOR) roomDatabaseFieldPresent = true
         return super.visitField(access, name, descriptor, signature, value)
@@ -180,11 +193,11 @@ internal class JankHunterClassVisitor(
         if (autoInitEntryPoint) autoInitMethodPresent = true
         if (alreadyInstrumented) {
             diagnostics.recordSkippedMethod("already_instrumented")
-            return next
+            return lambdaCaptureOnlyMethod(next, access, name, descriptor, signature, exceptions)
         }
         if (name == "<clinit>") {
             diagnostics.recordSkippedMethod("class_initializer")
-            return next
+            return lambdaCaptureOnlyMethod(next, access, name, descriptor, signature, exceptions)
         }
         if (access and Opcodes.ACC_ABSTRACT != 0) {
             diagnostics.recordSkippedMethod("abstract")
@@ -193,6 +206,18 @@ internal class JankHunterClassVisitor(
         if (access and Opcodes.ACC_NATIVE != 0) {
             diagnostics.recordSkippedMethod("native")
             return next
+        }
+        val coroutineOwner = if (
+            CoroutineStateMachineInstrumentationPolicy.matches(
+                config.coroutines,
+                name,
+                descriptor,
+                classHierarchy,
+            )
+        ) {
+            OwnerIds.coroutineOwner(className, enclosingOwner, enclosingMethod)
+        } else {
+            null
         }
         val instrument = {
                 target: MethodVisitor,
@@ -237,16 +262,28 @@ internal class JankHunterClassVisitor(
                 },
                 binderServer = binderServer,
                 binderDescriptor = binderDescriptor,
+                coroutineOwner = coroutineOwner,
                 recordBinderHookApplied = {
                     androidComponentCatalog.recordInstrumented(name, descriptor)
                     classHookApplied = true
                 },
             )
         }
-        if (!config.databaseTracing) return instrument(next, emptyList()) {}
+        if (!config.databaseTracing) {
+            val captures = lambdaCaptures
+            if (captures == null) return instrument(next, emptyList()) {}
+            return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
+                override fun visitEnd() {
+                    super.visitEnd()
+                    captures.recordMethod(this)
+                    accept(instrument(next, emptyList()) {})
+                }
+            }
+        }
         return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
             override fun visitEnd() {
                 super.visitEnd()
+                lambdaCaptures?.recordMethod(this)
                 val origins = analyzeDatabaseInvocationOrigins(className, this)
                 if (!requiresDatabaseCatchPriority(name, descriptor, origins)) {
                     accept(instrument(next, origins) {})
@@ -290,6 +327,11 @@ internal class JankHunterClassVisitor(
         }
         if (config.classGraph) {
             ClassGraphWriter.write(config.classGraphDirectory, className, edges)
+            LambdaCaptureWriter.write(
+                config.lambdaCaptureDirectory,
+                className,
+                lambdaCaptures?.finish().orEmpty(),
+            )
         }
         val hierarchyFailures = hierarchyResolutionDiagnostics()
         diagnostics.recordHierarchyResolutionFailures(hierarchyFailures)
@@ -332,6 +374,24 @@ internal class JankHunterClassVisitor(
             visitEnd()
         }
         classHookApplied = true
+    }
+
+    private fun lambdaCaptureOnlyMethod(
+        target: MethodVisitor,
+        access: Int,
+        name: String,
+        descriptor: String,
+        signature: String?,
+        exceptions: Array<out String>?,
+    ): MethodVisitor {
+        val captures = lambdaCaptures ?: return target
+        return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
+            override fun visitEnd() {
+                super.visitEnd()
+                captures.recordMethod(this)
+                accept(target)
+            }
+        }
     }
 
     private companion object {

@@ -8,9 +8,27 @@ import org.junit.Test
 
 class SqlNormalizerGoldenTest {
     @Test
-    fun removesCommentsAndLiteralValuesButPreservesQuotedIdentifiers() {
+    fun doubleQuotedTextIsRedactedWithoutSchemaKnowledge() {
+        val cases = listOf(
+            "SELECT * FROM accounts WHERE token=\"audit-secret-123\"",
+            "SELECT \"audit-secret-123\" FROM accounts",
+            "SELECT * FROM accounts WHERE token=\"audit-secret-123\"\"tail\"",
+            "SELECT * FROM accounts WHERE token=\"audit-secret-123",
+            "SELECT * FROM accounts WHERE token=\"audit-secret-123" + "x".repeat(100_000),
+            "/* audit-secret-123 */ SELECT 'audit-secret-123', \"audit-secret-123\"",
+        )
+        for (sql in cases) {
+            val normalized = requireNotNull(SqlNormalizer.normalize(sql))
+            assertFalse("leaked DQS text: $normalized", normalized.contains("audit-secret-123"))
+            assertTrue(normalized.contains("?"))
+            assertEquals(normalized, SqlNormalizer.normalize(normalized))
+        }
+    }
+
+    @Test
+    fun removesCommentsAndLiteralsButPreservesUnambiguousIdentifiers() {
         assertEquals(
-            "SELECT \"user name\", `order`, [group] FROM accounts WHERE email=? AND id=?",
+            "SELECT ?, `order`, [group] FROM accounts WHERE email=? AND id=?",
             SqlNormalizer.normalize(
                 "-- tenant=42 alice@example.com\n" +
                     "/* private account */ SELECT \"user name\", `order`, [group] " +
@@ -59,8 +77,8 @@ class SqlNormalizerGoldenTest {
 
     @Test
     fun handlesLeadingCommentsPragmaDdlUnicodeAndMalformedInput() {
-        assertEquals("PRAGMA table_info(\"сообщения\")", SqlNormalizer.normalize("/* secret */ PRAGMA table_info(\"сообщения\")"))
-        assertEquals("CREATE TABLE \"сообщения\" (id INTEGER, body TEXT)", SqlNormalizer.normalize("CREATE TABLE \"сообщения\" (id INTEGER, body TEXT)"))
+        assertEquals("PRAGMA table_info(?)", SqlNormalizer.normalize("/* secret */ PRAGMA table_info(\"сообщения\")"))
+        assertEquals("CREATE TABLE ? (id INTEGER, body TEXT)", SqlNormalizer.normalize("CREATE TABLE \"сообщения\" (id INTEGER, body TEXT)"))
         assertEquals("SELECT * FROM messages WHERE body=?", SqlNormalizer.normalize("SELECT * FROM messages WHERE body='секрет"))
         assertNull(SqlNormalizer.normalize("/* SELECT private */ open chat screen"))
     }
@@ -72,7 +90,7 @@ class SqlNormalizerGoldenTest {
             "AND b=\"safe identifier\" -- ${secrets[2]}"
         val normalized = requireNotNull(SqlNormalizer.normalize(sql))
         for (secret in secrets) assertFalse("leaked $secret in $normalized", normalized.contains(secret))
-        assertTrue(normalized.contains("\"safe identifier\""))
+        assertFalse(normalized.contains("safe identifier"))
     }
 
     @Test

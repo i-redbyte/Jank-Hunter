@@ -8,6 +8,7 @@ import (
 )
 
 type mathSymbolResolver struct {
+	account  *collectionAccount
 	embedded map[uint64]string
 	nameMap  *analyze.NameMapping
 }
@@ -24,11 +25,18 @@ func (r *mathSymbolResolver) observe(event jhlog.Event) {
 		return
 	}
 	if _, exists := r.embedded[event.Dictionary.ID]; !exists {
+		if !r.account.reserve(mathMapEntryBytes + uint64(len(event.Dictionary.Value))) {
+			return
+		}
 		r.embedded[event.Dictionary.ID] = event.Dictionary.Value
 	}
 }
 
 func (r *mathSymbolResolver) resolve(dict map[uint64]string, ref jhlog.SymbolRef) string {
+	return r.nameMap.Deobfuscate(r.resolveRaw(dict, ref))
+}
+
+func (r *mathSymbolResolver) resolveRaw(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	value := ""
 	if ref.Stable {
 		value = r.embedded[ref.ID]
@@ -36,7 +44,7 @@ func (r *mathSymbolResolver) resolve(dict map[uint64]string, ref jhlog.SymbolRef
 	if value == "" {
 		value = jhlog.ResolveSymbol(dict, ref)
 	}
-	return r.nameMap.Deobfuscate(value)
+	return value
 }
 
 func isMathDiagnosticStall(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) bool {

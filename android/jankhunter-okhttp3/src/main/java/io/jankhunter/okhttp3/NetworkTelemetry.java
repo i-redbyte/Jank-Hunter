@@ -19,6 +19,10 @@ interface NetworkTelemetry {
 
     JankHunterContextSnapshot captureContextSnapshot();
 
+    default JankHunterContextSnapshot captureHttpContextSnapshot() {
+        return captureContextSnapshot();
+    }
+
     void recordHttp(JankHunterHttpEvent event);
 
     void recordWebSocket(JankHunterWebSocketEvent event);
@@ -43,6 +47,11 @@ final class RuntimeNetworkTelemetry implements NetworkTelemetry {
     @Override
     public JankHunterContextSnapshot captureContextSnapshot() {
         return JankHunterNetworkRuntime.captureContext();
+    }
+
+    @Override
+    public JankHunterContextSnapshot captureHttpContextSnapshot() {
+        return JankHunterNetworkRuntime.captureHttpContext();
     }
 
     @Override

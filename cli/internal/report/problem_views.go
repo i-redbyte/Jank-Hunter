@@ -231,7 +231,9 @@ func problemKindLabel(kind string) string {
 	case "wrapped_callable":
 		return "долгая Callable-задача"
 	case "wrapped_coroutine":
-		return "долгая coroutine-задача"
+		return "долгая coroutine-задача по полной длительности"
+	case "wrapped_coroutine_active":
+		return "долгое активное выполнение coroutine-задачи"
 	case "wrapped_executor":
 		return "долгая executor-задача"
 	case "wrapped_click":
@@ -536,7 +538,7 @@ func problemCategoryLabel(value string) string {
 	case analyze.ProblemCategoryCPU:
 		return "Процессор и фоновые задачи"
 	case analyze.ProblemCategoryPower:
-		return "Энергия и нагрев"
+		return "Условия питания и нагрев"
 	case analyze.ProblemCategoryLogs:
 		return "Логи"
 	case analyze.ProblemCategoryAndroidComponents:
@@ -590,7 +592,7 @@ func problemCoverageStatusLabel(value string) string {
 	case "insufficient_data":
 		return "нужно больше данных"
 	case "collection_degraded":
-		return "часть данных потеряна"
+		return "проверено частично"
 	default:
 		return value
 	}
@@ -690,6 +692,7 @@ func problemEvidenceUnit(value string) string {
 		"requests", "запросов",
 		"attempts", "попыток",
 		"events", "событий",
+		"contexts", "контекстов",
 		"samples", "замеров",
 		"bytes", "байт",
 		"ms", "мс",
@@ -712,6 +715,8 @@ func problemEvidenceDisplay(value analyze.ProblemEvidence) string {
 			return russianCount(count, "вызов", "вызова", "вызовов")
 		case "samples":
 			return russianCount(count, "замер", "замера", "замеров")
+		case "contexts":
+			return russianCount(count, "контекст", "контекста", "контекстов")
 		}
 	}
 	if value.Unit == "" {
@@ -737,7 +742,7 @@ func problemPriorityComponentLabel(value string) string {
 	case "exposure":
 		return "Повторяемость / охват запусков"
 	case "breadth":
-		return "Широта локализации"
+		return "Точность места"
 	case "compounding":
 		return "Сочетание сигналов"
 	default:

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,16 +35,18 @@ const (
 	maxHprofClasses            = 100_000
 	maxHprofClassFields        = 1_500_000
 	maxHprofRoots              = 500_000
-	maxHprofObjects            = 1_000_000
-	maxHprofEdges              = 1_500_000
+	maxHprofObjects            = 2_000_000
+	maxHprofEdges              = 4_000_000
 	maxHprofDeferredBytes      = 64 << 20
 	maxHprofTargets            = 2_000
 	maxHprofPathElements       = 48
 	maxRetainedTreeSample      = 8
-	maxHprofExactTargets       = 512
 	maxHprofEvidenceTargets    = 4_096
-	maxHprofRetainedVisits     = 12 * maxHprofObjects
-	maxHprofAlternativePaths   = 3
+	// Counts edge inspections and scan/initialization work, not only newly visited objects.
+	// Covers the measured full 2M-node/4M-edge graph while keeping adversarial work finite.
+	maxHprofRetainedWork     = 48 * maxHprofObjects
+	maxHprofAlternativePaths = 3
+	maxHeapEvidenceJSONBytes = 64 << 20
 )
 
 func LoadHeapEvidenceFiles(paths []string, targetClasses []string) (*HeapEvidence, error) {
@@ -74,12 +75,25 @@ func LoadHeapEvidenceFiles(paths []string, targetClasses []string) (*HeapEvidenc
 }
 
 func MergeHeapEvidence(parts ...*HeapEvidence) *HeapEvidence {
-	merged := &HeapEvidence{}
+	merged := &HeapEvidence{DiagnosticsVersion: HeapDiagnosticsVersion}
+	diagnosticSeen := map[HeapDiagnostic]struct{}{}
 	sourceSeen := map[string]struct{}{}
 	warningSeen := map[string]struct{}{}
 	for _, part := range parts {
 		if part == nil {
 			continue
+		}
+		for _, d := range part.effectiveDiagnostics() {
+			if _, seen := diagnosticSeen[d]; !seen {
+				diagnosticSeen[d] = struct{}{}
+				merged.Diagnostics = append(merged.Diagnostics, d)
+				if !d.Informational() {
+					if _, seen := warningSeen[d.Message]; !seen {
+						warningSeen[d.Message] = struct{}{}
+						merged.Warnings = append(merged.Warnings, d.Message)
+					}
+				}
+			}
 		}
 		for _, source := range part.Sources {
 			source = strings.TrimSpace(source)
@@ -111,7 +125,7 @@ func MergeHeapEvidence(parts ...*HeapEvidence) *HeapEvidence {
 			merged.Warnings = append(merged.Warnings, warning)
 		}
 	}
-	if len(merged.Leaks) == 0 && len(merged.Warnings) == 0 && len(merged.Sources) == 0 {
+	if len(merged.Leaks) == 0 && len(merged.Warnings) == 0 && len(merged.Sources) == 0 && len(merged.Diagnostics) == 0 {
 		return nil
 	}
 	sort.Strings(merged.Sources)
@@ -137,12 +151,12 @@ func HeapTargetClasses(summary Summary) []string {
 }
 
 func loadJSONHeapEvidence(path string) (*HeapEvidence, error) {
-	data, err := os.ReadFile(path)
+	data, err := readBoundedFile(path, "heap evidence", maxHeapEvidenceJSONBytes)
 	if err != nil {
 		return nil, err
 	}
 	var evidence HeapEvidence
-	if err := json.Unmarshal(data, &evidence); err == nil && (len(evidence.Leaks) > 0 || len(evidence.Sources) > 0 || len(evidence.Warnings) > 0) {
+	if err := json.Unmarshal(data, &evidence); err == nil && (len(evidence.Leaks) > 0 || len(evidence.Sources) > 0 || len(evidence.Warnings) > 0 || evidence.DiagnosticsVersion != 0 || len(evidence.Diagnostics) > 0) {
 		if len(evidence.Sources) == 0 {
 			evidence.Sources = []string{path}
 		}
@@ -169,6 +183,25 @@ func loadJSONHeapEvidence(path string) (*HeapEvidence, error) {
 }
 
 func normalizeHeapLeak(leak *HeapLeakEvidence) {
+	if leak.RetainedSizeState != HeapSizeExact && leak.RetainedSizeState != HeapSizeEstimated {
+		leak.RetainedSizeState = HeapSizeUnknown
+	}
+	observedPathState := heapReferencePathState(leak.ReferencePath)
+	if observedPathState == HeapPathTruncated {
+		leak.ReferencePathState = HeapPathTruncated
+	} else if (leak.ReferencePathState != HeapPathComplete && leak.ReferencePathState != HeapPathTruncated) || observedPathState == HeapPathUnknown {
+		// Older evidence did not record whether a display fragment was truncated.
+		leak.ReferencePathState = HeapPathUnknown
+	}
+	if leak.GCRootObjectID == "" && len(leak.ReferencePath) > 0 && heapRootLabel(leak.ReferencePath) != "" {
+		leak.GCRootObjectID = leak.ReferencePath[0].ObjectID
+	}
+	if leak.Reachability == "" {
+		leak.Reachability = EvidenceUnknown
+		if confirmedHeapReferencePath(leak) {
+			leak.Reachability = EvidencePositive
+		}
+	}
 	leak.ClassName = strings.TrimSpace(leak.ClassName)
 	leak.Holder = strings.TrimSpace(leak.Holder)
 	leak.HolderField = strings.TrimSpace(leak.HolderField)
@@ -193,10 +226,9 @@ func normalizeHeapLeak(leak *HeapLeakEvidence) {
 func loadHprofHeapEvidence(path string, targetClasses []string) (*HeapEvidence, error) {
 	targets := targetClassSet(targetClasses)
 	if len(targets) == 0 {
-		return &HeapEvidence{
-			Sources:  []string{path},
-			Warnings: []string{"HPROF пропущен: в логе выполнения нет удержанных классов для связывания с дампом памяти."},
-		}, nil
+		evidence := &HeapEvidence{Sources: []string{path}}
+		evidence.AddDiagnostic(HeapDiagnostic{Code: "no_targets", Severity: HeapDiagnosticInfo, Impact: HeapImpactNone, Source: path, Message: "HPROF пропущен: в логе выполнения нет удержанных классов для связывания с дампом памяти."})
+		return evidence, nil
 	}
 	parser := newHprofParser(path, targets)
 	if err := parser.parse(); err != nil {
@@ -218,23 +250,32 @@ func targetClassSet(targetClasses []string) map[string]struct{} {
 }
 
 type hprofParser struct {
-	path                string
-	idSize              int
-	strings             map[uint64]string
-	classNames          map[uint64]string
-	classes             map[uint64]*hprofClass
-	classesByName       map[string][]*hprofClass
-	nodes               map[uint64]*heapNode
-	roots               []heapRoot
-	targets             map[string]struct{}
-	edgeCount           int
-	stringBytes         uint64
-	classFieldCount     int
-	deferredBytes       uint64
-	deferredInstances   []deferredHprofInstance
-	limits              hprofLimits
-	degradationWarnings []string
-	degradationKeys     map[string]struct{}
+	path                   string
+	idSize                 int
+	strings                map[uint64]string
+	classNames             map[uint64]string
+	classes                map[uint64]*hprofClass
+	classesByName          map[string][]*hprofClass
+	instanceLayoutBytes    map[uint64]uint64
+	nodeIndexes            map[uint64]uint32
+	nodes                  []heapNode
+	edges                  []storedHeapEdge
+	edgeLabels             []string
+	edgeLabelIDs           map[string]uint32
+	arrayEdgeLabels        []string
+	roots                  []heapRoot
+	targets                map[string]struct{}
+	stringBytes            uint64
+	classFieldCount        int
+	deferredBytes          uint64
+	deferredInstances      []deferredHprofInstance
+	limits                 hprofLimits
+	degradationDiagnostics []HeapDiagnostic
+	degradationWarnings    []string
+	degradationKeys        map[string]struct{}
+
+	pendingInstanceSizes     *pendingHprofInstanceSizePage
+	pendingInstanceSizesTail *pendingHprofInstanceSizePage
 }
 
 type hprofLimits struct {
@@ -276,6 +317,21 @@ type deferredHprofInstance struct {
 	payload   []byte
 }
 
+// Only instances whose exact CLASS_DUMP has not arrived need this temporary record.
+// Slots remain valid when nodes grows; duplicate definitions cannot add another entry.
+type pendingHprofInstanceSize struct {
+	classID  uint64
+	nodeSlot uint32
+}
+
+// 4096 bytes on 64-bit hosts, including the link and count. Pages avoid repeated
+// copying and excess allocation of a growing flat slice when most classes arrive late.
+type pendingHprofInstanceSizePage struct {
+	next    *pendingHprofInstanceSizePage
+	used    int
+	entries [255]pendingHprofInstanceSize
+}
+
 type hprofField struct {
 	name  string
 	typ   byte
@@ -286,13 +342,21 @@ type heapNode struct {
 	id          uint64
 	className   string
 	shallowSize uint64
-	edges       []heapEdge
+	firstEdge   uint32
+	lastEdge    uint32
 }
 
 type heapEdge struct {
 	to    uint64
 	label string
 	kind  string
+}
+
+type storedHeapEdge struct {
+	to      uint64
+	labelID uint32
+	next    uint32
+	kind    uint8
 }
 
 type heapRoot struct {
@@ -313,14 +377,16 @@ type hprofReader struct {
 
 func newHprofParser(path string, targets map[string]struct{}) *hprofParser {
 	return &hprofParser{
-		path:            path,
-		strings:         map[uint64]string{},
-		classNames:      map[uint64]string{},
-		classes:         map[uint64]*hprofClass{},
-		classesByName:   map[string][]*hprofClass{},
-		nodes:           map[uint64]*heapNode{},
-		targets:         targets,
-		limits:          defaultHprofLimits(),
-		degradationKeys: map[string]struct{}{},
+		path:                path,
+		strings:             map[uint64]string{},
+		classNames:          map[uint64]string{},
+		classes:             map[uint64]*hprofClass{},
+		classesByName:       map[string][]*hprofClass{},
+		instanceLayoutBytes: map[uint64]uint64{},
+		nodeIndexes:         map[uint64]uint32{},
+		edgeLabelIDs:        map[string]uint32{},
+		targets:             targets,
+		limits:              defaultHprofLimits(),
+		degradationKeys:     map[string]struct{}{},
 	}
 }

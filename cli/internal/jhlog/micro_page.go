@@ -342,7 +342,12 @@ func decodeMicroPage(
 			transactionRows++
 		}
 	}
-	databaseColumns, err := decodeDatabaseColumnSection(sections[8], databaseRows, transactionRows)
+	databaseColumns, err := decodeDatabaseColumnSectionInto(
+		sections[8],
+		databaseRows,
+		transactionRows,
+		&segmentState.workspace.databaseColumns,
+	)
 	if err != nil {
 		return nil, state, err
 	}
@@ -352,8 +357,12 @@ func decodeMicroPage(
 	contextReader := recordReader{data: sections[4]}
 	attributesReader := recordReader{data: sections[5]}
 	lengthsReader := recordReader{data: sections[6]}
-	pageEvents := make([]Event, rows)
-	pageWeights := make([]uint64, rows)
+	// The scratch page owns payload pointers until the caller consumes it. Clear the previous
+	// logical length before decoding a smaller page so stale payloads do not stay live until the
+	// complete segment state is released.
+	clear(segmentState.workspace.microPage.events)
+	pageEvents := segmentState.workspace.events[:rows]
+	pageWeights := segmentState.workspace.weights[:rows]
 	var payloadLengths [maxMicroPageRows]int
 	payloadTotal := 0
 	for index := 0; index < rows; index++ {
@@ -509,7 +518,9 @@ func decodeMicroPage(
 			return nil, state, fmt.Errorf("micro-page metadata section %d leaves %d bytes", index+2, sectionReader.Len())
 		}
 	}
-	return &decodedMicroPage{events: pageEvents, weights: pageWeights}, nextState, nil
+	segmentState.workspace.microPage.events = pageEvents
+	segmentState.workspace.microPage.weights = pageWeights
+	return &segmentState.workspace.microPage, nextState, nil
 }
 
 func microPageSectionLimit(section, rows int) int {

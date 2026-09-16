@@ -39,6 +39,32 @@ type problemDiagnosisPlanStep struct {
 	Action string
 }
 
+type dataQualityAnalyzerNote struct {
+	Area   string
+	Detail string
+}
+
+func problemReportHeadline(summary analyze.ProblemSummary) string {
+	if summary.Total > 0 && strings.TrimSpace(summary.Headline) != "" {
+		return summary.Headline
+	}
+	return "В записанном сценарии явных проблем не обнаружено."
+}
+
+func problemReportVerdict(summary analyze.ProblemSummary) string {
+	if summary.Total > 0 {
+		return "problems_found"
+	}
+	return "clean"
+}
+
+func problemReportVerdictText(summary analyze.ProblemSummary) string {
+	if summary.Total > 0 {
+		return "Ниже - проблемы в порядке приоритета: сначала наиболее вредные для пользователя и приложения."
+	}
+	return "Вывод относится к записанному сценарию. Методика охвата и исходные счётчики доступны в подробном анализе."
+}
+
 func problemDiagnosis(summary analyze.Summary, finding analyze.ProblemFinding) problemDiagnosisView {
 	screen := problemScreen(finding, summary.Problems)
 	var causes []uiCauseInsight
@@ -137,7 +163,7 @@ func problemDiagnosisVerdict(finding analyze.ProblemFinding, causes []uiCauseIns
 	if what := strings.TrimSpace(finding.WhatHappened); what != "" {
 		return what
 	}
-	return "Проблемный сигнал зафиксирован, но данных для локализации первопричины пока недостаточно."
+	return "Проблемный сигнал есть, но данных недостаточно, чтобы точно назвать причину."
 }
 
 func problemProvenEvidence(
@@ -158,8 +184,8 @@ func problemProvenEvidence(
 				continue
 			}
 			result = appendUniqueReportText(result, fmt.Sprintf(
-				"На экране %s медленными были %.1f%% кадров (%d из %d); p95 — %d мс, p99 — %d мс.",
-				reportValue(item.Screen, "без атрибуции"), item.JankRatePct, item.JankyFrames, item.Frames, item.FrameP95MS, item.FrameP99MS,
+				"На экране %s медленными были %.1f%% кадров (%d из %d); p95 - %d мс, p99 - %d мс.",
+				reportValue(item.Screen, "экран не определён"), item.JankRatePct, item.JankyFrames, item.Frames, item.FrameP95MS, item.FrameP99MS,
 			))
 		}
 	}
@@ -196,7 +222,7 @@ func problemCausalChain(finding analyze.ProblemFinding, causes []uiCauseInsight)
 			{
 				Label: "Граница вывода",
 				Text: fmt.Sprintf(
-					"Уровень связи «%s» описывает доступные данные. Вклад этого кандидата в конкретный медленный кадр нужно подтвердить общей временной трассой.",
+					"Уровень связи «%s» показывает силу доступных данных. Вклад этой причины в конкретный медленный кадр нужно проверить по общей временной трассе.",
 					primary.Relation,
 				),
 				State: "boundary",
@@ -205,8 +231,8 @@ func problemCausalChain(finding analyze.ProblemFinding, causes []uiCauseInsight)
 	}
 	return []problemDiagnosisStep{
 		{
-			Label: "Кандидат",
-			Text:  "Снимок стека локализует место, где главный поток находился во время паузы. Это точка входа в расследование, а не доказательство, что вся пауза потрачена в конечном методе стека.",
+			Label: "Место в коде",
+			Text:  "Снимок стека показывает, где находился главный поток во время паузы. Начните проверку отсюда, но не считайте конечный метод причиной всей паузы без трассы.",
 			State: "hypothesis",
 		},
 		{
@@ -247,7 +273,10 @@ func problemDiagnosisLocations(locations []analyze.ProblemLocation) []problemDia
 			continue
 		}
 		scope := "системный код / библиотека"
-		if reportLocationHasApplicationSymbol(location) {
+		if frameworkObservation := problemFrameworkObservationText(location); frameworkObservation != "" {
+			scope = "точка наблюдения в библиотеке"
+			text = frameworkObservation
+		} else if reportLocationHasApplicationSymbol(location) {
 			scope = "код приложения"
 		}
 		candidate := problemDiagnosisLocation{Scope: scope, Text: text}
@@ -265,26 +294,13 @@ func problemDiagnosisLocations(locations []analyze.ProblemLocation) []problemDia
 	return result
 }
 
-var reportFrameworkPrefixes = [...]string{
-	"android.", "androidx.", "java.", "javax.", "kotlin.", "kotlinx.", "dalvik.",
-	"libcore.", "sun.", "com.android.", "com.google.android.", "com.google.common.",
-	"com.google.firebase.", "leakcanary.",
-}
-
 func reportLocationHasApplicationSymbol(location analyze.ProblemLocation) bool {
 	for _, value := range []string{location.Class, location.Method, location.Owner} {
 		value = strings.ToLower(strings.TrimSpace(value))
 		if value == "" {
 			continue
 		}
-		framework := false
-		for _, prefix := range reportFrameworkPrefixes {
-			if strings.HasPrefix(value, prefix) {
-				framework = true
-				break
-			}
-		}
-		if !framework && strings.Contains(value, ".") {
+		if !analyze.IsFrameworkSymbol(value) && strings.Contains(value, ".") {
 			return true
 		}
 	}
@@ -303,7 +319,7 @@ func problemMissingProof(finding analyze.ProblemFinding) []string {
 		result = appendUniqueReportText(result, limitation)
 	}
 	if len(result) == 0 {
-		result = append(result, "Отдельных ограничений для этой находки не зафиксировано; всё равно подтвердите эффект повторным прогоном.")
+		result = append(result, "Отдельных ограничений для этой проблемы нет. Всё равно подтвердите результат повторным прогоном.")
 	}
 	return result
 }
@@ -322,10 +338,31 @@ func problemActionableLimitations(limitations []string) []string {
 func isInternalCollectionLimitation(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	for _, marker := range [...]string{
-		"ограниченные runtime-реестры",
-		"writer отклонил",
+		"ограниченные runtime-" + "реестры",
+		"реестры с ограниченным числом строк",
+		"writer " + "отклонил",
+		"модуль записи отклонил",
 		"качество сбора:",
+		"качество данных базового прогона:",
+		"качество данных проверяемого прогона:",
 		"часть событий не попала в журнал",
+		"часть входных данных потеряна",
+		"часть данных об удержании объектов или дампа памяти потеряна",
+		"потеряно событий удержания",
+		"события потеряны после",
+		"метрики потеряны из-за ограничения",
+		"вызовы графа потеряны после таймаута",
+		"execute-вызовы потеряли sql-шаблон",
+		"событие пропущено из-за конкуренции",
+		"подтверждают потерю как минимум",
+		"подтверждающих данных могла потеряться",
+		"неполный жизненный цикл может занижать",
+		"полный охват операций не доказан",
+		"включён только основной процесс:",
+		"список ожидаемых процессов объявлен не полностью",
+		"ожидаемых процессов",
+		"для восстановления цепочек binder не сохранено",
+		"для восстановления цепочек binder пропущено",
 		"known lost",
 	} {
 		if strings.Contains(normalized, marker) {
@@ -335,16 +372,165 @@ func isInternalCollectionLimitation(value string) bool {
 	return false
 }
 
-func problemOrientedCollectionWarnings(summary analyze.Summary) []string {
-	result := make([]string, 0, len(summary.Warnings))
+func dataQualityNotices(summary analyze.Summary) []string {
+	result := make([]string, 0, len(summary.CollectionQuality.Notices)+len(summary.Warnings))
+	for _, notice := range summary.CollectionQuality.Notices {
+		result = appendUniqueReportText(result, notice)
+	}
 	for _, warning := range summary.Warnings {
-		warning = strings.TrimSpace(warning)
-		if warning == "" || isInternalCollectionLimitation(warning) {
-			continue
-		}
 		result = appendUniqueReportText(result, warning)
 	}
 	return result
+}
+
+func appendNonZeroDataQualityCount(details []string, label string, value uint64) []string {
+	if value == 0 {
+		return details
+	}
+	return append(details, fmt.Sprintf("%s: %d", label, value))
+}
+
+func dataQualityAnalyzerNotes(summary analyze.Summary) []dataQualityAnalyzerNote {
+	result := make([]dataQualityAnalyzerNote, 0, 8)
+	if components := summary.AndroidComponents; components != nil {
+		if components.Partial && len(components.PartialReasons) > 0 {
+			result = append(result, dataQualityAnalyzerNote{
+				Area:   "Android-компоненты и IPC",
+				Detail: strings.Join(components.PartialReasons, "; "),
+			})
+		}
+		if components.Binder.UncorrelatableEvents > 0 || components.Binder.CorrelationDroppedEvents > 0 {
+			details := make([]string, 0, 2)
+			details = appendNonZeroDataQualityCount(details, "без данных для связи", components.Binder.UncorrelatableEvents)
+			details = appendNonZeroDataQualityCount(details, "не сохранено связей", components.Binder.CorrelationDroppedEvents)
+			result = append(result, dataQualityAnalyzerNote{
+				Area:   "Связи Binder",
+				Detail: strings.Join(details, ", "),
+			})
+		}
+	}
+	coverage := summary.DatabaseCoverage
+	if coverage.DroppedStatementEvents > 0 || coverage.DroppedContextEvents > 0 ||
+		coverage.DroppedCorrelationEvents > 0 || coverage.DroppedTransactionDetails > 0 ||
+		coverage.DroppedScenarioEvents > 0 || coverage.DroppedScenarioCandidates > 0 {
+		details := make([]string, 0, 6)
+		details = appendNonZeroDataQualityCount(details, "SQL-событий", coverage.DroppedStatementEvents)
+		details = appendNonZeroDataQualityCount(details, "контекстов", coverage.DroppedContextEvents)
+		details = appendNonZeroDataQualityCount(details, "временных связей", coverage.DroppedCorrelationEvents)
+		details = appendNonZeroDataQualityCount(details, "подробностей транзакций", coverage.DroppedTransactionDetails)
+		details = appendNonZeroDataQualityCount(details, "событий сценариев", coverage.DroppedScenarioEvents)
+		details = appendNonZeroDataQualityCount(details, "вариантов сценариев", coverage.DroppedScenarioCandidates)
+		result = append(result, dataQualityAnalyzerNote{
+			Area:   "Анализ базы данных",
+			Detail: strings.Join(details, ", "),
+		})
+	}
+	if database := summary.DatabaseAnalysis; database != nil {
+		if database.FrequencyEstimateError > 0 || database.DroppedDBIntervals > 0 ||
+			database.EvictedDBIntervals > 0 || database.DroppedTransactionIntervals > 0 ||
+			database.EvictedTransactionIntervals > 0 || database.DroppedUIWindows > 0 ||
+			database.EvictedUIWindows > 0 || database.DroppedStallIntervals > 0 ||
+			database.EvictedStallIntervals > 0 || database.DroppedRelatedIntervals > 0 ||
+			database.EvictedRelatedIntervals > 0 || database.EvictedStatementGroups > 0 ||
+			database.EvictedContextGroups > 0 {
+			details := make([]string, 0, 13)
+			details = appendNonZeroDataQualityCount(details, "погрешность оценки частоты", database.FrequencyEstimateError)
+			details = appendNonZeroDataQualityCount(details, "не сохранено интервалов БД", database.DroppedDBIntervals)
+			details = appendNonZeroDataQualityCount(details, "вытеснено интервалов БД", database.EvictedDBIntervals)
+			details = appendNonZeroDataQualityCount(details, "не сохранено интервалов транзакций", database.DroppedTransactionIntervals)
+			details = appendNonZeroDataQualityCount(details, "вытеснено интервалов транзакций", database.EvictedTransactionIntervals)
+			details = appendNonZeroDataQualityCount(details, "не сохранено окон UI", database.DroppedUIWindows)
+			details = appendNonZeroDataQualityCount(details, "вытеснено окон UI", database.EvictedUIWindows)
+			details = appendNonZeroDataQualityCount(details, "не сохранено пауз", database.DroppedStallIntervals)
+			details = appendNonZeroDataQualityCount(details, "вытеснено пауз", database.EvictedStallIntervals)
+			details = appendNonZeroDataQualityCount(details, "не сохранено связанных событий", database.DroppedRelatedIntervals)
+			details = appendNonZeroDataQualityCount(details, "вытеснено связанных событий", database.EvictedRelatedIntervals)
+			details = appendNonZeroDataQualityCount(details, "вытеснено групп SQL", database.EvictedStatementGroups)
+			details = appendNonZeroDataQualityCount(details, "вытеснено групп контекста", database.EvictedContextGroups)
+			result = append(result, dataQualityAnalyzerNote{
+				Area:   "Ограничения потокового анализа БД",
+				Detail: strings.Join(details, ", "),
+			})
+		}
+	}
+	if workers := summary.WorkerAnalysis; workers != nil &&
+		(workers.MissingEnqueue > 0 || workers.MissingStart > 0 || workers.MissingFinish > 0) {
+		details := make([]string, 0, 3)
+		details = appendNonZeroDataQualityCount(details, "без времени постановки в очередь (не доказывает потери событий)", workers.MissingEnqueue)
+		details = appendNonZeroDataQualityCount(details, "без запуска", workers.MissingStart)
+		details = appendNonZeroDataQualityCount(details, "без завершения", workers.MissingFinish)
+		result = append(result, dataQualityAnalyzerNote{
+			Area:   "Жизненный цикл фоновых задач",
+			Detail: strings.Join(details, ", "),
+		})
+	}
+	if operations := summary.OperationAnalysis; operations != nil {
+		if operations.MissingFinish > 0 || operations.MissingStart > 0 || operations.DuplicateStart > 0 ||
+			operations.InconsistentLifecycle > 0 || operations.MissingParent > 0 {
+			details := make([]string, 0, 5)
+			details = appendNonZeroDataQualityCount(details, "без завершения", operations.MissingFinish)
+			details = appendNonZeroDataQualityCount(details, "без начала", operations.MissingStart)
+			details = appendNonZeroDataQualityCount(details, "повторных начал", operations.DuplicateStart)
+			details = appendNonZeroDataQualityCount(details, "противоречивых завершений", operations.InconsistentLifecycle)
+			details = appendNonZeroDataQualityCount(details, "без родительской операции", operations.MissingParent)
+			result = append(result, dataQualityAnalyzerNote{
+				Area:   "Целостность операций",
+				Detail: strings.Join(details, ", "),
+			})
+		}
+		if operations.DroppedActiveStarts > 0 || operations.DroppedSignalEvents > 0 ||
+			operations.DroppedSignalRollups > 0 || operations.DroppedOperationSamples > 0 ||
+			operations.DroppedTimeSlotSamples > 0 || operations.DroppedDimensionSamples > 0 ||
+			operations.DroppedStageSamples > 0 || operations.CompletedContextEvictions > 0 {
+			details := make([]string, 0, 8)
+			details = appendNonZeroDataQualityCount(details, "не сохранено начал операций", operations.DroppedActiveStarts)
+			details = appendNonZeroDataQualityCount(details, "не сохранено связанных сигналов", operations.DroppedSignalEvents)
+			details = appendNonZeroDataQualityCount(details, "не сохранено связей с родителями", operations.DroppedSignalRollups)
+			details = appendNonZeroDataQualityCount(details, "не сохранено общих замеров", operations.DroppedOperationSamples)
+			details = appendNonZeroDataQualityCount(details, "не сохранено временных замеров", operations.DroppedTimeSlotSamples)
+			details = appendNonZeroDataQualityCount(details, "не сохранено разрезов", operations.DroppedDimensionSamples)
+			details = appendNonZeroDataQualityCount(details, "не сохранено этапов", operations.DroppedStageSamples)
+			details = appendNonZeroDataQualityCount(details, "вытеснено контекстов завершённых операций", operations.CompletedContextEvictions)
+			result = append(result, dataQualityAnalyzerNote{
+				Area:   "Защитные лимиты анализа операций",
+				Detail: strings.Join(details, ", "),
+			})
+		}
+	}
+	return result
+}
+
+func problemOrientedWarnings(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if isInternalCollectionLimitation(value) {
+			continue
+		}
+		result = appendUniqueReportText(result, value)
+	}
+	return result
+}
+
+func reportGenerationWarnings(values []string) []string {
+	var result []string
+	for _, value := range values {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "генерация отчета:") {
+			continue
+		}
+		result = appendUniqueReportText(result, value)
+	}
+	return result
+}
+
+func conciseEvidenceConfidence(value string) string {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(strings.ToLower(value), "потер") {
+		return value
+	}
+	if label, _, ok := strings.Cut(value, ":"); ok {
+		return strings.TrimSpace(label)
+	}
+	return "требует проверки"
 }
 
 func problemDiagnosisPlan(finding analyze.ProblemFinding, causes []uiCauseInsight) []problemDiagnosisPlanStep {
@@ -379,4 +565,57 @@ func appendUniqueReportText(values []string, candidate string) []string {
 		}
 	}
 	return append(values, candidate)
+}
+
+// Detailed HPROF parser diagnostics belong to mathematical data-quality.
+func heapClassConfidence(value string) string {
+	level, _, _ := strings.Cut(value, ":")
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "высокое", "высокая", "high":
+		return "высокая"
+	case "среднее", "среднее+", "средняя", "medium":
+		return "средняя"
+	case "низкое", "низкая", "low":
+		return "низкая"
+	default:
+		return "не определена"
+	}
+}
+
+func heapClassSize(heap analyze.HeapLeakEvidence) string {
+	switch heap.RetainedSizeState {
+	case analyze.HeapSizeExact:
+		return humanDataSizeKB(heap.RetainedSizeKB)
+	case analyze.HeapSizeEstimated:
+		size := heap.RetainedSizeBytes
+		if size == 0 {
+			if heap.RetainedSizeKB > ^uint64(0)/1024 {
+				return fmt.Sprintf("≥ %d КБ", heap.RetainedSizeKB)
+			}
+			size = heap.RetainedSizeKB * 1024
+		}
+		if size < 1024 {
+			return fmt.Sprintf("≥ %d Б", size)
+		}
+		unit, label := uint64(1024), "КБ"
+		if size >= 1<<30 {
+			unit, label = 1<<30, "ГБ"
+		} else if size >= 1<<20 {
+			unit, label = 1<<20, "МБ"
+		}
+		// A lower bound must round down, never to a larger claimed number of bytes.
+		return fmt.Sprintf("≥ %d.%d %s", size/unit, (size%unit)*10/unit, label)
+	default:
+		return "неизвестен"
+	}
+}
+
+func heapInformation(summary analyze.Summary) []string {
+	var items []string
+	for _, d := range summary.HeapDiagnostics {
+		if d.Informational() {
+			items = append(items, d.Message)
+		}
+	}
+	return items
 }

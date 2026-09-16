@@ -43,9 +43,37 @@ func TestSemanticWorkPresentationSeparatesSpecializedAndOrdinaryCalls(t *testing
 	if !composeRows[0].NeedsAttention || composeRows[0].Action == "" {
 		t.Fatalf("actionable Compose row is not presented as a problem: %+v", composeRows[0])
 	}
-	ordinary := ordinaryRuntimeCalls(summary)
-	if len(ordinary) != 1 || ordinary[0].Caller != "com.app.FeedPresenter.render" {
+	ordinary := ordinaryRuntimeCallViewFor(summary)
+	if ordinary.Total != 1 || len(ordinary.Rows) != 1 || ordinary.Rows[0].Caller != "com.app.FeedPresenter.render" {
 		t.Fatalf("ordinary runtime calls = %+v", ordinary)
+	}
+}
+
+func TestOrdinaryRuntimeCallViewKeepsOnlyMostSignificantRows(t *testing.T) {
+	summary := analyze.Summary{RuntimeCalls: make([]analyze.RuntimeCallStats, runtimeCallReportLimit+44)}
+	for index := range summary.RuntimeCalls {
+		summary.RuntimeCalls[index] = analyze.RuntimeCallStats{
+			Caller: "com.example.Caller", Callee: fmt.Sprintf("com.example.Target%03d", index),
+			Count: uint64(len(summary.RuntimeCalls) - index),
+		}
+	}
+	view := ordinaryRuntimeCallViewFor(summary)
+	if view.Total != len(summary.RuntimeCalls) || len(view.Rows) != runtimeCallReportLimit {
+		t.Fatalf("runtime-call view = total %d, rows %d; want %d and %d", view.Total, len(view.Rows), len(summary.RuntimeCalls), runtimeCallReportLimit)
+	}
+	if view.Rows[0].Callee != "com.example.Target000" || view.Rows[len(view.Rows)-1].Callee != "com.example.Target255" {
+		t.Fatalf("runtime-call view did not preserve the pre-ranked prefix: first=%q last=%q", view.Rows[0].Callee, view.Rows[len(view.Rows)-1].Callee)
+	}
+}
+
+func TestSemanticWorkOverviewSaturatesExecutionCounts(t *testing.T) {
+	items := []analyze.SemanticWorkStats{
+		{Domain: analyze.SemanticDomainCompose, Count: ^uint64(0), MainThread: true},
+		{Domain: analyze.SemanticDomainCompose, Count: 1, MainThread: true},
+	}
+	overview := semanticWorkOverviewFromItems(items, analyze.SemanticDomainCompose)
+	if overview.Executions != ^uint64(0) || overview.MainThread != ^uint64(0) {
+		t.Fatalf("semantic execution counters wrapped: %+v", overview)
 	}
 }
 
@@ -200,9 +228,8 @@ func TestRoomOnlyReportExplainsMissingTypedSQL(t *testing.T) {
 	}
 	html := string(data)
 	for _, expected := range []string{
-		"SQL-метрики недоступны",
-		"Диагностика охвата не сформирована",
-		"Ноль событий не доказывает отсутствие работы с БД",
+		"Измерены границы методов Room DAO",
+		"SQL-вызовы появятся отдельно, если они были записаны сборщиком базы данных",
 	} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("Room-only report misses %q", expected)

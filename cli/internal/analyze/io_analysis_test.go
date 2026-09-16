@@ -16,7 +16,7 @@ func TestIOBurstUsesExactRollingWindowAndSeparatesLogs(t *testing.T) {
 		t.Fatalf("rolling peak = %+v", burst)
 	}
 	burst.add(2, 0)
-	if got := len(burst.timesMS) - burst.head; got != 1 || burst.peak != 3 {
+	if got := burst.windowCount; got != 1 || burst.peak != 3 {
 		t.Fatalf("independent log joined into burst: active=%d state=%+v", got, burst)
 	}
 }

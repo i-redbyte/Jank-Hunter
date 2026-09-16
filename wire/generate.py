@@ -64,8 +64,15 @@ def render_kotlin(spec):
         lines.append(f"    const val {entry['kotlin']} = 1L shl {entry['bit']}")
     for entry in spec["record_types"]:
         lines.append(f"    const val {entry['kotlin']} = {entry['value']}")
+    for entry in spec["stall_states"] + spec["worker_stages"]:
+        lines.append(f"    const val {entry['kotlin']} = {entry['value']}L")
     file_magic = bytes.fromhex(fmt["prefix_hex"]) + bytes((fmt["marker"], fmt["major"], fmt["minor"], fmt["patch"]))
     lines += kotlin_byte_array("FILE_MAGIC", file_magic)
+    lines += ["    fun isReadableLegacyVersion(major: Int, minor: Int, patch: Int): Boolean {"]
+    versions = spec["readable_legacy_versions"]
+    conditions = [f"(major == {v['major']} && minor == {v['minor']} && patch == {v['patch']})" for v in versions]
+    lines.append("        return " + (" || ".join(conditions) if conditions else "false"))
+    lines.append("    }")
     lines += kotlin_byte_array("CHUNK_MAGIC", bytes.fromhex(fmt["chunk_magic_hex"]))
     lines += kotlin_byte_array("COMMIT_MAGIC", bytes.fromhex(fmt["commit_magic_hex"]))
     lines.append(END)
@@ -128,9 +135,19 @@ def render_go(spec):
     for entry in spec["record_types"]:
         lines.append(f"\t{entry['go']} EventType = {entry['value']}")
     lines += [")", "", "const ("]
+    for entry in spec["stall_states"]:
+        lines.append(f"\t{entry['go']} StallState = {entry['value']}")
+    lines += [")", "", "const ("]
+    for entry in spec["worker_stages"]:
+        lines.append(f"\t{entry['go']} WorkerStage = {entry['value']}")
+    lines += [")", "", "const ("]
     for entry in spec["envelope_flags"]:
         lines.append(f"\t{entry['go']} EnvelopeFlag = 1 << {entry['bit']}")
     lines += [")", ""]
+    for version in spec["readable_legacy_versions"]:
+        suffix = f"{version['major']}{version['minor']}{version['patch']}"
+        values = prefix + [fmt["marker"], version["major"], version["minor"], version["patch"]]
+        lines.append(f"var legacyMagicV{suffix} = []byte{{" + ", ".join(f"0x{value:02x}" for value in values) + "}")
     formatted = subprocess.run(
         ["gofmt"],
         input="\n".join(lines),

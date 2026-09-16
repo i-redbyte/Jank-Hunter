@@ -88,17 +88,17 @@ func buildDatabaseCoverage(
 		coverage.Action = "Сравнивайте только сессии с одинаковым databaseTracing и повторите сценарий на однородном наборе."
 	case coverage.DiagnosticsAvailable && coverage.InstrumentedHooks == 0:
 		coverage.Status = "no_hooks"
-		coverage.StatusLabel = "перехватчики БД не найдены"
-		coverage.Explanation = "Сборщик включён, но диагностика преобразования байткода не содержит ни одного перехватчика БД."
+		coverage.StatusLabel = "ASM-хуки для БД не найдены"
+		coverage.Explanation = "Сборщик включён, но диагностика байткода не содержит ни одного ASM-хука для БД."
 		coverage.Action = "Проверьте includePackages/excludePackages, поддерживаемые сигнатуры и флаг databaseTracing в том же варианте сборки."
 	case coverage.ObservedCalls == 0 && coverage.ObservedTransactionEvents == 0:
 		coverage.Status = "no_observations"
 		coverage.StatusLabel = "SQL не наблюдался"
 		if coverage.DiagnosticsAvailable {
-			coverage.Explanation = "Сборщик включён и перехватчики в байткоде найдены, но SQL-вызовы не наблюдались."
+			coverage.Explanation = "Сборщик включён и ASM-хуки в байткоде найдены, но SQL-вызовов в прогоне не было."
 			coverage.Action = "Повторите целевой сценарий с обращением к базе; если событий всё ещё нет, проверьте фактический DB API по diagnostics."
 		} else {
-			coverage.Explanation = "Сбор данных БД включён, но SQL-вызовы не наблюдались; без диагностики преобразования байткода нельзя отличить неисполненный сценарий от отсутствующих перехватчиков."
+			coverage.Explanation = "Сбор данных БД включён, но SQL-вызовов в прогоне не было. Без диагностики байткода нельзя понять, не выполнялся сценарий или не добавлены ASM-хуки."
 			coverage.Action = "Подключите instrumentation-diagnostics.jsonl и повторите сценарий с обращением к базе."
 		}
 	case coverage.DroppedStatementEvents > 0 || coverage.DroppedContextEvents > 0 ||

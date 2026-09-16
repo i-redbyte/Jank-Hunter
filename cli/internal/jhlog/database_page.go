@@ -362,13 +362,25 @@ type databaseColumnDecoder struct {
 }
 
 func decodeDatabaseColumnSection(raw []byte, databaseRows, transactionRows int) (*databaseColumnDecoder, error) {
+	return decodeDatabaseColumnSectionInto(raw, databaseRows, transactionRows, &databaseColumnDecoder{})
+}
+
+func decodeDatabaseColumnSectionInto(
+	raw []byte,
+	databaseRows int,
+	transactionRows int,
+	decoder *databaseColumnDecoder,
+) (*databaseColumnDecoder, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	if databaseRows+transactionRows == 0 {
 		return nil, fmt.Errorf("database columns exist without database rows")
 	}
-	decoder := &databaseColumnDecoder{}
+	if decoder == nil {
+		return nil, fmt.Errorf("database column decoder is nil")
+	}
+	*decoder = databaseColumnDecoder{}
 	reader := recordReader{data: raw}
 	schema, err := reader.readUvarint()
 	if err != nil {

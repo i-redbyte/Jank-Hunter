@@ -42,7 +42,7 @@ func compareAndroidComponentAnalysis(baseline, candidate Summary) AndroidCompone
 			firstNonEmpty(candidate.CollectionQuality.ProcessScope, "не определён"),
 		)
 	case before.Partial || after.Partial:
-		result.Note = "Разрешён частичный анализ: локальные метрики жизненного цикла и транзакций сравниваются, а полнота межпроцессной цепочки — нет. " +
+		result.Note = "Разрешён частичный анализ: локальные метрики жизненного цикла и транзакций сравниваются, а полнота межпроцессной цепочки - нет. " +
 			strings.Join(uniqueStrings(append(append([]string{}, before.PartialReasons...), after.PartialReasons...)), "; ")
 	default:
 		result.Note = "Сопоставлены одинаковые полные наборы процессов; цепочка Binder остаётся вероятной, а не точной связью."

@@ -197,7 +197,7 @@ func TestCompareDatabaseScenariosRejectsBoundedDataLoss(t *testing.T) {
 	}
 
 	metric := deltasByName(Compare(baseline, candidate).Database.Metrics)["DB repeated calls per operation scope"]
-	if metric.Comparable || !strings.Contains(metric.ComparisonNote, "bounded") {
+	if metric.Comparable || !strings.Contains(metric.ComparisonNote, "не сохранилась") {
 		t.Fatalf("incomplete scenario evidence became comparable: %+v", metric)
 	}
 }
@@ -255,6 +255,7 @@ func databaseComparisonSummary(
 ) Summary {
 	return Summary{
 		LogCount:          5,
+		Acquisition:       &AcquisitionEvidence{IndependentGroups: 5, IdentityComplete: true},
 		EventCount:        500,
 		DurationMS:        durationMS,
 		CollectorSessions: 1,

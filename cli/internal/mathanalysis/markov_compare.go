@@ -7,17 +7,17 @@ import (
 )
 
 func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
-	if normalizedRunCount(baseline.IndependentRunCount) > 1 || normalizedRunCount(candidate.IndependentRunCount) > 1 {
+	if markovTimelineGroups(baseline) > 1 || markovTimelineGroups(candidate) > 1 {
 		return []MarkovDelta{{
 			Metric:             "Сопоставимость последовательности состояний",
-			Unit:               "прогонов",
-			BaselineValue:      float64(normalizedRunCount(baseline.IndependentRunCount)),
-			CandidateValue:     float64(normalizedRunCount(candidate.IndependentRunCount)),
-			Delta:              float64(normalizedRunCount(candidate.IndependentRunCount) - normalizedRunCount(baseline.IndependentRunCount)),
+			Unit:               "временных шкал",
+			BaselineValue:      float64(markovTimelineGroups(baseline)),
+			CandidateValue:     float64(markovTimelineGroups(candidate)),
+			Delta:              float64(markovTimelineGroups(candidate) - markovTimelineGroups(baseline)),
 			BaselineAvailable:  true,
 			CandidateAvailable: true,
 			Severity:           "medium",
-			Summary:            "Марковские дельты не рассчитаны: хотя бы одна сторона объединяет независимые запуски, поэтому соседние агрегированные состояния не являются последовательностью одного прогона.",
+			Summary:            "Качество сбора: изменения модели состояний не рассчитаны: хотя бы одна сторона совмещает отдельные временные шкалы, поэтому соседние состояния не относятся к одному прогону.",
 		}}
 	}
 	deltas := []MarkovDelta{
@@ -42,7 +42,7 @@ func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
 	for _, state := range states {
 		base := stickyProbability(baseline.StickyStates, state)
 		cand := stickyProbability(candidate.StickyStates, state)
-		deltas = append(deltas, markovDeltaProbability("Липкость: "+MarkovStateLabel(state), base, cand, true))
+		deltas = append(deltas, markovDeltaProbability("Долгое состояние: "+MarkovStateLabel(state), base, cand, true))
 	}
 	return deltas
 }

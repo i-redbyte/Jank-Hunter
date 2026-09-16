@@ -50,15 +50,35 @@ enum class JankHunterDatabaseTransactionOutcome {
     FAILURE,
 }
 
-class JankHunterDatabaseCallToken internal constructor(
-    internal val sourceId: Long,
-    internal val sourceName: String,
-    internal val query: String?,
-    internal val fingerprint: Long,
-    internal val operation: Int,
-    internal val boundary: Int,
-    internal val startedNanos: Long,
-) {
+class JankHunterDatabaseCallToken {
+    internal val sourceId: Long
+    internal val sourceName: String
+    internal val query: String?
+    internal val fingerprint: Long
+    internal val operation: Int
+    internal val boundary: Int
+    internal val startedNanos: Long
+    internal val operationToken: Long
+
+    internal constructor(
+        sourceId: Long, sourceName: String, query: String?, fingerprint: Long, operation: Int,
+        boundary: Int, startedNanos: Long,
+    ) : this(sourceId, sourceName, query, fingerprint, operation, boundary, startedNanos, 0L)
+
+    internal constructor(
+        sourceId: Long, sourceName: String, query: String?, fingerprint: Long, operation: Int,
+        boundary: Int, startedNanos: Long, operationToken: Long,
+    ) {
+        this.sourceId = sourceId
+        this.sourceName = sourceName
+        this.query = query
+        this.fingerprint = fingerprint
+        this.operation = operation
+        this.boundary = boundary
+        this.startedNanos = startedNanos
+        this.operationToken = operationToken
+    }
+
     private var completed = false
     private var phaseMask = 0L
     private var poolWaitUs = 0L
@@ -116,15 +136,35 @@ class JankHunterDatabaseCallToken internal constructor(
     }
 }
 
-class JankHunterDatabaseTransactionToken internal constructor(
-    internal val id: Long,
-    internal val sourceId: Long,
-    internal val sourceName: String,
-    internal val mode: Long,
-    internal val parentId: Long,
-    internal val startedNanos: Long,
-    internal val parent: WeakReference<JankHunterDatabaseTransactionToken>?,
-) {
+class JankHunterDatabaseTransactionToken {
+    internal val id: Long
+    internal val sourceId: Long
+    internal val sourceName: String
+    internal val mode: Long
+    internal val parentId: Long
+    internal val startedNanos: Long
+    internal val parent: WeakReference<JankHunterDatabaseTransactionToken>?
+    internal val collectionEpochId: Long
+
+    internal constructor(
+        id: Long, sourceId: Long, sourceName: String, mode: Long, parentId: Long, startedNanos: Long,
+        parent: WeakReference<JankHunterDatabaseTransactionToken>?,
+    ) : this(id, sourceId, sourceName, mode, parentId, startedNanos, parent, 0L)
+
+    internal constructor(
+        id: Long, sourceId: Long, sourceName: String, mode: Long, parentId: Long, startedNanos: Long,
+        parent: WeakReference<JankHunterDatabaseTransactionToken>?, collectionEpochId: Long,
+    ) {
+        this.id = id
+        this.sourceId = sourceId
+        this.sourceName = sourceName
+        this.mode = mode
+        this.parentId = parentId
+        this.startedNanos = startedNanos
+        this.parent = parent
+        this.collectionEpochId = collectionEpochId
+    }
+
     @Volatile
     private var completed = false
     internal var statementCount = 0L

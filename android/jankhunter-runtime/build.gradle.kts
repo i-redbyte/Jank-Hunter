@@ -6,6 +6,9 @@ plugins {
 android {
     namespace = "io.jankhunter.runtime"
 
+    sourceSets.getByName("test").kotlin.directories.add("src/sharedTest/kotlin")
+    sourceSets.getByName("androidTest").kotlin.directories.add("src/sharedTest/kotlin")
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }

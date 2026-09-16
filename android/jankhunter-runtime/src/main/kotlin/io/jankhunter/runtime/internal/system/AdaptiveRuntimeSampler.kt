@@ -32,6 +32,8 @@ internal class AdaptiveRuntimeSampler(
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ): Boolean {
         val next = ContextSnapshot(
             timeMs = nowMs,
@@ -44,6 +46,8 @@ internal class AdaptiveRuntimeSampler(
             rxBytes = rxBytes,
             txBytes = txBytes,
             networkVpn = networkVpn,
+            trafficUidPlusOne = trafficUidPlusOne,
+            trafficKnownFlags = trafficKnownFlags,
         )
         val previous = lastContext
         if (previous == null || nowMs - previous.timeMs >= contextStableIntervalMs || previous.changedEnough(next)) {
@@ -77,6 +81,8 @@ internal class AdaptiveRuntimeSampler(
         val rxBytes: Long,
         val txBytes: Long,
         val networkVpn: Boolean,
+        val trafficUidPlusOne: Long,
+        val trafficKnownFlags: Int,
     ) {
         fun changedEnough(next: ContextSnapshot): Boolean {
             return next.lowMemory ||
@@ -84,6 +90,8 @@ internal class AdaptiveRuntimeSampler(
                 next.networkMetered != networkMetered ||
                 next.networkValidated != networkValidated ||
                 next.networkVpn != networkVpn ||
+                next.trafficUidPlusOne != trafficUidPlusOne ||
+                next.trafficKnownFlags != trafficKnownFlags ||
                 abs(next.batteryPct - batteryPct) >= BATTERY_DELTA_PCT ||
                 abs(next.availMemoryKb - availMemoryKb) >= AVAILABLE_MEMORY_DELTA_KB ||
                 abs(next.rxBytes - rxBytes) >= TRAFFIC_DELTA_BYTES ||

@@ -4,7 +4,9 @@ import android.app.Activity
 import android.app.Dialog
 import android.app.Service
 import android.view.View
+import io.jankhunter.runtime.BoundedWeakIdentityCache
 import java.lang.reflect.Field
+import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.Collections
 
@@ -15,18 +17,23 @@ internal data class RetainedLifecycleTarget(
 )
 
 internal object RetainedLifecycleClassifier {
+    private val classMetadata = BoundedWeakIdentityCache<Class<*>, LifecycleClassMetadata>(CLASS_CACHE_CAPACITY)
+
     fun targets(instance: Any?, lifecycleEvent: String?, ownerHint: String?): List<RetainedLifecycleTarget> {
         if (instance == null) return emptyList()
         val event = normalizeEvent(lifecycleEvent)
-        val className = instance.javaClass.name
+        val metadata = metadata(instance.javaClass)
+        val className = metadata.className
         val explicitOwner = ownerHint?.takeIf { it.isNotBlank() }
         return when {
-            event == "onDestroyView" && isFragmentLike(instance) -> fragmentViewTargets(instance, className, explicitOwner)
+            event == "onDestroyView" && metadata.fragmentLike -> {
+                fragmentViewTargets(instance, metadata, explicitOwner)
+            }
             event == "onDestroy" && instance is Activity && !isChangingConfigurations(instance) -> {
                 activityDestroyTargets(instance, className, explicitOwner)
             }
-            event == "onDestroy" && isFragmentLike(instance) -> single(instance, className, explicitOwner, "fragment", event)
-            event == "onCleared" && isViewModelLike(instance) -> single(instance, className, explicitOwner, "viewmodel", event)
+            event == "onDestroy" && metadata.fragmentLike -> single(instance, className, explicitOwner, "fragment", event)
+            event == "onCleared" && metadata.viewModelLike -> single(instance, className, explicitOwner, "viewmodel", event)
             event == "onDestroy" && instance is Service -> single(instance, className, explicitOwner, "service", event)
             event == "onDestroy" && instance is Dialog -> dialogTargets(instance, className, explicitOwner, event)
             else -> emptyList()
@@ -63,10 +70,15 @@ internal object RetainedLifecycleClassifier {
         return out
     }
 
-    private fun fragmentViewTargets(fragment: Any, fragmentClassName: String, ownerHint: String?): List<RetainedLifecycleTarget> {
+    private fun fragmentViewTargets(
+        fragment: Any,
+        metadata: LifecycleClassMetadata,
+        ownerHint: String?,
+    ): List<RetainedLifecycleTarget> {
+        val fragmentClassName = metadata.className
         val out = ArrayList<RetainedLifecycleTarget>()
         val seen = Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
-        currentFragmentView(fragment)?.let { view ->
+        currentFragmentView(fragment, metadata.viewGetter)?.let { view ->
             if (seen.add(view)) {
                 out += target(
                     view,
@@ -78,7 +90,7 @@ internal object RetainedLifecycleClassifier {
                 )
             }
         }
-        for (field in fragmentCandidateFields(fragment.javaClass)) {
+        for (field in metadata.candidateFields) {
             val value = runCatching {
                 field.isAccessible = true
                 field.get(fragment)
@@ -117,20 +129,13 @@ internal object RetainedLifecycleClassifier {
         )
     }
 
-    private fun currentFragmentView(fragment: Any): View? {
+    private fun currentFragmentView(fragment: Any, getter: Method?): View? {
         return runCatching {
-            val method = fragment.javaClass.methods.firstOrNull {
-                it.name == "getView" && it.parameterTypes.isEmpty()
-            } ?: return null
-            method.invoke(fragment) as? View
+            getter?.invoke(fragment) as? View
         }.getOrNull()
     }
 
-    private fun fragmentCandidateFields(type: Class<*>): List<Field> {
-        return lifecycleCandidateFields(type)
-    }
-
-    private fun lifecycleCandidateFields(type: Class<*>): List<Field> {
+    private fun lifecycleCandidateFields(type: Class<*>): Array<Field> {
         val out = ArrayList<Field>()
         var current: Class<*>? = type
         while (current != null && !current.name.startsWith("android.") && current.name != "java.lang.Object") {
@@ -152,7 +157,7 @@ internal object RetainedLifecycleClassifier {
             }
             current = current.superclass
         }
-        return out
+        return out.toTypedArray()
     }
 
     private fun decorView(activity: Activity): View? {
@@ -163,31 +168,53 @@ internal object RetainedLifecycleClassifier {
         return runCatching { dialog.window?.decorView }.getOrNull()
     }
 
-    private fun isFragmentLike(instance: Any): Boolean {
-        return ancestryNames(instance.javaClass).any {
-            it == "android.app.Fragment" ||
-                it == "androidx.fragment.app.Fragment" ||
-                it == "android.support.v4.app.Fragment"
-        } || instance.javaClass.name.contains("Fragment")
-    }
-
-    private fun isViewModelLike(instance: Any): Boolean {
-        return ancestryNames(instance.javaClass).any {
-            it == "androidx.lifecycle.ViewModel" ||
-                it == "android.arch.lifecycle.ViewModel"
-        } || instance.javaClass.name.contains("ViewModel")
-    }
-
     private fun isBindingLike(instance: Any): Boolean {
         val name = instance.javaClass.name
         return name.endsWith("Binding") || name.contains(".databinding.") || name.contains("ViewBinding")
     }
 
-    private fun ancestryNames(type: Class<*>): Sequence<String> {
-        return generateSequence(type) { it.superclass }.map { it.name }
+    private fun metadata(type: Class<*>): LifecycleClassMetadata {
+        return classMetadata.getOrPut(type) {
+            var fragmentLike = type.name.contains("Fragment")
+            var viewModelLike = type.name.contains("ViewModel")
+            var current: Class<*>? = type
+            while (current != null) {
+                when (current.name) {
+                    "android.app.Fragment",
+                    "androidx.fragment.app.Fragment",
+                    "android.support.v4.app.Fragment",
+                    -> fragmentLike = true
+                    "androidx.lifecycle.ViewModel",
+                    "android.arch.lifecycle.ViewModel",
+                    -> viewModelLike = true
+                }
+                current = current.superclass
+            }
+            LifecycleClassMetadata(
+                className = type.name,
+                fragmentLike = fragmentLike,
+                viewModelLike = viewModelLike,
+                viewGetter = if (fragmentLike) {
+                    type.methods.firstOrNull { it.name == "getView" && it.parameterTypes.isEmpty() }
+                } else {
+                    null
+                },
+                candidateFields = if (fragmentLike) lifecycleCandidateFields(type) else emptyArray(),
+            )
+        }
     }
 
     private fun normalizeEvent(value: String?): String {
         return value?.trim()?.takeIf { it.isNotEmpty() } ?: "lifecycle"
     }
+
+    private class LifecycleClassMetadata(
+        val className: String,
+        val fragmentLike: Boolean,
+        val viewModelLike: Boolean,
+        val viewGetter: Method?,
+        val candidateFields: Array<Field>,
+    )
+
+    private const val CLASS_CACHE_CAPACITY = 32
 }

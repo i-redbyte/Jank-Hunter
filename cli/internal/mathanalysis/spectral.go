@@ -12,7 +12,6 @@ import (
 
 const (
 	minPeriodicPoints             = 12
-	maxSpectralPoints             = 2048
 	maxAutocorrLag                = 60
 	minSpectralPeakRatio          = 3.0
 	minSpectralPeakConfidence     = 0.35
@@ -28,6 +27,20 @@ type periodicDefinition struct {
 }
 
 func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale timelineScale, routeDefinitions []periodicDefinition) ([]PeriodicSignal, []SpectralPeak) {
+	return buildPeriodicAnalysisWithBudget(timeline, scale, routeDefinitions, nil)
+}
+
+func buildPeriodicAnalysisWithBudget(timeline []TimelineBucket, scale timelineScale, routeDefinitions []periodicDefinition, budget *collectionBudget) ([]PeriodicSignal, []SpectralPeak) {
+	var definitionsAccount, resultsAccount *collectionAccount
+	if budget != nil {
+		definitionsAccount = budget.account("periodic definitions")
+		resultsAccount = budget.account("periodic results")
+	}
+	defer definitionsAccount.close()
+	if !budget.chargeSpectralWork(uint64(len(timeline))*8) || !definitionsAccount.reserveItems(len(timeline), 80) || !definitionsAccount.reserve(1024) {
+		return nil, nil
+	}
+
 	definitions := timelinePeriodicDefinitions(timeline)
 	definitions = append(definitions, routeDefinitions...)
 
@@ -38,10 +51,17 @@ func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale 
 		if !hasNonZeroFloat(points) {
 			continue
 		}
-		signal := analyzePeriodicSignal(definition.name, definition.unit, scale.bucketMSOrDefault(), points)
+		signal := analyzePeriodicSignalWithBudget(definition.name, definition.unit, scale.bucketMSOrDefault(), points, budget)
+		if budget != nil && budget.err() != nil {
+			return nil, nil
+		}
 		signal.TotalBucketCount = len(definition.points)
 		signal.ObservedBucketCount = observed
 		signal.Summary = periodicSignalSummary(signal)
+		// Returned signal/lag/peak storage remains charged across both compare sides.
+		if !resultsAccount.reserve(4096) {
+			return nil, nil
+		}
 		signals = append(signals, signal)
 		peaks = append(peaks, signal.Peaks...)
 	}
@@ -65,11 +85,11 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 		present func(TimelineBucket) bool
 	}{
 		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }, present: func(b TimelineBucket) bool { return b.UIFrames > 0 }},
-		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
-		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
-		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
+		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }, present: httpCountPresent},
+		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }, present: httpCountPresent},
+		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }, present: httpCountPresent},
 		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }, present: func(b TimelineBucket) bool { return b.DNSCount > 0 }},
-		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
+		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }, present: httpCountPresent},
 		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }, present: func(b TimelineBucket) bool { return b.ConnectCount > 0 }},
 	}
 	out := make([]periodicDefinition, 0, len(defs))
@@ -89,25 +109,27 @@ func newRouteSeriesCollector(options analyze.Options, scale timelineScale) *rout
 	return &routeSeriesCollector{
 		filter: normalizeTimelineFilter(options.Filter),
 		scale:  scale,
-		routes: map[string][]float64{},
+		routes: map[string]*bucketSeries{},
 	}
 }
 
 type routeSeriesCollector struct {
-	filter analyze.Filter
-	scale  timelineScale
-	routes map[string][]float64
+	timeline []TimelineBucket
+	account  *collectionAccount
+	results  *collectionAccount
+	filter   analyze.Filter
+	scale    timelineScale
+	routes   map[string]*bucketSeries
 }
 
 func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
+	if c.filter.Active() && !mathEventMatchesFilter(event, dict, c.filter, symbols) {
+		return
+	}
 	if event.HTTP == nil || !c.scale.hasData || c.scale.bucketCount == 0 {
 		return
 	}
-	route := symbols.resolve(dict, event.HTTP.RouteRef)
-	owner := symbols.resolve(dict, event.Attribution.Owner)
-	if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
-		return
-	}
+	route := symbols.resolveRaw(dict, event.HTTP.RouteRef)
 	indexValue, ok := c.scale.index(event.TimeMS)
 	if !ok {
 		return
@@ -115,24 +137,31 @@ func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string, sy
 	index := int(indexValue)
 	points := c.routes[route]
 	if points == nil {
-		points = make([]float64, c.scale.bucketCount)
+		if !c.account.reserve(128 + mathMapEntryBytes + uint64(len(route))) {
+			return
+		}
+		points = new(bucketSeries)
 		c.routes[route] = points
 	}
-	points[index]++
+	points.add(index, 1, c.account)
 }
 
 func (c *routeSeriesCollector) definitions(limit int) []periodicDefinition {
+	if limit <= 0 {
+		return nil
+	}
+	scratch := c.account.scratch("route candidate selection")
+	defer scratch.close()
+	if !scratch.reserveItems(len(c.routes), 32) {
+		return nil
+	}
 	type routeTotal struct {
 		route string
 		total float64
 	}
 	totals := make([]routeTotal, 0, len(c.routes))
 	for route, points := range c.routes {
-		var total float64
-		for _, point := range points {
-			total += point
-		}
-		totals = append(totals, routeTotal{route: route, total: total})
+		totals = append(totals, routeTotal{route: route, total: points.total})
 	}
 	sort.Slice(totals, func(i, j int) bool {
 		if totals[i].total != totals[j].total {
@@ -145,16 +174,33 @@ func (c *routeSeriesCollector) definitions(limit int) []periodicDefinition {
 	}
 	out := make([]periodicDefinition, 0, len(totals))
 	for _, item := range totals {
+		if !c.results.reserveItems(c.scale.bucketCount, 9) || !c.results.reserve(128+uint64(len(item.route))) {
+			return nil
+		}
+		points := make([]float64, c.scale.bucketCount)
+		var present []bool
+		if c.timeline != nil {
+			present = make([]bool, c.scale.bucketCount)
+			for i, b := range c.timeline {
+				present[i] = httpCountPresent(b)
+			}
+		}
+		c.routes[item.route].writeDense(points)
 		out = append(out, periodicDefinition{
-			name:   "Маршрут " + item.route + " запросы",
-			unit:   "шт",
-			points: c.routes[item.route],
+			present: present,
+			name:    "Маршрут " + item.route + " запросы",
+			unit:    "шт",
+			points:  points,
 		})
 	}
 	return out
 }
 
 func analyzePeriodicSignal(name string, unit string, bucketMS uint64, points []float64) PeriodicSignal {
+	return analyzePeriodicSignalWithBudget(name, unit, bucketMS, points, nil)
+}
+
+func analyzePeriodicSignalWithBudget(name, unit string, bucketMS uint64, points []float64, budget *collectionBudget) PeriodicSignal {
 	signal := PeriodicSignal{
 		Signal:              name,
 		Unit:                unit,
@@ -168,8 +214,39 @@ func analyzePeriodicSignal(name string, unit string, bucketMS uint64, points []f
 		signal.Summary = fmt.Sprintf("Недостаточно данных: нужно хотя бы %d временных интервалов, сейчас %d.", minPeriodicPoints, len(points))
 		return signal
 	}
-	analysisPoints, analysisBucketMS := downsamplePeriodicPoints(points, bucketMS, maxSpectralPoints)
-	signal.Approximated = len(analysisPoints) < len(points)
+	// Constant input is rejected before FFT/autocorrelation; even an inexact decimal
+	// constant must not become a tiny residual with apparently perfect regularity.
+	if !budget.chargeSpectralWork(uint64(len(points))) {
+		return signal
+	}
+	constant := true
+	for _, value := range points[1:] {
+		if value != points[0] {
+			constant = false
+			break
+		}
+	}
+	if constant {
+		signal.AnalyzedSampleCount = len(points)
+		signal.AnalysisBucketMS = bucketMS
+		signal.SpectralEntropy = 1
+		signal.Status = periodicSignalStatus(signal)
+		signal.Summary = periodicSignalSummary(signal)
+		return signal
+	}
+	// Preserve every uniformly bucketed sample. Stride sampling aliases fast signals.
+	analysisPoints, analysisBucketMS := points, bucketMS
+	if !budget.chargeSpectralWork(spectralWorkRequirement(len(points))) {
+		return signal
+	}
+	var scratch *collectionAccount
+	if budget != nil {
+		scratch = budget.account("spectral workspace")
+	}
+	defer scratch.close()
+	if !scratch.reserve(spectralScratchBytes(len(points))) {
+		return signal
+	}
 	signal.AnalyzedSampleCount = len(analysisPoints)
 	signal.AnalysisBucketMS = analysisBucketMS
 	lags := autocorrelationLags(analysisPoints, analysisBucketMS)
@@ -266,7 +343,10 @@ func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit i
 	if background <= 0 {
 		background = 1
 	}
-	peaks := make([]SpectralPeak, 0, len(powers))
+	if limit <= 0 {
+		return nil, entropy
+	}
+	peaks := make([]SpectralPeak, 0, min(limit, len(powers)))
 	bucketSeconds := float64(bucketMS) / 1000
 	for index, power := range powers {
 		if power <= 0 {
@@ -286,7 +366,7 @@ func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit i
 		if ratio < minSpectralPeakRatio || confidence < minSpectralPeakConfidence {
 			continue
 		}
-		peaks = append(peaks, SpectralPeak{
+		candidate := SpectralPeak{
 			Signal:           signalName,
 			PeriodMS:         periodMS,
 			FrequencyHz:      frequency,
@@ -294,37 +374,32 @@ func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit i
 			PeakToBackground: ratio,
 			SpectralEntropy:  entropy,
 			Confidence:       confidence,
-		})
-	}
-	sort.Slice(peaks, func(i, j int) bool {
-		if peaks[i].Confidence != peaks[j].Confidence {
-			return peaks[i].Confidence > peaks[j].Confidence
 		}
-		return peaks[i].Power > peaks[j].Power
-	})
-	if len(peaks) > limit {
-		peaks = peaks[:limit]
+		position := 0
+		for position < len(peaks) && !strongerSpectralPeak(candidate, peaks[position]) {
+			position++
+		}
+		if position >= limit {
+			continue
+		}
+		if len(peaks) < limit {
+			peaks = append(peaks, SpectralPeak{})
+		}
+		copy(peaks[position+1:], peaks[position:len(peaks)-1])
+		peaks[position] = candidate
 	}
+
 	return peaks, entropy
 }
 
-func dftPowers(points []float64) []float64 {
-	n := len(points)
-	if n < 2 {
-		return nil
+func strongerSpectralPeak(left, right SpectralPeak) bool {
+	if left.Confidence != right.Confidence {
+		return left.Confidence > right.Confidence
 	}
-	powers := make([]float64, 0, n/2)
-	for k := 1; k <= n/2; k++ {
-		var realPart float64
-		var imagPart float64
-		for t, value := range points {
-			angle := -2 * math.Pi * float64(k*t) / float64(n)
-			realPart += value * math.Cos(angle)
-			imagPart += value * math.Sin(angle)
-		}
-		powers = append(powers, realPart*realPart+imagPart*imagPart)
+	if left.Power != right.Power {
+		return left.Power > right.Power
 	}
-	return powers
+	return left.FrequencyHz < right.FrequencyHz
 }
 
 func hannWindow(points []float64) []float64 {
@@ -501,19 +576,6 @@ func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
 	}}
 }
 
-func downsamplePeriodicPoints(points []float64, bucketMS uint64, limit int) ([]float64, uint64) {
-	downsampled := downsampleFloat(points, limit)
-	if len(downsampled) >= len(points) || len(downsampled) < 2 || len(points) < 2 {
-		return downsampled, bucketMS
-	}
-	spanMS := float64(len(points)-1) * float64(bucketMS)
-	effectiveBucketMS := uint64(math.Round(spanMS / float64(len(downsampled)-1)))
-	if effectiveBucketMS == 0 {
-		effectiveBucketMS = bucketMS
-	}
-	return downsampled, effectiveBucketMS
-}
-
 func longestPeriodicRun(points []float64, present []bool) ([]float64, int) {
 	if len(present) != len(points) {
 		return append([]float64(nil), points...), len(points)
@@ -564,23 +626,24 @@ func periodicPatternCount(signals []PeriodicSignal) int {
 	return count
 }
 
-func downsampleFloat(points []float64, limit int) []float64 {
-	if len(points) <= limit {
-		return append([]float64(nil), points...)
-	}
-	out := make([]float64, 0, limit)
-	step := float64(len(points)-1) / float64(limit-1)
-	for i := 0; i < limit; i++ {
-		out = append(out, points[int(math.Round(float64(i)*step))])
-	}
-	return out
-}
-
 func centeredValues(points []float64) []float64 {
-	mean := meanFloat(points)
-	out := make([]float64, 0, len(points))
+	out := make([]float64, len(points))
+	if len(points) == 0 {
+		return out
+	}
+	// Shift first, then compensate the sum. This preserves variation on a large DC
+	// offset and makes constant input exactly zero, without a scale-dependent epsilon.
+	origin := points[0]
+	sum, correction := 0.0, 0.0
 	for _, point := range points {
-		out = append(out, point-mean)
+		delta := (point - origin) - correction
+		next := sum + delta
+		correction = (next - sum) - delta
+		sum = next
+	}
+	mean := sum / float64(len(points))
+	for i, point := range points {
+		out[i] = (point - origin) - mean
 	}
 	return out
 }

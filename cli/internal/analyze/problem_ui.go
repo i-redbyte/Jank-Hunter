@@ -3,6 +3,7 @@ package analyze
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 func (b *problemBuilder) detectUI() {
@@ -12,16 +13,16 @@ func (b *problemBuilder) detectUI() {
 		}
 		tailThresholdMS := b.cfg.UIFrameTailMS
 		if screen.FrameDeadlineStatus == "consistent" && screen.FrameDeadlineUS > 0 {
-			tailThresholdMS = maxUint64(1, (screen.FrameDeadlineUS*2+999)/1_000)
+			tailThresholdMS = maxUint64(1, microsecondsToMillisecondsCeil(saturatingMultiply(screen.FrameDeadlineUS, 2)))
 		}
 		badRate := screen.JankRatePct >= b.cfg.UIJankRate
-		badTail := screen.FrameP95MS >= tailThresholdMS || screen.FrameP99MS >= tailThresholdMS*2
+		badTail := screen.FrameP95MS >= tailThresholdMS || screen.FrameP99MS >= saturatingMultiply(tailThresholdMS, 2)
 		if !badRate && !badTail {
 			continue
 		}
-		magnitude := min(25, 8+int(screen.JankRatePct/b.cfg.UIJankRate)*4)
+		magnitude := boundedFloatRatioScore(screen.JankRatePct, b.cfg.UIJankRate, 8, 4, 25)
 		if badTail {
-			magnitude = max(magnitude, min(25, 8+int(screen.FrameP95MS/tailThresholdMS)*4))
+			magnitude = max(magnitude, boundedUint64RatioScore(screen.FrameP95MS, tailThresholdMS, 8, 4, 25))
 		}
 		exposure := min(20, 6+int(math.Log2(float64(screen.Frames))))
 		confidence, reasons, limits := problemConfidence(b.summary, screen.Frames, b.cfg.UIMinFrames, true)
@@ -29,20 +30,20 @@ func (b *problemBuilder) detectUI() {
 			limits = append(limits, "Бюджет кадра различается между окнами; применён фиксированный порог детектора.")
 		}
 		if screen.FrameSource != "jankstats" {
-			limits = append(limits, "Источник кадров — "+problemFrameSourceLabel(screen.FrameSource)+"; интервал обратных вызовов Choreographer не равен длительности кадра JankStats.")
+			limits = append(limits, "Источник кадров - "+problemFrameSourceLabel(screen.FrameSource)+"; интервал обратных вызовов Choreographer не равен длительности кадра JankStats.")
 			confidence = capProblemConfidence(confidence, "medium")
 		}
 		where := []ProblemLocation{{Screen: screen.Screen}}
-		title := fmt.Sprintf("Экран %s заметно дёргается", displayUnknown(screen.Screen, "без атрибуции"))
-		what := fmt.Sprintf("Подтормаживали %.1f%% кадров (%d из %d). Задержка верхних 5%% кадров — %d мс, отдельных худших кадров — до %d мс.", screen.JankRatePct, screen.JankyFrames, screen.Frames, screen.FrameP95MS, screen.FrameP99MS)
+		title := fmt.Sprintf("Экран %s заметно подтормаживает", displayUnknown(screen.Screen, "экран не определён"))
+		what := fmt.Sprintf("Подтормаживали %.1f%% кадров (%d из %d). Задержка верхних 5%% кадров - %d мс, отдельных худших кадров - до %d мс.", screen.JankRatePct, screen.JankyFrames, screen.Frames, screen.FrameP95MS, screen.FrameP99MS)
 		why := "Подтормаживания измерены на указанном экране. Связанные работы из того же сценария показаны в разделе «Сценарии и причины»."
 		evidence := []ProblemEvidence{{Name: "Доля медленных кадров", Observed: formatPercent(screen.JankRatePct), Unit: "%", ExpectedOrThreshold: fmt.Sprintf("< %.1f%%", b.cfg.UIJankRate), Sample: u64ptr(screen.Frames), Numerator: u64ptr(screen.JankyFrames), Denominator: u64ptr(screen.Frames), Source: "ui_window"}, {Name: "Задержка верхних 5% кадров", Observed: fmt.Sprint(screen.FrameP95MS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", tailThresholdMS), Sample: u64ptr(screen.Frames), Source: "ui_frame_histogram"}, {Name: "Целевое время кадра", Observed: formatFrameDeadline(screen.FrameDeadlineUS), Unit: "ms", Source: "ui_window_deadline"}}
 		var frequency *ProblemFrequency
 		if screen.JankyFrames > 0 {
 			frequency = &ProblemFrequency{Count: screen.JankyFrames}
 		} else if badTail {
-			title = fmt.Sprintf("Кадры экрана %s выходят за целевое время", displayUnknown(screen.Screen, "без атрибуции"))
-			what = fmt.Sprintf("Системный признак jank не сработал, однако верхние 5%% из %d кадров занимали до %d мс, а отдельные худшие — до %d мс. Поэтому значение 0%% нельзя считать нормой.", screen.Frames, screen.FrameP95MS, screen.FrameP99MS)
+			title = fmt.Sprintf("Кадры экрана %s выходят за целевое время", displayUnknown(screen.Screen, "экран не определён"))
+			what = fmt.Sprintf("Системный признак jank не сработал, однако верхние 5%% из %d кадров занимали до %d мс, а отдельные худшие - до %d мс. Поэтому значение 0%% нельзя считать нормой.", screen.Frames, screen.FrameP95MS, screen.FrameP99MS)
 			why = "Длинные кадры подтверждены распределением их длительности. Связанные работы из того же сценария показаны в разделе «Сценарии и причины»."
 			evidence[0] = ProblemEvidence{Name: "Кадры с системным признаком jank", Observed: "не отмечены", Sample: u64ptr(screen.Frames), Source: "ui_window"}
 		}
@@ -52,10 +53,10 @@ func (b *problemBuilder) detectUI() {
 			Title:        title,
 			WhatHappened: what,
 			Where:        where, Why: ProblemWhy{ClaimLevel: "unknown", Summary: why},
-			Impact:    []string{"Видимые рывки и задержка реакции интерфейса"},
+			Impact:    []string{"Заметные подтормаживания и медленная реакция UI"},
 			Evidence:  evidence,
-			Frequency: frequency, PriorityBreakdown: priority(28, magnitude, exposure, 2, boolScore(badRate && badTail, 4), "деградация UI", "доля медленных и худшие кадры", "размер выборки кадров", "один экран", "доля и задержка кадров согласованы"),
-			Recommendations: []ProblemRecommendation{{Action: "Профилировать длинные кадры на этом экране и убрать тяжёлую работу с главного потока", Rationale: "Доля медленных кадров и верхние значения задержки показывают деградацию, которую может скрывать средний FPS.", Verification: "Повторить сценарий минимум на 120 кадрах и сравнить долю медленных кадров и распределение их длительности с бюджетом дисплея."}},
+			Frequency: frequency, PriorityBreakdown: priority(28, magnitude, exposure, 2, boolScore(badRate && badTail, 4), "подтормаживания UI", "доля медленных и худшие кадры", "размер выборки кадров", "один экран", "доля и задержка кадров согласованы"),
+			Recommendations: []ProblemRecommendation{{Action: "Профилировать длинные кадры на этом экране и убрать тяжёлую работу с главного потока", Rationale: "Доля медленных кадров и верхние значения задержки показывают ухудшение, которое может скрывать средний FPS.", Verification: "Повторить сценарий минимум на 120 кадрах и сравнить долю медленных кадров и распределение их длительности с бюджетом дисплея."}},
 			Limitations:     limits, Drilldowns: []ProblemDrilldown{{Label: "Стабильность и UI", Anchor: "stability-ui", Filter: screen.Screen}},
 		})
 	}
@@ -65,7 +66,7 @@ func (b *problemBuilder) detectStallsAndIO() {
 	b.detectTypedIO()
 	for _, window := range b.summary.ProblemWindows {
 		stall := window.Kind == "main_thread_stall" || window.Kind == "main_thread_dispatch"
-		if !stall {
+		if !stall || isJankHunterDiagnosticOwner(window.Owner) {
 			continue
 		}
 		threshold := b.cfg.StallMS
@@ -74,11 +75,12 @@ func (b *problemBuilder) detectStallsAndIO() {
 		}
 		category, subcategory := ProblemCategoryStability, "main_thread_stall"
 		title, impact := fmt.Sprintf("Главный поток останавливался до %d мс", window.MaxMS), 32
-		magnitude := min(25, 8+int(window.MaxMS/threshold)*4)
+		magnitude := boundedUint64RatioScore(window.MaxMS, threshold, 8, 4, 25)
 		exposure := min(20, 5+int(math.Log2(float64(window.Count)+1))*3)
 		confidence, reasons, limits := problemConfidence(b.summary, window.Count, 3, true)
 		stack := BestMainThreadStallStack(b.summary.Owners, window.Owner)
 		diagnosis := DiagnoseMainThreadStall(window.Owner, stack)
+		frameworkObservation := IsFrameworkSymbol(stack)
 		if stack != "" {
 			title = fmt.Sprintf("%s: до %d мс", diagnosis.Title, window.MaxMS)
 		}
@@ -87,7 +89,12 @@ func (b *problemBuilder) detectStallsAndIO() {
 		why := "Зафиксирована остановка главного потока; источник внутри интервала не связан строгим идентификатором."
 		if stack != "" {
 			claim = "correlated"
-			why = "Остановка главного потока измерена напрямую; связанный с тем же владельцем снимок стека указывает на " + stack + ". Снимок локализует место выполнения, но не доказывает, что вся длительность паузы потрачена в конечном методе стека."
+			if frameworkObservation {
+				why = "Остановка главного потока измерена напрямую. Снимок стека показывает точку выполнения в библиотеке: " + stack + ". Он не определяет код приложения, который запустил эту работу, и не доказывает дефект библиотечного класса."
+				limits = append(limits, "В снимке нет вызывающего метода приложения; для точной причины нужна полная трасса стека.")
+			} else {
+				why = "Остановка главного потока измерена напрямую. Снимок стека с тем же владельцем указывает на " + stack + ". Он показывает место выполнения, но не доказывает, что вся пауза прошла в последнем методе стека."
+			}
 		}
 		b.add(ProblemFinding{
 			DetectorID: "stability.main_thread_stall", DetectorVersion: b.cfg.Version,
@@ -101,6 +108,10 @@ func (b *problemBuilder) detectStallsAndIO() {
 			Limitations:       limits, Drilldowns: []ProblemDrilldown{{Label: "Таймлайн", Anchor: "timeline", Filter: window.Owner}},
 		})
 	}
+}
+
+func isJankHunterDiagnosticOwner(owner string) bool {
+	return owner == "jankhunter.heap_dump" || strings.HasPrefix(owner, "jankhunter.heap_dump.")
 }
 
 func (b *problemBuilder) detectTypedIO() {

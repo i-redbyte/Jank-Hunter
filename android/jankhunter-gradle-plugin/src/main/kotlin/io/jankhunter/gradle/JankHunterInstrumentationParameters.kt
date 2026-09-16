@@ -76,6 +76,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val classGraphDirectory: Property<String>
 
     @get:Input
+    val lambdaCaptureDirectory: Property<String>
+
+    @get:Input
     val instrumentationDiagnosticsDirectory: Property<String>
 
     @get:Input

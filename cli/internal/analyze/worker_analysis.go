@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"fmt"
+	"math"
+	"math/bits"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,11 +52,12 @@ type workerCostInterval struct {
 }
 
 type workerPoint struct {
-	logIndex uint64
-	timeMS   uint64
-	value    uint64
-	count    uint64
-	max      uint64
+	logIndex  uint64
+	timeMS    uint64
+	value     uint64
+	valueHigh uint64
+	count     uint64
+	max       uint64
 }
 
 type workerMetricPoint struct {
@@ -246,14 +249,17 @@ func (q *workerEnqueueQueue) remaining() int {
 }
 
 type workerAggregate struct {
-	stats             WorkerStats
-	wait              uint64SampleSet
-	run               uint64SampleSet
-	running           []workerScopedInterval
-	deviceCPUSum      uint64
-	coreCPUSum        uint64
-	allocationRateSum uint64
-	pssDeltaTotal     int64
+	stats                 WorkerStats
+	wait                  uint64SampleSet
+	run                   uint64SampleSet
+	running               []workerScopedInterval
+	deviceCPUSum          uint64
+	deviceCPUSumHigh      uint64
+	coreCPUSum            uint64
+	coreCPUSumHigh        uint64
+	allocationRateSum     uint64
+	allocationRateSumHigh uint64
+	pssDeltaTotal         int64
 }
 
 type workerScopeSignals struct {
@@ -329,7 +335,7 @@ func (c *collector) recordWorkerMetric(name string, event jhlog.Event) {
 	if count == 0 {
 		count = 1
 	}
-	if sum == 0 {
+	if sum == 0 && event.Metric.SumHigh == 0 {
 		sum = event.Metric.Value
 	}
 	if maximum == 0 {
@@ -337,7 +343,7 @@ func (c *collector) recordWorkerMetric(name string, event jhlog.Event) {
 	}
 	c.workerMetrics = append(c.workerMetrics, workerMetricPoint{
 		workerPoint: workerPoint{
-			logIndex: c.currentLogIndex, timeMS: event.TimeMS, value: sum,
+			logIndex: c.currentLogIndex, timeMS: event.TimeMS, value: sum, valueHigh: event.Metric.SumHigh,
 			count: count, max: maximum,
 		},
 		name: name,
@@ -478,6 +484,9 @@ func processWorkerInstance(
 		event := &events[index]
 		adoptWorkerContext(&aggregate.stats, event)
 		switch event.stage {
+		case jhlog.WorkerStageRegisteredObserved:
+			analysis.RegisteredObserved++
+			aggregate.stats.RegisteredObserved++
 		case jhlog.WorkerStageEnqueued:
 			analysis.Enqueued++
 			aggregate.stats.Enqueued++
@@ -597,13 +606,13 @@ func finalizeWorkerAggregate(aggregate *workerAggregate) {
 	stats.RunMaxMS = aggregate.run.max
 	stats.MaxConcurrency, _ = maxWorkerConcurrency(aggregate.running)
 	if stats.CPUSamples > 0 {
-		stats.AvgDeviceCPUPercentX100 = aggregate.deviceCPUSum / stats.CPUSamples
+		stats.AvgDeviceCPUPercentX100 = metricSumAverage(aggregate.deviceCPUSum, aggregate.deviceCPUSumHigh, stats.CPUSamples)
 	}
 	if stats.CoreCPUSamples > 0 {
-		stats.AvgCoreCPUPercentX100 = aggregate.coreCPUSum / stats.CoreCPUSamples
+		stats.AvgCoreCPUPercentX100 = metricSumAverage(aggregate.coreCPUSum, aggregate.coreCPUSumHigh, stats.CoreCPUSamples)
 	}
 	if stats.AllocationSamples > 0 {
-		stats.AvgAllocationRateBytesPerSec = aggregate.allocationRateSum / stats.AllocationSamples
+		stats.AvgAllocationRateBytesPerSec = metricSumAverage(aggregate.allocationRateSum, aggregate.allocationRateSumHigh, stats.AllocationSamples)
 	}
 	if stats.MemoryPairs > 0 {
 		stats.AvgPSSDeltaKB = aggregate.pssDeltaTotal / int64(stats.MemoryPairs)
@@ -690,31 +699,35 @@ func applyWorkerMetric(stats *WorkerStats, aggregate *workerAggregate, index wor
 	if value.count == 0 {
 		return
 	}
+	boundedSum := value.sum
+	if value.sumHigh != 0 {
+		boundedSum = math.MaxUint64
+	}
 	switch name {
 	case workerMetricDeviceCPU:
 		stats.CPUSamples = saturatingUint64Sum(stats.CPUSamples, value.count)
-		aggregate.deviceCPUSum = saturatingUint64Sum(aggregate.deviceCPUSum, value.sum)
+		aggregate.deviceCPUSum, aggregate.deviceCPUSumHigh = addMetricSum(aggregate.deviceCPUSum, aggregate.deviceCPUSumHigh, value.sum, value.sumHigh)
 		stats.MaxDeviceCPUPercentX100 = maxUint64(stats.MaxDeviceCPUPercentX100, value.maximum)
 	case workerMetricCoreCPU:
 		stats.CoreCPUSamples = saturatingUint64Sum(stats.CoreCPUSamples, value.count)
-		aggregate.coreCPUSum = saturatingUint64Sum(aggregate.coreCPUSum, value.sum)
+		aggregate.coreCPUSum, aggregate.coreCPUSumHigh = addMetricSum(aggregate.coreCPUSum, aggregate.coreCPUSumHigh, value.sum, value.sumHigh)
 		stats.MaxCoreCPUPercentX100 = maxUint64(stats.MaxCoreCPUPercentX100, value.maximum)
 	case workerMetricAllocationRate:
 		stats.AllocationSamples = saturatingUint64Sum(stats.AllocationSamples, value.count)
-		aggregate.allocationRateSum = saturatingUint64Sum(aggregate.allocationRateSum, value.sum)
+		aggregate.allocationRateSum, aggregate.allocationRateSumHigh = addMetricSum(aggregate.allocationRateSum, aggregate.allocationRateSumHigh, value.sum, value.sumHigh)
 		stats.MaxAllocationRateBytesPerSec = maxUint64(stats.MaxAllocationRateBytesPerSec, value.maximum)
 	case workerMetricGCCount:
-		stats.GCCount = saturatingUint64Sum(stats.GCCount, value.sum)
+		stats.GCCount = saturatingUint64Sum(stats.GCCount, boundedSum)
 	case workerMetricGCTime:
-		stats.GCTimeMS = saturatingUint64Sum(stats.GCTimeMS, value.sum)
+		stats.GCTimeMS = saturatingUint64Sum(stats.GCTimeMS, boundedSum)
 	case workerMetricGCBlocking:
-		stats.GCBlockingCount = saturatingUint64Sum(stats.GCBlockingCount, value.sum)
+		stats.GCBlockingCount = saturatingUint64Sum(stats.GCBlockingCount, boundedSum)
 	case workerMetricGCBlockingTime:
-		stats.GCBlockingTimeMS = saturatingUint64Sum(stats.GCBlockingTimeMS, value.sum)
+		stats.GCBlockingTimeMS = saturatingUint64Sum(stats.GCBlockingTimeMS, boundedSum)
 	case workerMetricGCAllocated:
-		stats.GCBytesAllocated = saturatingUint64Sum(stats.GCBytesAllocated, value.sum)
+		stats.GCBytesAllocated = saturatingUint64Sum(stats.GCBytesAllocated, boundedSum)
 	case workerMetricGCFreed:
-		stats.GCBytesFreed = saturatingUint64Sum(stats.GCBytesFreed, value.sum)
+		stats.GCBytesFreed = saturatingUint64Sum(stats.GCBytesFreed, boundedSum)
 	}
 }
 
@@ -779,15 +792,17 @@ func subtractWorkerCost(left, right workerCostValue) workerCostValue {
 type workerPointValue struct {
 	count   uint64
 	sum     uint64
+	sumHigh uint64
 	maximum uint64
 }
 
 type workerPointIndex struct {
-	points    []workerPoint
-	prefixSum []uint64
-	prefixN   []uint64
-	maxTree   []uint64
-	treeBase  int
+	points     []workerPoint
+	prefixSum  []uint64
+	prefixHigh []uint64
+	prefixN    []uint64
+	maxTree    []uint64
+	treeBase   int
 }
 
 func (i *workerPointIndex) build() {
@@ -796,9 +811,21 @@ func (i *workerPointIndex) build() {
 	}
 	sort.Slice(i.points, func(left, right int) bool { return i.points[left].timeMS < i.points[right].timeMS })
 	i.prefixSum = make([]uint64, len(i.points)+1)
+	i.prefixHigh = nil
 	i.prefixN = make([]uint64, len(i.points)+1)
 	for index, point := range i.points {
-		i.prefixSum[index+1] = saturatingUint64Sum(i.prefixSum[index], point.value)
+		var previousHigh uint64
+		if i.prefixHigh != nil {
+			previousHigh = i.prefixHigh[index]
+		}
+		low, high := addMetricSum(i.prefixSum[index], previousHigh, point.value, point.valueHigh)
+		i.prefixSum[index+1] = low
+		if high != 0 && i.prefixHigh == nil {
+			i.prefixHigh = make([]uint64, len(i.points)+1)
+		}
+		if i.prefixHigh != nil {
+			i.prefixHigh[index+1] = high
+		}
 		i.prefixN[index+1] = saturatingUint64Sum(i.prefixN[index], point.count)
 	}
 	i.treeBase = 1
@@ -807,7 +834,7 @@ func (i *workerPointIndex) build() {
 	}
 	i.maxTree = make([]uint64, i.treeBase*2)
 	for index, point := range i.points {
-		i.maxTree[i.treeBase+index] = maxUint64(point.max, point.value/maxUint64(point.count, 1))
+		i.maxTree[i.treeBase+index] = maxUint64(point.max, metricSumAverage(point.value, point.valueHigh, maxUint64(point.count, 1)))
 	}
 	for index := i.treeBase - 1; index > 0; index-- {
 		i.maxTree[index] = maxUint64(i.maxTree[index*2], i.maxTree[index*2+1])
@@ -820,9 +847,15 @@ func (i workerPointIndex) query(startMS, endMS uint64) workerPointValue {
 	if left >= right {
 		return workerPointValue{}
 	}
+	sum, borrow := bits.Sub64(i.prefixSum[right], i.prefixSum[left], 0)
+	var sumHigh uint64
+	if i.prefixHigh != nil {
+		sumHigh, _ = bits.Sub64(i.prefixHigh[right], i.prefixHigh[left], borrow)
+	}
 	return workerPointValue{
+		sumHigh: sumHigh,
 		count:   saturatingSub(i.prefixN[right], i.prefixN[left]),
-		sum:     saturatingSub(i.prefixSum[right], i.prefixSum[left]),
+		sum:     sum,
 		maximum: i.rangeMax(left, right),
 	}
 }

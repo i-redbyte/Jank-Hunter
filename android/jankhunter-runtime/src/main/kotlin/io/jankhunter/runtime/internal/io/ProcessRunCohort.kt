@@ -260,7 +260,7 @@ internal object ProcessRunCohort {
 
     private fun ensureDirectory(directory: File) {
         if (directory.isDirectory) return
-        if (!directory.exists() && directory.mkdirs()) return
+        if (directory.mkdirs() || directory.isDirectory) return
         throw IOException("Cannot create Jank Hunter metadata directory: $directory")
     }
 

@@ -18,7 +18,7 @@ jankHunter {
     enabledBuildTypes.set(setOf("debug"))
     profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)
     packages("io.jankhunter.sample.graph")
-    storageLimitMiB(50)
+    storageLimitMiB(350)
     debug {
         enable(
             io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS,

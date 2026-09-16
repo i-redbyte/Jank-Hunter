@@ -77,6 +77,16 @@ func TestCollectorCapabilitiesRequireSessionFlags(t *testing.T) {
 	}
 }
 
+func TestSemanticCollectorObservationSaturatesCallCount(t *testing.T) {
+	observation := semanticCollectorObservation(analyze.Summary{RuntimeCalls: []analyze.RuntimeCallStats{
+		{Caller: "jankhunter.semantic.v1.worker.run", Count: ^uint64(0)},
+		{Caller: "jankhunter.semantic.v1.worker.run", Count: 1},
+	}}, "jankhunter.semantic.v1.worker.")
+	if !strings.Contains(observation, "18446744073709551615") {
+		t.Fatalf("semantic collector count wrapped: %q", observation)
+	}
+}
+
 func TestCollectorCapabilityDefinitionsCoverEveryKnownFlagExactlyOnce(t *testing.T) {
 	var covered jhlog.CollectorFlag
 	for _, definition := range collectorCapabilityDefinitions {
@@ -90,5 +100,12 @@ func TestCollectorCapabilityDefinitionsCoverEveryKnownFlagExactlyOnce(t *testing
 	}
 	if covered != jhlog.CollectorKnownMask {
 		t.Fatalf("covered collector mask = 0x%x, want 0x%x", covered, jhlog.CollectorKnownMask)
+	}
+}
+
+func TestLegacyHTTPCollectorStateIsUnknown(t *testing.T) {
+	status, _ := collectorCapabilityStatus(analyze.Summary{CollectorSessions: 1}, jhlog.CollectorHTTP)
+	if status != "unknown" {
+		t.Fatalf("legacy absence claimed %s", status)
 	}
 }

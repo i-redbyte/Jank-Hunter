@@ -2,14 +2,16 @@ package io.jankhunter.runtime.internal.system
 
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.Choreographer
 import io.jankhunter.runtime.RuntimeCollectorCallbacks
 import io.jankhunter.runtime.RuntimeHookGuard
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.RuntimeLongSource
 import io.jankhunter.runtime.internal.io.Jhlog
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 /**
@@ -24,8 +26,10 @@ internal class FpsMonitor(
     private val callbacks: RuntimeCollectorCallbacks,
     choreographerFallbackEnabled: Boolean = true,
     private val exactAdmission: Boolean = false,
+    private val mainThread: FpsMainThreadDispatcher = AndroidFpsMainThreadDispatcher(),
+    // Choreographer frame timestamps use System.nanoTime(), which excludes deep sleep on Android.
+    private val nanoTime: RuntimeLongSource = RuntimeLongSource(System::nanoTime),
 ) : Choreographer.FrameCallback {
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val runState = CollectorRunState()
     private val sourceSelector = FrameSourceSelector(choreographerFallbackEnabled)
     private val windowNanos = millisecondsToNanos(max(250L, windowMs))
@@ -35,21 +39,27 @@ internal class FpsMonitor(
     private var choreographer: Choreographer? = null
     private var callbackPosted = false
     private var lastFallbackFrameNanos = 0L
+    @Volatile private var frameGeneration = 0L
 
     fun start() {
         val expectedGeneration = runState.start() ?: return
-        runOnMain {
+        val accepted = runOnMain(onFailure = { runState.stop() }) {
             if (!isCurrent(expectedGeneration)) return@runOnMain
             choreographer = Choreographer.getInstance()
+            frameGeneration = expectedGeneration
             resetWindow()
             updateFallbackRegistration()
         }
+        if (!accepted) runState.stop()
     }
 
-    fun stop() {
-        if (!runState.stop()) return
-        runOnMain(waitForCompletion = exactAdmission) {
-            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
+    fun stop(timeoutMs: Long = DEFAULT_STOP_TIMEOUT_MS): Boolean {
+        val stoppedGeneration = frameGeneration
+        if (!runState.stop()) return true
+        return runOnMain(waitForCompletionMs = timeoutMs.takeIf { exactAdmission }) {
+            if (frameGeneration != stoppedGeneration) return@runOnMain
+            if (exactAdmission) finishWindow(nanoTime.getAsLong())
+            frameGeneration = 0L
             removeFallbackCallback()
             sourceSelector.updateJankStats(false)
             resetWindow()
@@ -62,7 +72,7 @@ internal class FpsMonitor(
             if (!runState.isRunning()) return@runOnMain
             val activeChanged = sourceSelector.jankStatsActive != active
             if (!activeChanged && !sourceChanged) return@runOnMain
-            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
+            if (exactAdmission) finishWindow(nanoTime.getAsLong())
             sourceSelector.updateJankStats(active)
             resetWindow()
             if (activeChanged) {
@@ -73,19 +83,28 @@ internal class FpsMonitor(
 
     fun setWindowActive(active: Boolean) {
         runOnMain {
-            if (!runState.isRunning() || !sourceSelector.updateWindowActive(active)) return@runOnMain
-            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
+            if (!runState.isRunning() || sourceSelector.windowActive == active) return@runOnMain
+            if (exactAdmission) finishWindow(nanoTime.getAsLong())
+            sourceSelector.updateWindowActive(active)
             resetWindow()
             updateFallbackRegistration()
         }
     }
 
     fun onJankStatsFrame(screen: String?, durationNanos: Long, isJank: Boolean) {
+        if (!runState.isRunning()) return
+        val acceptedGeneration = frameGeneration
+        if (acceptedGeneration == 0L) return
         runOnMain {
-            if (!runState.isRunning() || !sourceSelector.useJankStats()) return@runOnMain
+            // Callbacks already ahead of the stop marker must reach its final partial window.
+            if (frameGeneration != acceptedGeneration) {
+                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_FRAME)
+                return@runOnMain
+            }
+            if (!sourceSelector.useJankStats()) return@runOnMain
             recordFrame(
                 screen = screen,
-                frameTimeNanos = SystemClock.elapsedRealtimeNanos(),
+                frameTimeNanos = nanoTime.getAsLong(),
                 durationMs = durationNanos.coerceAtLeast(0L) / NANOS_PER_MS,
                 isJank = isJank,
             )
@@ -136,7 +155,7 @@ internal class FpsMonitor(
             snapshot.jankCount,
             snapshot.p95Ms,
             source,
-            jankFrameThresholdMs * NANOS_PER_MS / 1_000L,
+            millisecondsToMicroseconds(jankFrameThresholdMs),
             snapshot.frameDurationBuckets,
         )
     }
@@ -178,37 +197,62 @@ internal class FpsMonitor(
         lastFallbackFrameNanos = 0L
     }
 
-    private fun runOnMain(waitForCompletion: Boolean = false, block: () -> Unit) {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            RuntimeHookGuard.run(block)
-        } else {
-            val completed = if (waitForCompletion) CountDownLatch(1) else null
-            val accepted = mainHandler.post {
+    private inline fun runOnMain(
+        waitForCompletionMs: Long? = null,
+        crossinline onFailure: () -> Unit = {},
+        crossinline block: () -> Unit,
+    ): Boolean {
+        val onMain = try {
+            mainThread.isMainThread()
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
+            return false
+        }
+        if (onMain) {
+            return runCollectorBlock(block).also { succeeded ->
+                if (!succeeded) onFailure()
+            }
+        }
+
+        val completed = if (waitForCompletionMs != null) CountDownLatch(1) else null
+        val taskSucceeded = if (completed != null) AtomicBoolean() else null
+        val accepted = try {
+            mainThread.post {
                 try {
-                    RuntimeHookGuard.run(block)
+                    val succeeded = runCollectorBlock(block)
+                    taskSucceeded?.set(succeeded)
+                    if (!succeeded) onFailure()
                 } finally {
                     completed?.countDown()
                 }
             }
-            if (!accepted) {
-                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
-                return
-            }
-            if (completed != null) awaitUninterruptibly(completed)
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            false
+        }
+        if (!accepted) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
+            return false
+        }
+        if (completed == null) return true
+        return awaitCompletion(completed, checkNotNull(waitForCompletionMs)) && taskSucceeded?.get() == true
+    }
+
+    private inline fun runCollectorBlock(block: () -> Unit): Boolean {
+        return RuntimeHookGuard.value(false, RuntimeHookFailureReason.COLLECTOR) {
+            block()
+            true
         }
     }
 
-    private fun awaitUninterruptibly(completed: CountDownLatch) {
-        var interrupted = false
-        while (true) {
-            try {
-                completed.await()
-                break
-            } catch (_: InterruptedException) {
-                interrupted = true
-            }
+    private fun awaitCompletion(completed: CountDownLatch, timeoutMs: Long): Boolean {
+        return try {
+            completed.await(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
         }
-        if (interrupted) Thread.currentThread().interrupt()
     }
 
     private fun isCurrent(expectedGeneration: Long): Boolean {
@@ -221,6 +265,29 @@ internal class FpsMonitor(
     }
 
     private companion object {
+        private const val DEFAULT_STOP_TIMEOUT_MS = 5_000L
         private const val NANOS_PER_MS = 1_000_000L
     }
+}
+
+internal fun millisecondsToMicroseconds(milliseconds: Long): Long {
+    val positive = milliseconds.coerceAtLeast(0L)
+    return if (positive > Long.MAX_VALUE / MICROS_PER_MS) Long.MAX_VALUE else positive * MICROS_PER_MS
+}
+
+internal interface FpsMainThreadDispatcher {
+    fun isMainThread(): Boolean
+
+    fun post(task: Runnable): Boolean
+}
+
+private const val MICROS_PER_MS = 1_000L
+
+private class AndroidFpsMainThreadDispatcher : FpsMainThreadDispatcher {
+    private val looper = Looper.getMainLooper()
+    private val handler = Handler(looper)
+
+    override fun isMainThread(): Boolean = Looper.myLooper() === looper
+
+    override fun post(task: Runnable): Boolean = handler.post(task)
 }

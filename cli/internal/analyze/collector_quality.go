@@ -56,7 +56,7 @@ func (c *collector) finalizeCollectionQuality() {
 		if result.Header.RequiredFeatures&jhlog.FeatureProcessScope == 0 {
 			processScopes[processScopeConfig{}] = struct{}{}
 			addReason("low", fmt.Sprintf(
-				"сегмент %s не содержит обязательный process scope; охват процессов подтвердить невозможно",
+				"сегмент %s не указывает область процессов для сбора; полноту охвата подтвердить невозможно",
 				result.Source,
 			))
 		} else {
@@ -72,13 +72,13 @@ func (c *collector) finalizeCollectionQuality() {
 		if result.Header.RequiredFeatures&jhlog.FeatureExactEventAdmission == 0 {
 			quality.ExactAdmission = false
 			addReason("medium", fmt.Sprintf(
-				"сегмент %s собран без EXACT admission; отсутствие потерь очереди нельзя гарантировать архитектурно",
+				"сегмент %s собран без гарантированной записи принятых событий; при конкуренции потоков возможны потери",
 				result.Source,
 			))
 		}
 		if result.Header.RunID.IsZero() || result.Header.ProcessInstanceID.IsZero() || result.Header.SessionID.IsZero() {
 			quality.ChainValid = false
-			addReason("medium", fmt.Sprintf("identity сегмента %s неполна, поэтому принадлежность session не подтверждена", result.Source))
+			addReason("medium", fmt.Sprintf("идентификаторы сегмента %s неполны, поэтому принадлежность к сессии не подтверждена", result.Source))
 		}
 		if result.Sealed && result.Status == jhlog.SegmentStatusClosedClean {
 			quality.SealedSegments++
@@ -90,17 +90,17 @@ func (c *collector) finalizeCollectionQuality() {
 				addReason("low", fmt.Sprintf("сегмент %s не запечатан и имеет статус %s (хвост %d байт)", result.Source, result.Status, result.TailBytes))
 			case jhlog.SegmentStatusOpenClean:
 				addNotice(fmt.Sprintf(
-					"снимок активной сессии %s корректно прочитан до последнего зафиксированного чанка; FINAL seal появится после завершения runtime",
+					"активная сессия %s прочитана до последнего сохранённого блока; итоговая отметка появится после завершения записи",
 					result.Source,
 				))
 			default:
 				segmentDamaged = true
-				addReason("medium", fmt.Sprintf("сегмент %s не содержит FINAL seal (статус %s)", result.Source, result.Status))
+				addReason("medium", fmt.Sprintf("сегмент %s не содержит итоговую отметку завершения (статус %s)", result.Source, result.Status))
 			}
 		}
 		if result.LatestQuality == nil {
 			quality.SegmentsWithoutQuality++
-			addReason("medium", fmt.Sprintf("сегмент %s не содержит quality snapshot", result.Source))
+			addReason("medium", fmt.Sprintf("сегмент %s не содержит снимок качества сбора", result.Source))
 		} else {
 			quality.SegmentsWithQuality++
 		}
@@ -108,14 +108,14 @@ func (c *collector) finalizeCollectionQuality() {
 			switch result.SegmentEnd.Reason {
 			case jhlog.SegmentEndIOError:
 				segmentDamaged = true
-				addReason("low", fmt.Sprintf("сегмент %s завершен после ошибки ввода-вывода", result.Source))
+				addReason("low", fmt.Sprintf("сегмент %s завершён из-за ошибки ввода-вывода", result.Source))
 			case jhlog.SegmentEndSizeLimit:
 				segmentDamaged = true
 				addReason("medium", sizeLimitCollectionReason(result.Source))
 			case jhlog.SegmentEndStorageBudget:
 				segmentDamaged = true
 				addReason("medium", fmt.Sprintf(
-					"сегмент %s запечатан с storage_budget_exhausted: активный запуск исчерпал общий бюджет .jhlog; последующие события не собирались",
+					"сегмент %s закрыт после исчерпания общего лимита .jhlog; последующие события не собирались",
 					result.Source,
 				))
 			case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown, jhlog.SegmentEndRotation:
@@ -132,7 +132,7 @@ func (c *collector) finalizeCollectionQuality() {
 	if len(runCohorts) != 1 {
 		quality.RunCohortConsistent = false
 		addReason("low", fmt.Sprintf(
-			"входные сегменты относятся к %d разным запускам приложения; all-process roster нельзя объединять между запусками",
+			"входные сегменты относятся к %d разным запускам приложения; список процессов нельзя объединять между запусками",
 			len(runCohorts),
 		))
 	}
@@ -152,7 +152,7 @@ func (c *collector) finalizeCollectionQuality() {
 			}
 			quality.AllProcessesConfigured = scope.scope == jhlog.ProcessScopeAll
 			if !scope.rosterDeclarationComplete {
-				addReason("low", "runtime не смог полностью объявить process roster из Android manifest")
+				addReason("low", "во время работы не удалось получить полный список процессов из AndroidManifest")
 			} else {
 				observedNames := make([]string, 0, len(observedProcesses))
 				for processName := range observedProcesses {
@@ -165,9 +165,15 @@ func (c *collector) finalizeCollectionQuality() {
 				if !quality.RunCohortConsistent {
 					addReason("low", "состав процессов не доказан: процессы принадлежат разным группам запусков")
 				} else if !quality.ProcessRosterComplete {
+					observedCount := uint64(len(observedProcesses))
+					verb := "наблюдаются"
+					if observedCount%10 == 1 && observedCount%100 != 11 {
+						verb = "наблюдается"
+					}
 					addNotice(fmt.Sprintf(
-						"наблюдается %d процессов из %d указанных в области сбора; отсутствующие процессы могли не запускаться либо их сегменты не были переданы, поэтому это неопределённость охвата, а не доказанная потеря",
-						len(observedProcesses),
+						"%s %s из %d указанных в области сбора; отсутствующие процессы могли не запускаться либо их сегменты не были переданы, поэтому это неопределённость охвата, а не доказанная потеря",
+						verb,
+						russianCountUint64(observedCount, "процесс", "процесса", "процессов"),
 						scope.expectedCount,
 					))
 				}
@@ -176,11 +182,11 @@ func (c *collector) finalizeCollectionQuality() {
 			case jhlog.ProcessScopeMainOnly:
 				quality.Notices = append(
 					quality.Notices,
-					"сбор намеренно ограничен main-процессом; полнота относится только к этому scope",
+					"сбор намеренно ограничен главным процессом; полнота относится только к нему",
 				)
 			case jhlog.ProcessScopeAllowlist:
 				quality.Notices = append(quality.Notices, fmt.Sprintf(
-					"сбор намеренно ограничен allowlist из %d процессов; полнота относится только к этому scope",
+					"сбор намеренно ограничен списком из %d процессов; полнота относится только к ним",
 					scope.allowedCount,
 				))
 			}
@@ -188,11 +194,11 @@ func (c *collector) finalizeCollectionQuality() {
 	case 0:
 		quality.ProcessScope = jhlog.ProcessScopeUnknown.String()
 		quality.ProcessScopeConsistent = false
-		addReason("low", "process scope отсутствует во всех входных сегментах")
+		addReason("low", "во входных сегментах не указана область процессов для сбора")
 	default:
 		quality.ProcessScope = "mixed"
 		quality.ProcessScopeConsistent = false
-		addReason("low", "входные сегменты используют разные process scope или разные process allowlist")
+		addReason("low", "входные сегменты используют разные области процессов или разные списки разрешённых процессов")
 	}
 
 	if len(c.chainIssues) > 0 {
@@ -209,6 +215,10 @@ func (c *collector) finalizeCollectionQuality() {
 	}
 
 	counters := c.latestQualityTotals()
+	quality.AsyncLifecycle = asyncLifecycleQuality(counters)
+	if posts := counters[jhlog.QualityHandlerPostContextUnavailable]; posts > 0 {
+		quality.AsyncAttribution = &AsyncAttributionQuality{Status: "unknown", HandlerPostsWithoutContext: posts}
+	}
 	quality.AcceptedEvents = counters[jhlog.QualityAcceptedEventTotal]
 	quality.WrittenEvents = counters[jhlog.QualityWrittenEventTotal]
 	quality.ReportedCommittedChunks = counters[jhlog.QualityCommittedChunkTotal]
@@ -231,7 +241,7 @@ func (c *collector) finalizeCollectionQuality() {
 	quality.ArchiveEvictedBytes = counters[jhlog.QualityArchiveEvictedBytesTotal]
 	if quality.ArchiveEvictedRuns > 0 {
 		addNotice(fmt.Sprintf(
-			"циклическое хранение освободило %d байт: удалено %d завершённых запусков (%d сегментов); текущий run cohort сохранён целиком",
+			"циклическое хранение освободило %d байт: удалено %d завершённых запусков (%d сегментов); текущий запуск сохранён целиком",
 			quality.ArchiveEvictedBytes,
 			quality.ArchiveEvictedRuns,
 			quality.ArchiveEvictedSegments,
@@ -242,14 +252,14 @@ func (c *collector) finalizeCollectionQuality() {
 		quality.RuntimeGraphCompletenessRatio = 0
 		if quality.RuntimeGraphInputEvents > 0 || quality.RuntimeGraphEmittedEvents > 0 || quality.DecodedRuntimeGraphCalls > 0 {
 			addReason("low", fmt.Sprintf(
-				"runtime-граф отмечен отключённым, но содержит input/emitted/decoded=%d/%d/%d; конфигурация и evidence противоречат друг другу",
+				"граф вызовов отмечен отключённым, но счётчики полученных, переданных и прочитанных вызовов равны %d/%d/%d; конфигурация противоречит данным",
 				quality.RuntimeGraphInputEvents,
 				quality.RuntimeGraphEmittedEvents,
 				quality.DecodedRuntimeGraphCalls,
 			))
 		} else {
 			quality.Notices = append(quality.Notices, fmt.Sprintf(
-				"runtime-граф отключён конфигурацией в %d quality snapshot(s) и полностью исключён из индекса доверия",
+				"граф вызовов отключён в %d снимках качества сбора и не влияет на оценку надёжности",
 				counters[jhlog.QualityRuntimeGraphDisabled],
 			))
 		}
@@ -259,7 +269,7 @@ func (c *collector) finalizeCollectionQuality() {
 		if quality.RuntimeGraphEmittedEvents > quality.RuntimeGraphInputEvents {
 			quality.CounterInvariantsValid = false
 			addReason("low", fmt.Sprintf(
-				"невозможное состояние runtime-графа: writer сообщает %d emitted при %d input",
+				"ошибка счётчиков графа вызовов: передано %d вызовов при %d полученных",
 				quality.RuntimeGraphEmittedEvents,
 				quality.RuntimeGraphInputEvents,
 			))
@@ -268,7 +278,7 @@ func (c *collector) finalizeCollectionQuality() {
 			quality.RuntimeGraphCompletenessRatio = 0
 			quality.CounterInvariantsValid = false
 			addReason("low", fmt.Sprintf(
-				"невозможное состояние runtime-графа: декодировано %d логических вызовов при %d входных",
+				"ошибка счётчиков графа вызовов: прочитано %d логических вызовов при %d полученных",
 				quality.DecodedRuntimeGraphCalls,
 				quality.RuntimeGraphInputEvents,
 			))
@@ -278,7 +288,7 @@ func (c *collector) finalizeCollectionQuality() {
 				level = "low"
 			}
 			addReason(level, fmt.Sprintf(
-				"полнота runtime-графа %.2f%% (%d из %d логических вызовов)",
+				"полнота графа вызовов %.2f%% (%d из %d логических вызовов)",
 				quality.RuntimeGraphCompletenessRatio*100,
 				quality.DecodedRuntimeGraphCalls,
 				quality.RuntimeGraphInputEvents,
@@ -288,7 +298,7 @@ func (c *collector) finalizeCollectionQuality() {
 		quality.RuntimeGraphCompletenessRatio = 0
 		quality.CounterInvariantsValid = false
 		addReason("low", fmt.Sprintf(
-			"невозможное состояние runtime-графа: reported=%d, decoded=%d при нулевом input counter",
+			"ошибка счётчиков графа вызовов: передано %d и прочитано %d вызовов, хотя получено 0",
 			quality.RuntimeGraphEmittedEvents,
 			quality.DecodedRuntimeGraphCalls,
 		))
@@ -317,7 +327,7 @@ func (c *collector) finalizeCollectionQuality() {
 	} else if quality.WrittenEvents > quality.AcceptedEvents {
 		quality.CounterInvariantsValid = false
 		addReason("low", fmt.Sprintf(
-			"невозможное состояние writer: записано %d событий при %d принятых",
+			"ошибка счётчиков записи: записано %d событий при %d принятых",
 			quality.WrittenEvents,
 			quality.AcceptedEvents,
 		))
@@ -344,31 +354,31 @@ func (c *collector) finalizeCollectionQuality() {
 	if classifiedRuntimeHookFailures > quality.RuntimeHookFailures {
 		quality.CounterInvariantsValid = false
 		addReason("low", fmt.Sprintf(
-			"reason-coded hook failures=%d превышают общий runtime_hook_failure_total=%d",
+			"сумма ошибок ASM-хуков по причинам (%d) превышает общий счётчик ошибок (%d)",
 			classifiedRuntimeHookFailures,
 			quality.RuntimeHookFailures,
 		))
 	}
 	if quality.ExactAdmission && counters[jhlog.QualityWriterAdmissionContentionTotal] > 0 {
 		quality.Notices = append(quality.Notices, fmt.Sprintf(
-			"EXACT writer ожидал admission lock %d раз (%s суммарного backpressure); accepted/written=%d/%d, до admission потеряно %d событий",
+			"при строгой записи поток ожидал доступ к очереди %d раз (%s суммарно); принято %d, записано %d, до принятия потеряно %s",
 			counters[jhlog.QualityWriterAdmissionContentionTotal],
 			formatDurationNanos(quality.WriterBackpressureNanos),
 			quality.AcceptedEvents,
 			quality.WrittenEvents,
-			quality.PreAdmissionLostEvents,
+			russianCountUint64(quality.PreAdmissionLostEvents, "событие", "события", "событий"),
 		))
 	}
 	if quality.RuntimeGraphBackpressureCount > 0 {
 		quality.Notices = append(quality.Notices, fmt.Sprintf(
-			"runtime-граф ожидал свободную producer page %d раз (%s суммарно по producer threads)",
+			"граф вызовов ожидал свободную страницу буфера %d раз (%s суммарно по рабочим потокам)",
 			quality.RuntimeGraphBackpressureCount,
 			formatDurationNanos(quality.RuntimeGraphBackpressureNanos),
 		))
 	}
 	if quality.RuntimeEventBackpressureCount > 0 {
 		quality.Notices = append(quality.Notices, fmt.Sprintf(
-			"runtime method/log transport ожидал свободный buffer %d раз (%s суммарно по producer threads)",
+			"очередь методов и логов ожидала свободный буфер %d раз (%s суммарно по рабочим потокам)",
 			quality.RuntimeEventBackpressureCount,
 			formatDurationNanos(quality.RuntimeEventBackpressureNanos),
 		))
@@ -379,12 +389,13 @@ func (c *collector) finalizeCollectionQuality() {
 		if denominator == 0 || float64(quality.KnownLostEvents)/float64(denominator) >= 0.01 {
 			level = "low"
 		}
-		addReason(level, fmt.Sprintf("quality snapshots фиксируют потерю как минимум %d событий", quality.KnownLostEvents))
+		addReason(level, "снимки качества сбора подтверждают потерю как минимум "+
+			russianCountUint64(quality.KnownLostEvents, "событие", "события", "событий"))
 	}
 	if c.summary.DataRecordCount > 0 && quality.AcceptedEvents == 0 && quality.WrittenEvents == 0 {
 		quality.CounterInvariantsValid = false
 		addReason("low", fmt.Sprintf(
-			"%d data records присутствуют без accepted/written quality counters",
+			"прочитано %d записей данных, но счётчиков принятых и записанных событий нет",
 			c.summary.DataRecordCount,
 		))
 	}
@@ -392,7 +403,7 @@ func (c *collector) finalizeCollectionQuality() {
 		if quality.RuntimeGraphEmittedEvents != quality.DecodedRuntimeGraphCalls {
 			quality.CounterInvariantsValid = false
 			addReason("low", fmt.Sprintf(
-				"writer сообщает %d записанных runtime-вызовов, но декодировано %d",
+				"модуль записи сообщает %d сохранённых вызовов, но прочитано %d",
 				quality.RuntimeGraphEmittedEvents,
 				quality.DecodedRuntimeGraphCalls,
 			))
@@ -400,7 +411,7 @@ func (c *collector) finalizeCollectionQuality() {
 		if quality.WrittenEvents != c.summary.DataRecordCount {
 			quality.CounterInvariantsValid = false
 			addReason("low", fmt.Sprintf(
-				"writer сообщает %d записанных событий, но декодировано %d data records",
+				"модуль записи сообщает %d сохранённых событий, но прочитано %d записей данных",
 				quality.WrittenEvents,
 				c.summary.DataRecordCount,
 			))
@@ -408,18 +419,21 @@ func (c *collector) finalizeCollectionQuality() {
 		if quality.ReportedCommittedChunks != quality.DecodedCommittedChunks {
 			quality.CounterInvariantsValid = false
 			addReason("low", fmt.Sprintf(
-				"writer сообщает %d committed chunks, но декодировано %d",
+				"модуль записи сообщает %d подтверждённых блоков, но прочитано %d",
 				quality.ReportedCommittedChunks,
 				quality.DecodedCommittedChunks,
 			))
 		}
 	}
 	if counters[jhlog.QualityWriterIOErrorTotal] > 0 || counters[jhlog.QualityFailedChunkTotal] > 0 {
-		addReason("low", fmt.Sprintf(
-			"writer сообщил ошибки I/O=%d и незаписанные чанки=%d",
-			counters[jhlog.QualityWriterIOErrorTotal],
-			counters[jhlog.QualityFailedChunkTotal],
-		))
+		parts := make([]string, 0, 2)
+		if ioErrors := counters[jhlog.QualityWriterIOErrorTotal]; ioErrors > 0 {
+			parts = append(parts, russianCountUint64(ioErrors, "ошибка ввода-вывода", "ошибки ввода-вывода", "ошибок ввода-вывода"))
+		}
+		if failedChunks := counters[jhlog.QualityFailedChunkTotal]; failedChunks > 0 {
+			parts = append(parts, russianCountUint64(failedChunks, "несохранённый блок", "несохранённых блока", "несохранённых блоков"))
+		}
+		addReason("low", "при записи зафиксировано: "+strings.Join(parts, ", "))
 	}
 	controlFailures := saturatingUint64Sum(
 		counters[jhlog.QualityControlLaneFullTotal],
@@ -429,7 +443,8 @@ func (c *collector) finalizeCollectionQuality() {
 	)
 	quality.ControlFailures = controlFailures
 	if controlFailures > 0 {
-		addReason("medium", fmt.Sprintf("служебный канал writer сообщил %d сбоев или таймаутов", controlFailures))
+		addReason("medium", "служебный канал записи: "+
+			russianCountUint64(controlFailures, "сбой или таймаут", "сбоя или таймаута", "сбоев или таймаутов"))
 	}
 	quality.DictionaryOverflow = counters[jhlog.QualityDictionaryOverflowTotal]
 	if uint64(c.dictionaryOverflow) > quality.DictionaryOverflow {
@@ -438,7 +453,7 @@ func (c *collector) finalizeCollectionQuality() {
 	quality.DictionaryTruncated = counters[jhlog.QualityDictionaryValueTruncated]
 	if quality.DictionaryOverflow > 0 || quality.DictionaryTruncated > 0 {
 		addReason("medium", fmt.Sprintf(
-			"словарь деградировал: overflow=%d, truncated=%d",
+			"словарь строк переполнен: заменено служебной ссылкой %d значений, обрезано %d значений",
 			quality.DictionaryOverflow,
 			quality.DictionaryTruncated,
 		))
@@ -450,6 +465,8 @@ func (c *collector) finalizeCollectionQuality() {
 		counters[jhlog.QualityRuntimeGraphProducerCapacityLoss],
 		counters[jhlog.QualityRuntimeStackMismatch],
 		counters[jhlog.QualityHandlerContentionBypass],
+		counters[jhlog.QualityRuntimeEventGenerationCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphGenerationCapacityLoss],
 		counters[jhlog.QualityRuntimeEventBufferCapacityLoss],
 		counters[jhlog.QualityRuntimeEventRegistryCapacityLoss],
 		counters[jhlog.QualityMethodCounterCardinalityLoss],
@@ -460,20 +477,21 @@ func (c *collector) finalizeCollectionQuality() {
 		counters[jhlog.QualityLifecycleRegistryLimit],
 		counters[jhlog.QualityObjectWatcherLimit],
 		counters[jhlog.QualityJankStatsHandleLimit],
-		counters[jhlog.QualityMetricFlushTimeout],
 	)
 	quality.BoundedEvidenceLoss = boundedEvidenceLoss
 	graphEvidenceLoss := saturatingUint64Sum(
 		counters[jhlog.QualityRuntimeGraphShutdownLoss],
 		counters[jhlog.QualityRuntimeGraphWriterRejectionLoss],
 		counters[jhlog.QualityRuntimeGraphProducerCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphGenerationCapacityLoss],
 	)
 	graphEvidenceLoss = saturatingUint64Sum(graphEvidenceLoss, quality.RuntimeGraphStackMismatches)
 	if boundedEvidenceLoss > graphEvidenceLoss {
 		quality.OtherEvidenceLoss = boundedEvidenceLoss - graphEvidenceLoss
 	}
 	if boundedEvidenceLoss > 0 {
-		addReason("medium", fmt.Sprintf("runtime-подсистемы потеряли %d элементов evidence", boundedEvidenceLoss))
+		addReason("medium", "сборщики во время выполнения не сохранили "+
+			russianCountUint64(boundedEvidenceLoss, "подтверждающую запись", "подтверждающие записи", "подтверждающих записей"))
 	}
 	availabilityFailures := saturatingUint64Sum(
 		counters[jhlog.QualityJankStatsDependencyMissing],
@@ -481,22 +499,27 @@ func (c *collector) finalizeCollectionQuality() {
 	)
 	if availabilityFailures > 0 {
 		addNotice(fmt.Sprintf(
-			"JankStats недоступен %d раз до активации; использован Choreographer fallback, транспорт событий не повреждён",
+			"JankStats был недоступен %d раз до запуска; использован резервный Choreographer, события не потеряны",
 			availabilityFailures,
 		))
 	}
 	if quality.CriticalRuntimeHookFailures > 0 {
 		addReason("low", fmt.Sprintf(
-			"fail-open границы runtime подавили %d сбоев, влияющих на evidence; причины: %s",
+			"защитные границы сбора подавили %d внутренних сбоев; часть подтверждающих данных могла потеряться. Причины: %s",
 			quality.CriticalRuntimeHookFailures,
 			runtimeHookFailureReasonSummary(quality.RuntimeHookFailureDetails, true),
 		))
 	}
+	upstreamDrainIncomplete := c.addUpstreamIncompleteness(counters, addReason)
 	quality.ChainIssues = uniqueStrings(quality.ChainIssues)
 	quality.Notices = uniqueStrings(quality.Notices)
 	quality.Reasons = uniqueStrings(quality.Reasons)
 	quality.DiagnosticCompletenessPercent, quality.DiagnosticCompletenessComponents =
 		collectionDiagnosticCompleteness(quality)
+	if upstreamDrainIncomplete {
+		quality.DiagnosticCompletenessPercent = UnknownDiagnosticCompleteness
+		quality.DiagnosticCompletenessComponents = nil
+	}
 	quality.DiagnosticCompletenessModel = diagnosticCompletenessModel
 	quality.DiagnosticCompletenessLevel, quality.DiagnosticCompletenessExplanation =
 		describeDiagnosticCompleteness(

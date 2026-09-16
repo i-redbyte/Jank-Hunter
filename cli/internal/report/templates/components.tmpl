@@ -1,25 +1,48 @@
+{{- define "async-lifecycle-notice" -}}
+<h3>Границы сессий асинхронной аналитики</h3>
+<p class="quality-notice">Незавершённая работа относится к сессии, в которой началась. Число операций на границе не означает потерю такого же числа событий. Завершение из предыдущей сессии не добавляется к работе приложения в новой сессии.</p>
+<div class="table-wrap"><table><thead><tr><th>Наблюдение сбора</th><th>Количество</th></tr></thead><tbody>
+<tr><td>Незавершённые HTTP</td><td>{{.UnfinishedHTTP}}</td></tr>
+<tr><td>Незавершённые SQL-вызовы</td><td>{{.UnfinishedDatabase}}</td></tr>
+<tr><td>Незавершённые Worker</td><td>{{.UnfinishedWorker}}</td></tr>
+<tr><td>Незавершённые транзакции</td><td>{{.UnfinishedDatabaseTransactions}}</td></tr>
+<tr><td>Завершение уже обрабатывалось при остановке</td><td>{{.CompletionsInProgressAtStop}}</td></tr>
+<tr><td>Отклонены завершения предыдущих сессий</td><td>{{.StaleCompletions}}</td></tr>
+<tr><td>Повторные завершения</td><td>{{.DuplicateCompletions}}</td></tr>
+<tr><td>Нет достоверного токена начала</td><td>{{.InvalidCompletions}}</td></tr>
+<tr><td>Источник отключён до завершения</td><td>{{.FeatureDisabledCompletions}}</td></tr>
+<tr><td>Не начат учёт: таблица заполнена</td><td>{{.CapacityRejected}}</td></tr>
+<tr><td>Не начат учёт: идентификаторы исчерпаны</td><td>{{.IdentityExhausted}}</td></tr>
+</tbody></table></div>
+{{if .LegacyHTTPCompletions}}<p class="quality-notice">HTTP с общим контекстом без регистрации начала: {{.LegacyHTTPCompletions}}. Для этого API число незавершённых запросов на границе неизвестно.</p>{{end}}
+{{- end -}}
+
+{{- define "async-attribution-notice" -}}
+{{with .AsyncAttribution}}<p class="quality-notice"><strong>Связь отправки с выполнением: {{.Status}} · post без контекста: {{.HandlerPostsWithoutContext}}.</strong> Связь выполнения с конкретным Handler post не подтверждена. Успешные post могут быть отменены; это не число потерянных выполнений и не снижение полноты доставки событий.</p>{{end}}
+{{- end -}}
+
 {{- define "problem-search-scope" -}}
 <div class="problem-search-scope" data-problem-search-scope>
-  <strong data-problem-card-scope>Поиск охватывает не только карточки проблем</strong>
-  <span>Он проверяет все классы и строки подробных разделов этой страницы, включая ещё не раскрытые</span>
+  <strong data-problem-card-scope>Поиск по всему отчёту</strong>
+  <span>Закрытые разделы тоже учитываются.</span>
 </div>
 {{- end -}}
 
 {{- define "problem-diagnosis" -}}
 {{$finding := .Finding}}{{$diagnosis := .Diagnosis}}
-<div class="problem-diagnosis-preview"><strong>Диагноз:</strong><span>{{$diagnosis.Verdict}}</span></div>
+<div class="problem-diagnosis-preview"><strong>Проблема:</strong><span>{{$diagnosis.Verdict}}</span></div>
 <details class="problem-explanation">
-  <summary>Диагноз и план расследования · {{problemClaimLabel $finding.Why.ClaimLevel}}</summary>
+  <summary>Разобрать проблему · {{problemClaimLabel $finding.Why.ClaimLevel}}</summary>
   <div class="problem-explanation-grid problem-diagnosis-grid">
-    <div class="problem-diagnosis-verdict span-all"><h4>Главный вывод</h4><p>{{$diagnosis.Verdict}}</p></div>
-    <div><h4>Что доказано данными</h4>{{range $diagnosis.Proven}}<p>{{.}}</p>{{else}}<p class="muted">Прямых доказательств для локализации причины пока недостаточно.</p>{{end}}</div>
-    <div><h4>К чему это может привести</h4>{{range $finding.Impact}}<p>{{.}}</p>{{else}}<p class="muted">Влияние оценивается по тяжести и величине сигнала.</p>{{end}}</div>
-    {{if $diagnosis.CausalChain}}<div class="problem-causal-chain span-all"><h4>Цепочка влияния</h4>{{range $diagnosis.CausalChain}}<div class="problem-chain-step state-{{.State}}"><strong>{{.Label}}</strong><span>{{.Text}}</span></div>{{end}}</div>{{end}}
-    <div class="problem-root-causes span-all"><h4>Кандидаты на первопричину</h4>{{if $diagnosis.Causes}}<div class="problem-cause-grid">{{range $diagnosis.Causes}}<article class="problem-cause-card relation-{{.RelationClass}}"><div class="problem-cause-head"><strong>{{.Title}}</strong><span>{{.Relation}}</span></div><p class="problem-cause-evidence">{{.Evidence}}</p><p>{{.Explanation}}</p><dl><div><dt>Где искать</dt><dd>{{.Where}}</dd></div><div><dt>Что проверить</dt><dd>{{.Action}}</dd></div></dl></article>{{end}}</div>{{else}}<p class="muted">Отдельный кандидат на первопричину не локализован: начните с мест и факторов ниже.</p>{{range $finding.Why.Factors}}<p>{{.}}</p>{{end}}{{end}}</div>
+    <div class="problem-diagnosis-verdict span-all"><h4>Что произошло</h4><p>{{$diagnosis.Verdict}}</p></div>
+    <div><h4>Что подтверждено</h4>{{range $diagnosis.Proven}}<p>{{.}}</p>{{else}}<p class="muted">Данных недостаточно, чтобы точно назвать причину.</p>{{end}}</div>
+    <div class="problem-impact"><h4>Почему это важно</h4>{{range $finding.Impact}}<p>{{.}}</p>{{else}}<p class="muted">Возможный вред зависит от силы и длительности сигнала.</p>{{end}}</div>
+    {{if $diagnosis.CausalChain}}<div class="problem-causal-chain span-all"><h4>Как связаны события</h4>{{range $diagnosis.CausalChain}}<div class="problem-chain-step state-{{.State}}"><strong>{{.Label}}</strong><span>{{.Text}}</span></div>{{end}}</div>{{end}}
+    <div class="problem-root-causes span-all"><h4>Возможные причины</h4>{{if $diagnosis.Causes}}<div class="problem-cause-grid">{{range $diagnosis.Causes}}<article class="problem-cause-card relation-{{.RelationClass}}"><div class="problem-cause-head"><strong>{{.Title}}</strong><span>{{.Relation}}</span></div><p class="problem-cause-evidence">{{.Evidence}}</p><p>{{.Explanation}}</p><dl><div><dt>Где искать</dt><dd>{{.Where}}</dd></div><div><dt>Что проверить</dt><dd>{{.Action}}</dd></div></dl></article>{{end}}</div>{{else}}<p class="muted">Точная причина пока не определена. Начните с мест и факторов ниже.</p>{{range $finding.Why.Factors}}<p>{{.}}</p>{{end}}{{end}}</div>
     <div><h4>Где искать в коде</h4>{{range $diagnosis.Locations}}<p class="problem-location-row"><strong>{{.Scope}}</strong><span>{{.Text}}</span></p>{{else}}<p class="muted">Точное место в коде не попало в журнал.</p>{{end}}</div>
-    <div><h4>Что пока не доказано</h4>{{range $diagnosis.MissingProof}}<p class="warning">{{.}}</p>{{end}}</div>
-    <div class="problem-validation-plan span-all"><h4>Пошаговый план проверки</h4>{{range $diagnosis.Plan}}<p><strong>{{.Number}}</strong><span>{{.Action}}</span></p>{{else}}<p class="muted">Повторите сценарий под профилировщиком и сравните исходную метрику до и после изменения.</p>{{end}}</div>
-    <details class="problem-technical-details span-all"><summary>Как рассчитан приоритет и какие есть ограничения</summary><div class="problem-technical-grid"><div><h4>Состав приоритета</h4>{{range $finding.PriorityBreakdown}}<div class="problem-priority-row"><span>{{problemPriorityComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range $diagnosis.TechnicalLimitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой находки нет.</p>{{end}}</div></div></details>
+    <div><h4>Чего не хватает</h4>{{range $diagnosis.MissingProof}}<p class="warning">{{.}}</p>{{end}}</div>
+    <div class="problem-validation-plan span-all"><h4>Как проверить исправление</h4>{{range $diagnosis.Plan}}<p><strong>{{.Number}}</strong><span>{{.Action}}</span></p>{{else}}<p class="muted">Повторите тот же сценарий с профилировщиком. Сравните метрику до и после изменения.</p>{{end}}</div>
+    <details class="problem-technical-details span-all"><summary>Расчёт приоритета и ограничения</summary><div class="problem-technical-grid"><div><h4>Из чего сложился приоритет</h4>{{range $finding.PriorityBreakdown}}<div class="problem-priority-row"><span>{{problemPriorityComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range $diagnosis.TechnicalLimitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой проблемы нет.</p>{{end}}</div></div></details>
   </div>
 </details>
 {{- end -}}
@@ -38,3 +61,157 @@
   {{- end}}
 </div>
 {{- end -}}
+
+{{- define "http-collection-quality" -}}
+{{with .CollectionQuality.HTTPFirstByte}}<h3>Покрытие измерения первого байта</h3>
+<p class="quality-notice">Для выбранных HTTP-событий: достоверное измерение {{.Known}}, неизвестное {{.Unknown}}, историческая семантика {{.Legacy}}. Историческое ожидание чтения заголовков и неизвестные значения не входят в статистику TTFB; измеренный ноль входит. Отсутствие замера первого байта не означает потерю HTTP-события.</p>{{end}}
+{{if .NetworkAnalysis}}{{if or (lt .NetworkAnalysis.KnownResponseBytes .HTTPCount) (lt .NetworkAnalysis.KnownRequestBytes .HTTPCount)}}<p class="quality-notice"><strong>Неполные размеры HTTP-тел.</strong> Полные размеры известны у {{.NetworkAnalysis.KnownResponseBytes}} ответов и {{.NetworkAnalysis.KnownRequestBytes}} запросов из {{.HTTPCount}}. Суммы наблюдённых байтов являются нижней границей.</p>{{end}}{{end}}
+{{with collectionWindowNotice .}}<p class="quality-notice"><strong>Отчёт охватывает не весь запуск приложения.</strong> {{.}}</p>{{end}}
+{{- end -}}
+
+{{- define "math-collection-limits" -}}
+{{range .}}{{if .Work}}<h3>Математический анализ остановлен по лимиту вычислительной работы</h3>
+<p class="quality-notice">Общий бюджет спектрального анализа: {{.Work.LimitOperations}} единиц работы. Использовано {{.Work.ConsumedOperations}}, следующему вычислению нужно {{.Work.RequestedOperations}}. Это счётчик алгоритмической работы, не время CPU. Частичные математические оценки не опубликованы; исходные проблемы приложения и полнота доставки событий сохраняются.</p>
+{{else}}<h3>Математический анализ остановлен по лимиту памяти</h3>
+<p class="quality-notice">Для временных накопителей установлен общий лимит {{.LimitBytes}} байт. При зарезервированных {{.ReservedBytes}} байтах потребовалось ещё {{.RequestedBytes}}. Частичные математические оценки не опубликованы; исходные проблемы приложения и полнота доставки событий сохраняются.</p>{{end}}{{end}}
+{{- end -}}
+
+{{- define "acquisition-quality" -}}
+<h3>Единицы повторения</h3>
+{{with acquisitionEvidence .Summary}}
+<p class="quality-notice">{{if .IdentityComplete}}Групп сбора по RunID и ProcessInstanceID: {{.IndependentGroups}}.{{else}}Независимость сборов неизвестна: идентификаторы запуска или процесса отсутствуют либо некорректны; сегментов без полной идентификации {{.UnknownIdentitySegments}}.{{end}} Ротация не создаёт независимых повторов. Запуски с общим процессом и процессы одного запуска входят в одну группу, включая транзитивные связи.</p>
+{{end}}
+<p class="help-text">Надёжность сравнения оценивается по повторяемости; это не вероятность и не проверка статистической значимости. Пороги medium/high требуют соответственно 2/5 групп и 80/500 событий без SESSION с каждой стороны; качество сбора может понизить уровень. Перцентили описывают зафиксированные события и сами по себе не доказывают независимость наблюдений. Состав устройств, SDK и версий учитывает каждое значение один раз на группу сбора.</p>
+{{if gt .TimelineGroupCount 1}}<p class="quality-notice">Совмещённых временных шкал: {{.TimelineGroupCount}}. Они выровнены по началу сценария; объединение не образует непрерывную историю одного запуска. Марковский прогноз отключён. Для последовательности состояний анализируйте каждый запуск отдельно.</p>{{end}}
+{{- end -}}
+
+{{- define "inspect-data-quality" -}}
+<section id="data-quality" class="panel technical-quality-panel">
+  <details class="fold">
+    <summary><span>Техническая справка о данных</span><span class="fold-summary-meta">методика и исходные счётчики</span></summary>
+    <div class="fold-body technical-quality-body">
+      {{template "math-collection-limits" .CollectionLimits}}
+      {{template "acquisition-quality" .}}
+ {{with httpCountCoverageExplanation .Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
+ {{with networkLoopAttributionExplanation .NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
+      {{with .Summary}}
+      {{template "http-collection-quality" .}}
+      <p class="help-text">Раздел предназначен для проверки методики отчёта. Он не отменяет найденные проблемы: ограничения применяются только к выводам, которым нужен соответствующий источник.</p>
+      {{with collectorCapabilities .}}
+      <h3>Какие сборщики реально были включены</h3>
+      <p class="help-text">Статусы записаны в журнале. Ноль событий у включённого сборщика может быть нормой. Наличие сетевых и других ASM-хуков проверяется по диагностике сборки.</p>
+      {{template "collector-capability-grid" .}}
+      {{end}}
+      {{if .EvidenceQuality.SchemaVersion}}<h3>Достаточность данных для выводов</h3><div class="evidence-quality-vector" aria-label="Техническая достаточность данных">{{range .EvidenceQuality.Dimensions}}<div class="evidence-quality-dimension quality-{{.Status}}" data-tip="{{.Explanation}}"><span>{{.Label}}</span><strong>{{evidenceQualityStatusLabel .Status}}</strong><small>{{.Explanation}}</small></div>{{end}}</div>{{end}}
+      <h3>Источники технического анализа</h3>
+      {{if not .AnalysisInputs.Status}}<p class="quality-notice">Состав источников не рассчитан для этой программно сформированной сводки.</p>{{else if .AnalysisInputs.Complete}}<p class="quality-notice"><strong>Все обязательные источники подключены.</strong> {{.AnalysisInputs.Explanation}}.</p>{{else}}<p class="warning"><strong>Часть углублённого анализа недоступна.</strong> {{.AnalysisInputs.Explanation}}. Не хватает: {{join .AnalysisInputs.Missing ", "}}.</p>{{end}}
+      <div class="grid technical-input-grid">
+        <div class="metric"><div class="label">События запуска</div><div class="value">{{if .AnalysisInputs.RuntimeEvidence}}есть{{else}}нет{{end}}</div><div class="hint">данные выполнения приложения</div></div>
+        <div class="metric"><div class="label">Граф классов</div><div class="value">{{if .AnalysisInputs.ClassGraph}}есть{{else}}нет{{end}}</div><div class="hint">пути вызовов, циклы и статические связи</div></div>
+        <div class="metric"><div class="label">Диагностика ASM</div><div class="value">{{if .AnalysisInputs.InstrumentationDiagnostics}}есть{{else}}нет{{end}}</div><div class="hint">какие ASM-хуки добавлены при сборке</div></div>
+        <div class="metric"><div class="label">Дамп памяти</div><div class="value">{{if .AnalysisInputs.HeapEvidence}}есть{{else}}нет{{end}}</div><div class="hint">доступен только когда создан HPROF</div></div>
+        <div class="metric"><div class="label">Артефакты сборки</div><div class="value">{{if .AnalysisInputs.ArtifactIdentityVerified}}{{if .AnalysisInputs.ArtifactsAutoDiscovered}}найдены автоматически{{else}}заданы явно{{end}}{{else}}не подтверждены{{end}}</div><div class="hint">{{if .AnalysisInputs.ArtifactDirectory}}<code>{{.AnalysisInputs.ArtifactDirectory}}</code>{{else}}каталог не передан{{end}}</div></div>
+      </div>
+      {{with .DatabaseCoverage}}{{if .Status}}<article class="database-coverage-card coverage-{{.Status}}">
+        <div class="database-coverage-head"><div><span class="status-note">{{.StatusLabel}}</span><h3>Техническая проверка сбора БД</h3></div><strong>{{.ObservedCalls}} наблюдений</strong></div>
+        <p>{{.Explanation}}</p>{{if .Action}}<p class="database-next-action"><strong>Как улучшить проверку:</strong> {{.Action}}</p>{{end}}
+        <div class="database-coverage-grid"><span>запуски со сбором <strong>{{.RuntimeEnabledSessions}} / {{.CollectorSessions}}</strong></span><span>ASM-хуки БД <strong>{{.InstrumentedHooks}}</strong></span><span>неподдерживаемые вызовы <strong>{{.UnsupportedCandidates}}</strong></span><span>известен SQL <strong>{{.KnownSQLCalls}} / {{.ObservedCalls}}</strong></span><span>события транзакций <strong>{{.ObservedTransactionEvents}}</strong></span><span>завершены / не завершены <strong>{{.CompletedTransactions}} / {{.IncompleteTransactions}}</strong></span></div>
+      </article>{{end}}{{end}}
+      {{with .AndroidComponents}}{{with .Coverage}}
+      <article class="database-coverage-card coverage-{{if .CatalogAvailable}}{{if .UncoveredEntryPoints}}partial{{else}}full{{end}}{{else}}unknown{{end}}">
+        <div class="database-coverage-head"><div><span class="status-note">артефакт сборки</span><h3>Техническая проверка Android-компонентов</h3></div><strong>{{.InstrumentedEntryPoints}} / {{.EntryPoints}} точек входа</strong></div>
+        <div class="database-coverage-grid"><span>компоненты <strong>{{.Components}}</strong></span><span>Service / BroadcastReceiver <strong>{{.Services}} / {{.Receivers}}</strong></span><span>полностью / частично / нет <strong>{{.Full}} / {{.Partial}} / {{.None}}</strong></span><span>точки входа без ASM-хука <strong>{{.UncoveredEntryPoints}}</strong></span><span>интерфейсы / методы AIDL <strong>{{.AIDLInterfaces}} / {{.AIDLTransactions}}</strong></span><span>каталог <strong>{{if .CatalogAvailable}}подключён{{else}}не подключён{{end}}</strong></span></div>
+      </article>
+      {{end}}{{end}}
+      {{template "async-attribution-notice" .CollectionQuality}}
+      {{with .CollectionQuality.AsyncLifecycle}}{{template "async-lifecycle-notice" .}}{{end}}
+      {{if .CollectionQuality.DiagnosticCompletenessModel}}
+      <p class="quality-notice"><strong>Полнота записи включённых источников: {{if lt .CollectionQuality.DiagnosticCompletenessPercent 0.0}}полнота неизвестна{{else}}{{printf "%.2f" .CollectionQuality.DiagnosticCompletenessPercent}} из 100 · {{diagnosticCompletenessLevelLabel .CollectionQuality.DiagnosticCompletenessLevel}}{{end}}.</strong> {{.CollectionQuality.DiagnosticCompletenessExplanation}} Отключённые источники не снижают этот процент. Это техническая оценка доступных данных, а не вероятность ошибки.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Компонент</th><th>Вес</th><th>Покрытие</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead>
+        <tbody>{{range .CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{if .Excluded}}не входит{{else}}{{printf "%.0f" .Weight}}{{end}}</td><td>{{if .Excluded}}отключено{{else}}{{printf "%.2f" .CoveragePercent}}%{{end}}</td><td>{{printf "%.2f" .EarnedPoints}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody>
+      </table></div>
+      {{end}}
+      <p class="quality-notice">Охват процессов: {{processScopeLabel .CollectionQuality.ProcessScope}} · согласованность охвата {{if .CollectionQuality.ProcessScopeConsistent}}ПОДТВЕРЖДЕНА{{else}}НАРУШЕНА{{end}} · инварианты счётчиков {{if .CollectionQuality.CounterInvariantsValid}}ПОДТВЕРЖДЕНЫ{{else}}НАРУШЕНЫ{{end}} · последовательность качества {{if .CollectionQuality.QualityProgressionValid}}ПОДТВЕРЖДЕНА{{else}}НАРУШЕНА{{end}}.</p>
+      <p class="quality-notice">Список процессов: обнаружено {{.CollectionQuality.ObservedProcessCount}} из {{.CollectionQuality.ExpectedProcessCount}} · объявление в манифесте {{if .CollectionQuality.ProcessRosterDeclarationComplete}}ЕСТЬ{{else}}НЕ ДОКАЗАНО{{end}} · групп запусков {{.CollectionQuality.RunCohortCount}} ({{if .CollectionQuality.RunCohortConsistent}}ОДНА СОГЛАСОВАННАЯ{{else}}СМЕШАНЫ{{end}}) · покрытие {{if .CollectionQuality.ProcessRosterComplete}}ПОЛНОЕ{{else}}НЕПОЛНОЕ{{end}}.</p>
+      <p class="quality-notice">Запись событий: {{if .CollectionQuality.ExactAdmission}}ТОЧНАЯ{{else}}ПО ВОЗМОЖНОСТИ{{end}} · принято {{.CollectionQuality.AcceptedEvents}} · записано {{.CollectionQuality.WrittenEvents}} · известно потеряно {{.CollectionQuality.KnownLostEvents}} · подтверждённых блоков {{.CollectionQuality.ReportedCommittedChunks}} / {{.CollectionQuality.DecodedCommittedChunks}}.</p>
+      {{if .CollectionQuality.RuntimeHookFailureDetails}}
+      <h3>Почему ASM-хуки не сработали</h3>
+      <div class="table-wrap"><table><thead><tr><th>Причина</th><th>Количество</th><th>Влияние</th><th>Объяснение</th></tr></thead><tbody>{{range .CollectionQuality.RuntimeHookFailureDetails}}<tr><td><code>{{.Reason}}</code></td><td>{{.Count}}</td><td>{{if eq .Impact "fallback"}}резервный путь без потери записи{{else}}возможная потеря подтверждающих данных{{end}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+      {{end}}
+      <p class="quality-notice">Граф вызовов во время выполнения: {{if .CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}}. {{if lt .CollectionQuality.RuntimeGraphCompletenessRatio 1.0}}Отдельные связи могли не попасть в граф, поэтому он используется только для выбора места проверки.{{else}}Записанные связи доступны для выбора места проверки.{{end}}</p>
+      {{with dataQualityAnalyzerNotes .}}
+      <h3>Ограничения отдельных анализаторов</h3>
+      <div class="finding-list">{{range .}}<div class="finding"><strong>{{.Area}}</strong><div class="muted">{{.Detail}}</div></div>{{end}}</div>
+      {{end}}
+      {{range dataQualityNotices .}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Служебных замечаний к исходным данным нет.</p>{{end}}{{range heapInformation .}}<p class="quality-notice">{{.}}</p>{{end}}
+      {{end}}
+    </div>
+  </details>
+</section>
+{{- end -}}
+
+{{- define "compare-data-quality" -}}
+<section id="data-quality" class="panel technical-quality-panel">
+  <details class="fold">
+    <summary><span>Техническая справка о данных</span><span class="fold-summary-meta">база и проверяемый прогон</span></summary>
+    <div class="fold-body technical-quality-body">
+      {{template "math-collection-limits" .CollectionLimits}}
+      <h3>Базовый прогон</h3>{{template "acquisition-quality" .Baseline}}
+ {{with httpCountCoverageExplanation .Baseline.Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
+ {{with networkLoopAttributionExplanation .Baseline.NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
+      <h3>Проверяемый прогон</h3>{{template "acquisition-quality" .Candidate}}
+ {{with httpCountCoverageExplanation .Candidate.Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
+ {{with networkLoopAttributionExplanation .Candidate.NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
+      {{with .Comparison}}
+      <h3>Базовый прогон</h3>{{template "http-collection-quality" .Baseline}}
+      <h3>Проверяемый прогон</h3>{{template "http-collection-quality" .Candidate}}
+      <p class="help-text">Раздел предназначен для проверки методики сравнения. Он не меняет найденные дельты: ограничения применяются только к показателям, которым нужен соответствующий источник.</p>
+      {{with collectorCapabilities .Baseline}}<h3>Сборщики базы</h3>{{template "collector-capability-grid" .}}{{end}}
+      {{with collectorCapabilities .Candidate}}<h3>Сборщики проверяемого прогона</h3>{{template "collector-capability-grid" .}}{{end}}
+      {{if .Candidate.EvidenceQuality.SchemaVersion}}<h3>Достаточность данных проверяемого прогона</h3><div class="evidence-quality-vector" aria-label="Техническая достаточность данных проверяемого прогона">{{range .Candidate.EvidenceQuality.Dimensions}}<div class="evidence-quality-dimension quality-{{.Status}}" data-tip="{{.Explanation}}"><span>{{.Label}}</span><strong>{{evidenceQualityStatusLabel .Status}}</strong><small>{{.Explanation}}</small></div>{{end}}</div>{{end}}
+      {{with .Baseline.DatabaseCoverage}}{{if .Status}}<p class="quality-notice"><strong>Сбор БД базы:</strong> {{.StatusLabel}} · {{.Explanation}}</p>{{end}}{{end}}
+      {{with .Candidate.DatabaseCoverage}}{{if .Status}}<p class="quality-notice"><strong>Сбор БД проверяемого прогона:</strong> {{.StatusLabel}} · {{.Explanation}}</p>{{end}}{{end}}
+      {{with .Baseline.AndroidComponents}}{{with .Coverage}}<p class="quality-notice"><strong>Android-компоненты базы:</strong> ASM-хуки {{.InstrumentedEntryPoints}} / {{.EntryPoints}}, без ASM-хука {{.UncoveredEntryPoints}}.</p>{{end}}{{end}}
+      {{with .Candidate.AndroidComponents}}{{with .Coverage}}<p class="quality-notice"><strong>Android-компоненты проверяемого прогона:</strong> ASM-хуки {{.InstrumentedEntryPoints}} / {{.EntryPoints}}, без ASM-хука {{.UncoveredEntryPoints}}.</p>{{end}}{{end}}
+      {{if and .Baseline.AnalysisInputs.Status (not .Baseline.AnalysisInputs.Complete)}}<p class="warning"><strong>Часть углублённого анализа базы недоступна:</strong> отсутствуют {{join .Baseline.AnalysisInputs.Missing ", "}}.</p>{{end}}
+      {{if and .Candidate.AnalysisInputs.Status (not .Candidate.AnalysisInputs.Complete)}}<p class="warning"><strong>Часть анализа проверяемого прогона недоступна:</strong> отсутствуют {{join .Candidate.AnalysisInputs.Missing ", "}}.</p>{{end}}
+      {{if .Baseline.CollectionQuality.AsyncAttribution}}<h3>Связь отправки с выполнением в базе</h3>{{template "async-attribution-notice" .Baseline.CollectionQuality}}{{end}}
+      {{if .Candidate.CollectionQuality.AsyncAttribution}}<h3>Связь отправки с выполнением в проверяемом прогоне</h3>{{template "async-attribution-notice" .Candidate.CollectionQuality}}{{end}}
+      {{with .Baseline.CollectionQuality.AsyncLifecycle}}<h3>База</h3>{{template "async-lifecycle-notice" .}}{{end}}
+      {{with .Candidate.CollectionQuality.AsyncLifecycle}}<h3>Проверяемый прогон</h3>{{template "async-lifecycle-notice" .}}{{end}}
+      {{if or .Baseline.CollectionQuality.DiagnosticCompletenessModel .Candidate.CollectionQuality.DiagnosticCompletenessModel}}
+      <p class="quality-notice"><strong>Полнота записи включённых источников: база {{.Baseline.CollectionQuality.DiagnosticCompletenessText}}, проверяемый прогон {{.Candidate.CollectionQuality.DiagnosticCompletenessText}}.</strong> Отключённые источники не снижают этот процент. Это техническая оценка доступных данных, а не вероятность ошибки.</p>
+      <h3>База</h3>
+      <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Baseline.CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+      <h3>Проверяемый прогон</h3>
+      <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Candidate.CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+      {{end}}
+      <p class="quality-notice">Охват процессов: база {{processScopeLabel .Baseline.CollectionQuality.ProcessScope}}, проверяемый прогон {{processScopeLabel .Candidate.CollectionQuality.ProcessScope}}. Счётчики: {{if .Baseline.CollectionQuality.CounterInvariantsValid}}в норме{{else}}нарушены{{end}} / {{if .Candidate.CollectionQuality.CounterInvariantsValid}}в норме{{else}}нарушены{{end}}.</p>
+      <p class="quality-notice">Найденные процессы: база {{.Baseline.CollectionQuality.ObservedProcessCount}}/{{.Baseline.CollectionQuality.ExpectedProcessCount}} ({{if .Baseline.CollectionQuality.ProcessRosterComplete}}полный список{{else}}неполный список{{end}}, групп запусков {{.Baseline.CollectionQuality.RunCohortCount}}/{{if .Baseline.CollectionQuality.RunCohortConsistent}}одинаковые{{else}}смешанные{{end}}), проверяемый прогон {{.Candidate.CollectionQuality.ObservedProcessCount}}/{{.Candidate.CollectionQuality.ExpectedProcessCount}} ({{if .Candidate.CollectionQuality.ProcessRosterComplete}}полный список{{else}}неполный список{{end}}, групп запусков {{.Candidate.CollectionQuality.RunCohortCount}}/{{if .Candidate.CollectionQuality.RunCohortConsistent}}одинаковые{{else}}смешанные{{end}}). Объявления в manifest: {{if .Baseline.CollectionQuality.ProcessRosterDeclarationComplete}}полные{{else}}не подтверждены{{end}} / {{if .Candidate.CollectionQuality.ProcessRosterDeclarationComplete}}полные{{else}}не подтверждены{{end}}.</p>
+      <p class="quality-notice">Приём событий: база {{if .Baseline.CollectionQuality.ExactAdmission}}точный{{else}}по возможности{{end}}, проверяемый прогон {{if .Candidate.CollectionQuality.ExactAdmission}}точный{{else}}по возможности{{end}}. Известно потеряно: {{.Baseline.CollectionQuality.KnownLostEvents}} / {{.Candidate.CollectionQuality.KnownLostEvents}}; сбои ASM-хуков: {{.Baseline.CollectionQuality.RuntimeHookFailures}} / {{.Candidate.CollectionQuality.RuntimeHookFailures}}.</p>
+      <p class="quality-notice">Граф вызовов во время выполнения: базовый прогон {{if .Baseline.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}} / проверяемый прогон {{if .Candidate.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}}. Граф используется для выбора места проверки; отсутствие отдельной связи не доказывает, что вызов не выполнялся.</p>
+      {{with dataQualityAnalyzerNotes .Baseline}}<h3>Ограничения анализаторов базы</h3><div class="finding-list">{{range .}}<div class="finding"><strong>{{.Area}}</strong><div class="muted">{{.Detail}}</div></div>{{end}}</div>{{end}}
+      {{with dataQualityAnalyzerNotes .Candidate}}<h3>Ограничения анализаторов проверяемого прогона</h3><div class="finding-list">{{range .}}<div class="finding"><strong>{{.Area}}</strong><div class="muted">{{.Detail}}</div></div>{{end}}</div>{{end}}
+      {{range dataQualityNotices .Baseline}}<p class="quality-notice">База: {{.}}</p>{{end}}{{range heapInformation .Baseline}}<p class="quality-notice">База: {{.}}</p>{{end}}
+      {{range dataQualityNotices .Candidate}}<p class="quality-notice">Проверяемый прогон: {{.}}</p>{{end}}{{range heapInformation .Candidate}}<p class="quality-notice">Проверяемый прогон: {{.}}</p>{{end}}
+      {{range .QualityWarnings}}<p class="warning">{{.}}</p>{{end}}
+      {{end}}
+    </div>
+  </details>
+</section>
+{{- end -}}
+{{define "heap-class-evidence"}}
+{{with .}}
+<div class="leak-explain-grid">
+ <div><strong>HPROF: экземпляр класса</strong><p>{{.ClassName}}</p>{{if .Holder}}<p>Держатель в дампе: {{.Holder}}{{if .HolderField}} · {{.HolderField}}{{end}}</p>{{end}}</div>
+ <div><strong>Размер экземпляра в дампе</strong><p>{{heapClassSize .}}{{if and (eq .RetainedSizeState "exact") (gt .RetainedObjectCount 0)}} · объектов в поддереве: {{.RetainedObjectCount}}{{end}}</p>{{if .Confidence}}<p>Надёжность: {{heapClassConfidence .Confidence}}</p>{{end}}</div>
+ <div><strong>Достижимость в дампе</strong><p>{{if eq .Reachability "positive"}}есть путь от GC root{{else if eq .Reachability "negative"}}не достижимы от распознанных GC root{{else}}не установлена{{end}}</p></div>
+ {{if .GCRoot}}<div><strong>Корень GC в дампе</strong><p>{{.GCRoot}}{{if .GCRootObjectID}} · <code>{{.GCRootObjectID}}</code>{{end}}</p></div>{{end}}
+ {{if .LeakPattern}}<div><strong>Характер ссылок в дампе</strong><p>{{.LeakPattern}}</p></div>{{end}}
+ {{if .ReferenceMatchers}}<div><strong>Правила совпадения ссылок</strong><p>{{range .ReferenceMatchers}}<code>{{.}}</code> {{end}}</p></div>{{end}}
+ {{if .HolderField}}<div><strong>Проверка экземпляра в дампе</strong><p>Проследите ссылку {{.HolderField}} и проверьте, ожидаема ли её жизнь в момент снятия дампа.</p></div>{{end}}
+ {{if .AlternativePaths}}<div><strong>Другие пути в дампе</strong>{{range .AlternativePaths}}<p>{{range .}}<span>{{.ClassName}}{{if .FieldName}}.{{.FieldName}}{{end}} → </span>{{end}}</p>{{end}}</div>{{end}}
+</div>
+{{end}}
+{{end}}

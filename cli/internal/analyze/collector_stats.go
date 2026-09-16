@@ -3,6 +3,7 @@ package analyze
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"sort"
 	"strings"
 
@@ -152,68 +153,13 @@ const (
 )
 
 type gaugeStats struct {
-	count uint64
-	total uint64
-	max   uint64
-	last  uint64
-	mode  jhlog.MetricMode
+	count     uint64
+	total     uint64
+	totalHigh uint64
+	max       uint64
+	last      uint64
+	mode      jhlog.MetricMode
 }
-
-type routeBurstBucket struct {
-	logIndex uint64
-	second   uint64
-	count    uint64
-}
-
-type routeBurstAccumulator struct {
-	buckets           []routeBurstBucket
-	peak              uint64
-	peakWindowStartMS uint64
-	approximate       bool
-}
-
-func (s *routeBurstAccumulator) add(logIndex, timeMS uint64) {
-	second := timeMS / 1_000
-	for index := range s.buckets {
-		bucket := &s.buckets[index]
-		if bucket.logIndex != logIndex || bucket.second != second {
-			continue
-		}
-		bucket.count++
-		s.updatePeak(*bucket)
-		return
-	}
-	bucket := routeBurstBucket{logIndex: logIndex, second: second, count: 1}
-	if len(s.buckets) < routeBurstRetainedSeconds {
-		s.buckets = append(s.buckets, bucket)
-	} else {
-		oldest := 0
-		for index := 1; index < len(s.buckets); index++ {
-			if routeBurstBucketBefore(s.buckets[index], s.buckets[oldest]) {
-				oldest = index
-			}
-		}
-		s.buckets[oldest] = bucket
-		s.approximate = true
-	}
-	s.updatePeak(bucket)
-}
-
-func (s *routeBurstAccumulator) updatePeak(bucket routeBurstBucket) {
-	if bucket.count > s.peak {
-		s.peak = bucket.count
-		s.peakWindowStartMS = bucket.second * 1_000
-	}
-}
-
-func routeBurstBucketBefore(left, right routeBurstBucket) bool {
-	if left.logIndex != right.logIndex {
-		return left.logIndex < right.logIndex
-	}
-	return left.second < right.second
-}
-
-const routeBurstRetainedSeconds = 8
 
 var httpPhaseNames = [...]string{"queue", "dns", "connect", "tls", "request", "ttfb", "response"}
 
@@ -384,8 +330,9 @@ func (c *collector) finalizeDatabaseAnalysis() *DatabaseAnalysis {
 		Transactions:    c.databaseTransactions.finalizeWithCorrelations(correlations.transactions),
 		Scenarios:       c.databaseScenarios.finalize(),
 		MainCorrelation: correlations.total.Main, BackgroundCorrelation: correlations.total.Background,
-		PeakCallsPerSecond: totals.burst.peak,
-		PeakWindowStartMS:  totals.burst.peakWindowStartMS, RapidRepeats: totals.rapidRepeats,
+		PeakCallsPerSecond:  totals.burst.peak,
+		BurstEstimateStatus: totals.burst.status(),
+		PeakWindowStartMS:   totals.burst.peakWindowStartMS, RapidRepeats: totals.rapidRepeats,
 		DroppedStatementEvents:      store.droppedStatementEvents,
 		DroppedContextEvents:        store.droppedContextEvents,
 		EvictedStatementGroups:      store.evictedStatements,
@@ -424,6 +371,7 @@ func (c *collector) finalizeDatabaseAnalysis() *DatabaseAnalysis {
 			PeakCallsPerSecond: stats.burst.peak, PeakWindowStartMS: stats.burst.peakWindowStartMS,
 			RapidRepeats: stats.rapidRepeats, EstimatedCalls: entry.estimatedCalls,
 			FrequencyEstimateError: entry.frequencyEstimateError,
+			BurstEstimateStatus:    stats.burst.statusWithMissing(entry.frequencyEstimateError > 0),
 		}
 		statement.Contexts = make([]DatabaseStatementContextStats, 0, len(entry.contexts))
 		for index := range entry.contexts {
@@ -443,6 +391,7 @@ func (c *collector) finalizeDatabaseAnalysis() *DatabaseAnalysis {
 				PeakCallsPerSecond: contextStats.burst.peak, PeakWindowStartMS: contextStats.burst.peakWindowStartMS,
 				RapidRepeats: contextStats.rapidRepeats, EstimatedCalls: contextEntry.estimatedCalls,
 				FrequencyEstimateError: contextEntry.frequencyEstimateError,
+				BurstEstimateStatus:    contextStats.burst.statusWithMissing(contextEntry.frequencyEstimateError > 0),
 			}
 			statement.Contexts = append(statement.Contexts, context)
 			mergeDatabaseCorrelation(&statement.MainCorrelation, correlation.Main)
@@ -566,6 +515,13 @@ func databaseOperationName(value jhlog.DatabaseOperation) string {
 }
 
 func maxHTTPConcurrency(intervals []httpInterval) (uint64, uint64) {
+	return scanHTTPIntervals(intervals, nil)
+}
+
+// Start-sorted intervals let the existing end-time heap emit completions in order:
+// every future interval ends no earlier than its start. This reuses stored intervals
+// for an exact rolling peak without a second sort or an extra timestamp array.
+func scanHTTPIntervals(intervals []httpInterval, completions *routeBurstAccumulator) (uint64, uint64) {
 	if len(intervals) == 0 {
 		return 0, 0
 	}
@@ -584,16 +540,37 @@ func maxHTTPConcurrency(intervals []httpInterval) (uint64, uint64) {
 	var peakAtMS uint64
 	for _, interval := range intervals {
 		if interval.logIndex != currentLog {
+			if completions != nil {
+				for len(ends) > 0 {
+					completions.add(currentLog, ends[0])
+					ends = popUint64MinHeap(ends)
+				}
+			}
 			ends = ends[:0]
 			currentLog = interval.logIndex
 		}
 		for len(ends) > 0 && ends[0] <= interval.startMS {
+			if completions != nil {
+				completions.add(currentLog, ends[0])
+			}
 			ends = popUint64MinHeap(ends)
+		}
+		if interval.endMS == interval.startMS {
+			if completions != nil {
+				completions.add(currentLog, interval.endMS)
+			}
+			continue
 		}
 		ends = pushUint64MinHeap(ends, interval.endMS)
 		if uint64(len(ends)) > peak {
 			peak = uint64(len(ends))
 			peakAtMS = interval.startMS
+		}
+	}
+	if completions != nil {
+		for len(ends) > 0 {
+			completions.add(currentLog, ends[0])
+			ends = popUint64MinHeap(ends)
 		}
 	}
 	return peak, peakAtMS
@@ -702,11 +679,15 @@ func ioOperationName(operation jhlog.IOOperationKind) string {
 	}
 }
 
-func (s *gaugeStats) add(value, count, sum, max uint64, mode jhlog.MetricMode) {
+func (s *gaugeStats) add(value, count, sum, max uint64, mode jhlog.MetricMode, high ...uint64) {
+	var sumHigh uint64
+	if len(high) != 0 {
+		sumHigh = high[0]
+	}
 	if count == 0 {
 		count = 1
 	}
-	if sum == 0 {
+	if sum == 0 && sumHigh == 0 {
 		sum = value
 	}
 	if max == 0 {
@@ -718,20 +699,26 @@ func (s *gaugeStats) add(value, count, sum, max uint64, mode jhlog.MetricMode) {
 	if s.mode == jhlog.MetricModeUnknown {
 		s.mode = jhlog.MetricModeAverage
 	}
-	s.count++
-	s.count += count - 1
+	s.count = saturatingUint64Sum(s.count, count)
 	s.last = value
 	switch s.mode {
-	case jhlog.MetricModeLast, jhlog.MetricModeState:
+	case jhlog.MetricModeLast:
 		s.total = value
+		s.totalHigh = 0
 		s.max = max
+	case jhlog.MetricModeState:
+		s.total = value
+		s.totalHigh = 0
+		if max > s.max {
+			s.max = max
+		}
 	case jhlog.MetricModeBooleanRate:
-		s.total += sum
+		s.total, s.totalHigh = addMetricSum(s.total, s.totalHigh, sum, sumHigh)
 		if max > s.max {
 			s.max = max
 		}
 	default:
-		s.total += sum
+		s.total, s.totalHigh = addMetricSum(s.total, s.totalHigh, sum, sumHigh)
 		if max > s.max {
 			s.max = max
 		}
@@ -746,9 +733,24 @@ func (s *gaugeStats) value() uint64 {
 	case jhlog.MetricModeLast, jhlog.MetricModeState:
 		return s.last
 	case jhlog.MetricModeBooleanRate:
-		return (s.total * 100) / s.count
+		if s.totalHigh != 0 {
+			return 100
+		}
+		return boundedPercent(s.total, s.count)
 	}
-	return s.total / s.count
+	return metricSumAverage(s.total, s.totalHigh, s.count)
+}
+
+func boundedPercent(part, total uint64) uint64 {
+	if total == 0 || part == 0 {
+		return 0
+	}
+	if part >= total {
+		return 100
+	}
+	high, low := bits.Mul64(part, 100)
+	quotient, _ := bits.Div64(high, low, total)
+	return quotient
 }
 
 func (s *gaugeStats) extra() string {

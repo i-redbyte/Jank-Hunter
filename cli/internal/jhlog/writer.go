@@ -35,6 +35,10 @@ type recordEncodeState struct {
 }
 
 type eventPayloadEncodeState struct {
+	legacyGaugeSum            bool
+	legacyHTTPFirstByte       bool
+	legacyUIDTraffic          bool
+	legacyHTTPCollectionState bool
 	lastDatabaseTransactionID uint64
 }
 
@@ -129,7 +133,10 @@ func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
 		databaseDescriptors: map[databaseDescriptorKey]uint64{},
 		runtimeBlock:        newRuntimeBlockEncoder(),
 		microPage:           newMicroPageBuilder(),
-		payloadState:        eventPayloadEncodeState{},
+		payloadState: eventPayloadEncodeState{legacyGaugeSum: header.RequiredFeatures&FeatureGaugeWideSum == 0,
+			legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
+			legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+			legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0},
 	}
 	writer.payload.Grow(256)
 	return writer, nil
@@ -193,7 +200,7 @@ func (w *Writer) WriteEvent(event Event) error {
 			return fmt.Errorf("quality snapshot payload is nil")
 		}
 		for id := range event.Quality.Counters {
-			if !IsKnownQualityCounter(id) {
+			if !IsKnownQualityCounter(id) || (w.header.RequiredFeatures&FeatureHTTPCollectionState == 0 && isCollectionWindowCounter(id)) {
 				return fmt.Errorf("unsupported quality counter id %d", id)
 			}
 		}
@@ -564,6 +571,13 @@ func (w *Writer) CloseWithReason(reason SegmentEndReason) error {
 	if w.poisoned != nil {
 		w.closed = true
 		return w.poisoned
+	}
+	if w.header.RequiredFeatures&FeatureHTTPCollectionState == 0 {
+		for id := range w.latestQuality.Counters {
+			if isCollectionWindowCounter(id) {
+				return fmt.Errorf("collection window requires HTTP collection-state feature")
+			}
+		}
 	}
 	if !reason.supported() {
 		return fmt.Errorf("unsupported segment end reason %d", reason)

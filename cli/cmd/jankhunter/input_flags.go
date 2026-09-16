@@ -139,7 +139,11 @@ func canonicalizeLogInputs(paths []string) ([]string, error) {
 }
 
 func canonicalizeFileInputs(paths []string, kind string) ([]string, error) {
-	resolved := make([]canonicalLogInput, 0, len(paths))
+	return canonicalizeFileInputsWithSameFile(paths, kind, os.SameFile)
+}
+
+func canonicalizeFileInputsWithSameFile(paths []string, kind string, sameFile func(os.FileInfo, os.FileInfo) bool) ([]string, error) {
+	index := newFileIdentityIndex(len(paths), sameFile)
 	for _, input := range paths {
 		absolute, err := filepath.Abs(filepath.Clean(input))
 		if err != nil {
@@ -157,49 +161,38 @@ func canonicalizeFileInputs(paths []string, kind string) ([]string, error) {
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("%s input %q is not a regular file", kind, canonical)
 		}
-		duplicate := false
-		for _, existing := range resolved {
-			if os.SameFile(existing.info, info) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			continue
-		}
-		resolved = append(resolved, canonicalLogInput{path: canonical, info: info})
+		index.add(canonical, info)
 	}
-	out := make([]string, len(resolved))
-	for index := range resolved {
-		out[index] = resolved[index].path
+	out := make([]string, len(index.files))
+	for i := range index.files {
+		out[i] = index.files[i].path
 	}
 	return out, nil
 }
 
 func rejectLogInputOverlap(leftName string, left []string, rightName string, right []string) error {
-	leftFiles := make([]canonicalLogInput, 0, len(left))
+	return rejectLogInputOverlapWithSameFile(leftName, left, rightName, right, os.SameFile)
+}
+
+func rejectLogInputOverlapWithSameFile(leftName string, left []string, rightName string, right []string, sameFile func(os.FileInfo, os.FileInfo) bool) error {
+	index := newFileIdentityIndex(len(left), sameFile)
 	for _, path := range left {
 		info, err := os.Stat(path)
 		if err != nil {
 			return fmt.Errorf("stat %s log %q: %w", leftName, path, err)
 		}
-		leftFiles = append(leftFiles, canonicalLogInput{path: path, info: info})
+		index.add(path, info)
 	}
 	for _, path := range right {
 		info, err := os.Stat(path)
 		if err != nil {
 			return fmt.Errorf("stat %s log %q: %w", rightName, path, err)
 		}
-		for _, candidate := range leftFiles {
-			if os.SameFile(candidate.info, info) {
-				return fmt.Errorf(
-					"%s and %s log sets overlap: %q and %q refer to the same file; use independent runs for comparison",
-					leftName,
-					rightName,
-					candidate.path,
-					path,
-				)
-			}
+		if position, _, _ := index.find(path, info); position >= 0 {
+			return fmt.Errorf(
+				"%s and %s log sets overlap: %q and %q refer to the same file; use independent runs for comparison",
+				leftName, rightName, index.files[position].path, path,
+			)
 		}
 	}
 	return nil

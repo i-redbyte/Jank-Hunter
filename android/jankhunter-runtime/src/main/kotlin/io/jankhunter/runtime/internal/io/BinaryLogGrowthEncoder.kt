@@ -39,6 +39,12 @@ internal class BinaryLogGrowthEncoder(
         }
     }
 
+    /** Discarded control records cannot be used as decoder-visible delta bases. */
+    fun discardDeltaBases() {
+        previousHistorySize = 0
+        previousLiveSize = 0
+    }
+
     fun checkpoint(storageBudgetExhausted: Boolean): Boolean {
         val active = binding ?: return false
         val live = active.manager.checkpoint(stats(storageBudgetExhausted)) ?: return false

@@ -1,6 +1,6 @@
 package io.jankhunter.runtime.internal.io
 
-import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue
+import io.jankhunter.runtime.internal.concurrent.BoundedSegmentedQueue
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
 
 internal enum class LogEventLane {
@@ -13,8 +13,9 @@ internal class AsyncEventLanes(
     bulkCapacity: Int,
     criticalCapacity: Int = recommendedCriticalCapacity(bulkCapacity),
 ) {
-    private val critical = BoundedMpscQueue<PendingLogEvent>(criticalCapacity)
-    private val bulk = BoundedMpscQueue<PendingLogEvent>(bulkCapacity)
+    private val critical = BoundedSegmentedQueue<PendingLogEvent>(criticalCapacity)
+    private val bulk = BoundedSegmentedQueue<PendingLogEvent>(bulkCapacity)
+    private var nextSequence = 1L
 
     fun tryOffer(lane: LogEventLane, event: PendingLogEvent): OfferResult {
         return queue(lane).tryOffer(event)
@@ -27,15 +28,22 @@ internal class AsyncEventLanes(
     fun pollNext(): PendingLogEvent? {
         val criticalHead = critical.peek()
         val bulkHead = bulk.peek()
-        return when {
-            criticalHead == null -> bulk.poll()
-            bulkHead == null -> critical.poll()
-            criticalHead.sequence < bulkHead.sequence -> critical.poll()
-            else -> bulk.poll()
+        val event = when {
+            criticalHead?.sequence == nextSequence -> critical.poll()
+            bulkHead?.sequence == nextSequence -> bulk.poll()
+            // Head reads are not an atomic snapshot: an earlier critical publication can
+            // appear between the two reads. Never advance the completion frontier past it.
+            else -> null
         }
+        if (event != null) nextSequence++
+        return event
     }
 
-    private fun queue(lane: LogEventLane): BoundedMpscQueue<PendingLogEvent> {
+    internal fun allocatedSlotCapacityForTest(): Int {
+        return critical.retainedSlotCapacityForTest() + bulk.retainedSlotCapacityForTest()
+    }
+
+    private fun queue(lane: LogEventLane): BoundedSegmentedQueue<PendingLogEvent> {
         return if (lane == LogEventLane.CRITICAL) critical else bulk
     }
 

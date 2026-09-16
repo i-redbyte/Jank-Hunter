@@ -18,6 +18,7 @@ type robustKey struct {
 }
 
 type robustSampleSet struct {
+	account            *collectionAccount
 	values             []float64
 	denseCounts        []uint64
 	denseOffset        uint64
@@ -37,18 +38,19 @@ type robustFrequency struct {
 type robustSampleMap map[robustKey]*robustSampleSet
 
 type robustCollector struct {
+	account *collectionAccount
 	filter  analyze.Filter
 	samples robustSampleMap
 }
 
 func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
+	if c.filter.Active() && !mathEventMatchesFilter(event, dict, c.filter, symbols) {
+		return
+	}
 	switch {
 	case event.HTTP != nil:
-		route := symbols.resolve(dict, event.HTTP.RouteRef)
+		route := symbols.resolveRaw(dict, event.HTTP.RouteRef)
 		owner := symbols.resolve(dict, event.Attribution.Owner)
-		if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
-			return
-		}
 		duration := float64(event.HTTP.DurationMS)
 		c.addValue("Маршрут", route, "HTTP задержка", "мс", duration)
 		c.addValue("Источник", owner, "HTTP задержка", "мс", duration)
@@ -60,9 +62,6 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 		}
 	case event.UIWindow != nil:
 		screen := symbols.resolve(dict, event.Attribution.Screen)
-		if !timelineContainsFilter(screen, c.filter.ScreenContains) {
-			return
-		}
 		if event.UIWindow.P95MS > 0 {
 			c.addValue("Экран", screen, "UI window-p95", "мс", float64(event.UIWindow.P95MS))
 		}
@@ -74,15 +73,9 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 			return
 		}
 		owner := symbols.resolve(dict, event.Attribution.Owner)
-		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
-			return
-		}
 		c.addValue("Источник", owner, "Пауза главного потока", "мс", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
 		className := symbols.resolve(dict, event.Retained.ClassRef)
-		if !timelineContainsFilter(className, c.filter.ClassContains) {
-			return
-		}
 		c.addValue("Источник", className, "Возраст удержанного объекта", "мс", float64(event.Retained.AgeMS))
 	case event.Memory != nil:
 		if event.Memory.PSSKB > 0 {
@@ -95,7 +88,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 			c.addValue("Память", "процесс", "Нативная куча", "КБ", float64(event.Memory.NativeHeapKB))
 		}
 	case event.Metric != nil && event.Type == jhlog.EventGauge:
-		name := symbols.resolve(dict, event.Metric.MetricRef)
+		name := symbols.resolveRaw(dict, event.Metric.MetricRef)
 		c.addMetricValue(name, event.Metric)
 	}
 }
@@ -114,7 +107,10 @@ func (c *robustCollector) addValue(dimension, name, metric, unit string, value f
 	key := robustKey{Dimension: dimension, Name: name, Metric: metric, Unit: unit}
 	set := c.samples[key]
 	if set == nil {
-		set = &robustSampleSet{}
+		if !c.account.reserve(1024 + uint64(len(dimension)+len(name)+len(metric)+len(unit))) {
+			return
+		}
+		set = &robustSampleSet{account: c.account}
 		c.samples[key] = set
 	}
 	set.add(value)
@@ -124,21 +120,52 @@ func (s *robustSampleSet) add(value float64) {
 	if s.seen == 0 {
 		s.nextPromotionCheck = robustSampleSetPromotionThreshold
 	}
-	s.seen++
 	if len(s.denseCounts) > 0 {
 		integer, integral := exactNonNegativeInteger(value)
 		if integral && integer >= s.denseOffset && integer-s.denseOffset < uint64(len(s.denseCounts)) {
 			s.denseCounts[integer-s.denseOffset]++
 		} else {
 			if s.outlierCounts == nil {
+				if !s.account.reserve(mathMapBaseBytes) {
+					return
+				}
 				s.outlierCounts = make(map[uint64]uint64)
 			}
-			s.outlierCounts[math.Float64bits(value)]++
+			bits := math.Float64bits(value)
+			count, exists := s.outlierCounts[bits]
+			if !exists && !s.account.reserve(mathMapEntryBytes+64) {
+				return
+			}
+			s.outlierCounts[bits] = count + 1
 		}
+		s.seen++
 		s.sorted = false
 		return
 	}
+	if len(s.values) == cap(s.values) {
+		oldCapacity := cap(s.values)
+		capacity := 16
+		if oldCapacity > 0 {
+			if oldCapacity > int(^uint(0)>>1)/2 {
+				if s.account != nil {
+					s.account.reject(^uint64(0))
+				}
+				return
+			}
+			capacity = oldCapacity * 2
+		}
+		// Reserve the values and their eventual MAD scratch space. Both old and new storage
+		// stay charged during growth, before the old array can become unreachable.
+		if !s.account.reserveItems(capacity, 16) {
+			return
+		}
+		values := make([]float64, len(s.values), capacity)
+		copy(values, s.values)
+		s.values = values
+		s.account.release(uint64(oldCapacity) * 16)
+	}
 	s.values = append(s.values, value)
+	s.seen++
 	s.sorted = false
 	if s.seen >= s.nextPromotionCheck {
 		if !s.promoteDenseIfBeneficial() && s.nextPromotionCheck <= s.seen {
@@ -195,6 +222,11 @@ func (s *robustSampleSet) promoteDenseIfBeneficial() bool {
 	if span > s.seen/robustSampleSetMinimumCompression {
 		return false
 	}
+	// Counts plus two ordered-frequency/cumulative snapshots. Repeated histogram samples do
+	// not consume additional quota; an optional promotion can retain the exact values instead.
+	if !s.account.canReserve(uint64(span)*64) || !s.account.reserveItems(span, 64) {
+		return false
+	}
 	counts := make([]uint64, span)
 	for _, value := range s.values {
 		integer, _ := exactNonNegativeInteger(value)
@@ -202,6 +234,7 @@ func (s *robustSampleSet) promoteDenseIfBeneficial() bool {
 	}
 	s.denseCounts = counts
 	s.denseOffset = minInteger
+	s.account.release(uint64(cap(s.values)) * 16)
 	s.values = nil
 	s.sorted = false
 	return true
@@ -460,7 +493,7 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 			title := "Найдено устойчивое ухудшение"
 			evidence := []string{fmt.Sprintf("%s · %s · %s", delta.Dimension, delta.Name, delta.Metric)}
 			if delta.Comparable {
-				evidence = append(evidence, fmt.Sprintf("дельта Клиффа %.3f, эффект: %s, доверие: %s", delta.CliffDelta, delta.EffectSize, delta.Confidence))
+				evidence = append(evidence, fmt.Sprintf("дельта Клиффа %.3f, эффект: %s, надёжность: %s", delta.CliffDelta, delta.EffectSize, delta.Confidence))
 			} else {
 				title = "Распределение есть только в одном прогоне"
 				evidence = append(evidence, fmt.Sprintf("наблюдений: базовый прогон=%d, проверяемый прогон=%d; размер эффекта и относительное изменение не рассчитываются", delta.BaselineCount, delta.CandidateCount))

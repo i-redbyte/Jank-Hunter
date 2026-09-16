@@ -369,9 +369,9 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 		}
 		key := influencePackageEdgeKey{from: fromSlot - 1, to: toSlot - 1}
 		aggregated := edgeByKey[key]
-		aggregated.runtimeCount += edge.RuntimeCount
-		aggregated.staticCount += edge.StaticCount
-		aggregated.count += edge.Count
+		aggregated.runtimeCount = saturatingUint64Sum(aggregated.runtimeCount, edge.RuntimeCount)
+		aggregated.staticCount = saturatingUint64Sum(aggregated.staticCount, edge.StaticCount)
+		aggregated.count = saturatingUint64Sum(aggregated.count, edge.Count)
 		aggregated.influence += edge.Influence
 		edgeByKey[key] = aggregated
 	}
@@ -859,7 +859,7 @@ func (b *influenceViewBuilder) nodeExplanation(node InfluenceNode) string {
 	if len(reasons) > 0 {
 		detail = strings.Join(reasons, ", ")
 	}
-	explanation := fmt.Sprintf("%s получил оценку риска %.1f из-за фактических данных: %s. Оценка является эвристикой приоритизации.", node.Label, node.Score, detail)
+	explanation := fmt.Sprintf("%s получил оценку риска %.1f по записанным данным: %s. Это автоматический приоритет проверки.", node.Label, node.Score, detail)
 	path := b.confirmedRuntimePath(node.ClassName)
 	if len(path) > 1 {
 		explanation += " Подтверждённый путь выполнения: " + strings.Join(path, " → ") + "."
@@ -1133,7 +1133,7 @@ func influenceGraphLegend() []InfluenceGraphLegend {
 	return []InfluenceGraphLegend{
 		{Kind: "runtime", Label: "Выполнение", Help: "Вызов записан во время анализируемого прогона."},
 		{Kind: "static", Label: "Только статика", Help: "Связь возможна по байткоду, но её выполнение не записано."},
-		{Kind: "mixed", Label: "Выполнение + статика", Help: "Выполнение подтверждает часть агрегированных или совпавших связей; счётчики показаны отдельно."},
+		{Kind: "mixed", Label: "Выполнение + статика", Help: "Данные выполнения подтверждают часть объединённых или совпавших связей; счётчики показаны отдельно."},
 		{Kind: "connector", Label: "Связующий класс", Help: "Класс соединяет контекстные узлы, но не считается прямым участником экрана или сценария."},
 		{Kind: "aggregate", Label: "Пакет", Help: "Группа классов; оценка равна максимуму дочернего класса."},
 		{Kind: "hprof", Label: "HPROF-дамп", Help: "Есть отдельное подтверждение пути удержания из дампа памяти."},

@@ -1,65 +1,125 @@
 package analyze
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
+
+const maxThresholdConfigBytes = 1 << 20
 
 func LoadThresholdConfig(path string) (ThresholdConfig, error) {
 	if path == "" {
 		return ThresholdConfig{}, nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedFile(path, "threshold config", maxThresholdConfigBytes)
 	if err != nil {
 		return ThresholdConfig{}, err
 	}
 	var config ThresholdConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	if err := decodeStrictJSON(data, &config); err != nil {
 		return ThresholdConfig{}, err
+	}
+	if err := validateThresholdConfig(config); err != nil {
+		return ThresholdConfig{}, err
+	}
+	if !hasGateThreshold(config) {
+		return ThresholdConfig{}, fmt.Errorf("threshold config contains no enabled checks; omit --thresholds to disable the gate")
 	}
 	return config, nil
 }
 
+func validateThresholdConfig(config ThresholdConfig) error {
+	if !validGateSeverity(config.MaxSeverity, true) {
+		return fmt.Errorf("max_severity %q must be one of ok, low, medium, high, critical", config.MaxSeverity)
+	}
+	if !validGateConfidence(config.MinConfidence) {
+		return fmt.Errorf("min_confidence %q must be one of low, medium, high", config.MinConfidence)
+	}
+	for _, name := range sortedGateMetricNames(config.Metrics) {
+		threshold := config.Metrics[name]
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("metrics contains an empty metric name")
+		}
+		if !validGateSeverity(threshold.MaxSeverity, true) {
+			return fmt.Errorf("metrics.%s.max_severity %q is invalid", name, threshold.MaxSeverity)
+		}
+		if err := validateGateMetric(name, threshold, config.MaxSeverity); err != nil {
+			return err
+		}
+	}
+	for _, threshold := range []struct {
+		name  string
+		value *int
+	}{
+		{"max_candidate_total", config.Leaks.MaxCandidateTotal},
+		{"max_new", config.Leaks.MaxNew},
+		{"max_worse", config.Leaks.MaxWorse},
+		{"max_high", config.Leaks.MaxHigh},
+		{"max_runtime_only", config.Leaks.MaxRuntimeOnly},
+	} {
+		if threshold.value != nil && *threshold.value < 0 {
+			return fmt.Errorf("leaks.%s must not be negative", threshold.name)
+		}
+	}
+	if !validGateSeverity(config.Problems.MaxSeverity, false) {
+		return fmt.Errorf("problems.max_severity %q must be one of info, low, medium, high, critical", config.Problems.MaxSeverity)
+	}
+	if !validGateConfidence(config.Problems.MinConfidence) {
+		return fmt.Errorf("problems.min_confidence %q must be one of low, medium, high", config.Problems.MinConfidence)
+	}
+	for _, threshold := range []struct {
+		name  string
+		value *int
+	}{
+		{"max_critical", config.Problems.MaxCritical},
+		{"max_high", config.Problems.MaxHigh},
+		{"max_medium", config.Problems.MaxMedium},
+	} {
+		if threshold.value != nil && *threshold.value < 0 {
+			return fmt.Errorf("problems.%s must not be negative", threshold.name)
+		}
+	}
+	if failures := validateAndroidComponentGateMetrics(androidComponentGateMetrics(config.AndroidComponents)); len(failures) > 0 {
+		return fmt.Errorf("invalid android_components thresholds: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func validGateSeverity(value string, generic bool) bool {
+	if value == "" || value == "low" || value == "medium" || value == "high" || value == "critical" {
+		return true
+	}
+	if generic {
+		return value == "ok"
+	}
+	return value == "info"
+}
+
+func validGateConfidence(value string) bool {
+	return value == "" || value == "low" || value == "medium" || value == "high"
+}
+
 func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
-	if config.MaxSeverity == "" &&
-		config.MinConfidence == "" &&
-		!config.RequireCleanCohorts &&
-		len(config.Metrics) == 0 &&
-		!hasLeakThreshold(config.Leaks) &&
-		!hasProblemThreshold(config.Problems) &&
-		!config.AndroidComponents.Enabled {
+	if err := validateThresholdConfig(config); err != nil {
+		return GateResult{Failed: true, Failures: []string{err.Error()}}
+	}
+	if !hasGateThreshold(config) {
 		return GateResult{}
 	}
-	var failures []string
-	for _, delta := range comparison.Deltas {
-		if !delta.Comparable {
-			continue
-		}
-		threshold := config.Metrics[delta.Name]
-		maxSeverity := firstNonEmpty(threshold.MaxSeverity, config.MaxSeverity)
-		if maxSeverity != "" && severityRank(delta.Severity) > severityRank(maxSeverity) {
-			failures = append(failures, fmt.Sprintf("%s severity=%s exceeds %s", delta.Name, delta.Severity, maxSeverity))
-		}
-		if threshold.MaxRegressionPct > 0 && delta.RegressionPct > threshold.MaxRegressionPct {
-			failures = append(failures, fmt.Sprintf("%s regression_pct=%.2f exceeds %.2f", delta.Name, delta.RegressionPct, threshold.MaxRegressionPct))
-		}
-		if threshold.MaxRegressionAbs > 0 && delta.RegressionAbs > threshold.MaxRegressionAbs {
-			failures = append(failures, fmt.Sprintf("%s regression_abs=%.2f exceeds %.2f", delta.Name, delta.RegressionAbs, threshold.MaxRegressionAbs))
-		}
+	failures := evaluateCompletenessGate(comparison, config)
+	failures = append(failures, evaluateMetricGate(comparison, config)...)
+	if config.MinConfidence != "" && len(comparison.Deltas) == 0 {
+		failures = append(failures, "min_confidence cannot be evaluated: comparison has no metrics")
 	}
 	if config.MinConfidence != "" && len(comparison.Deltas) > 0 {
 		confidence := comparison.Deltas[0].Confidence
 		if confidenceRank(confidence) < confidenceRank(config.MinConfidence) {
 			failures = append(failures, fmt.Sprintf(
-				"confidence=%s below %s (baseline logs/events=%d/%d, candidate logs/events=%d/%d; collection quality: %s, %s; collect 5+ logs and 500+ events per cohort and resolve collection-quality reasons for high confidence)",
+				"confidence=%s below %s (%s; %s; collection quality: %s, %s; collect 5+ independent acquisition groups and 500+ non-session events per cohort and resolve collection-quality reasons for high confidence)",
 				confidence,
 				config.MinConfidence,
-				comparison.Baseline.LogCount,
-				comparison.Baseline.EventCount,
-				comparison.Candidate.LogCount,
-				comparison.Candidate.EventCount,
+				acquisitionGateDetail("baseline", comparison.Baseline),
+				acquisitionGateDetail("candidate", comparison.Candidate),
 				collectionQualityGateDetail("baseline", comparison.Baseline),
 				collectionQualityGateDetail("candidate", comparison.Candidate),
 			))
@@ -102,6 +162,15 @@ func evaluateAndroidComponentGate(comparison AndroidComponentComparison, config 
 		metric, ok := metrics[threshold.name]
 		if !ok || !metric.Comparable {
 			failures = append(failures, fmt.Sprintf("android_components %s cannot be evaluated from this comparison", threshold.name))
+			continue
+		}
+		if !finiteGateValue(metric.BaselineValue) || !finiteGateValue(metric.CandidateValue) ||
+			!finiteGateValue(metric.RegressionAbs) || !finiteGateValue(metric.RegressionPct) {
+			failures = append(failures, fmt.Sprintf("android_components %s cannot be evaluated: non-finite metric value", threshold.name))
+			continue
+		}
+		if threshold.relative && metric.BaselineValue == 0 && metric.RegressionAbs > 0 {
+			failures = append(failures, fmt.Sprintf("android_components %s cannot be evaluated as a percentage: zero baseline", threshold.name))
 			continue
 		}
 		value := metric.RegressionAbs
@@ -157,6 +226,9 @@ func androidComponentGateMetrics(config AndroidComponentGateThreshold) []android
 func validateAndroidComponentGateMetrics(thresholds []androidComponentGateMetric) []string {
 	var failures []string
 	for _, threshold := range thresholds {
+		if !finiteGateValue(threshold.limit) {
+			failures = append(failures, fmt.Sprintf("android_components threshold for %s must be finite", threshold.name))
+		}
 		if threshold.limit < 0 {
 			failures = append(failures, fmt.Sprintf("android_components threshold for %s must not be negative", threshold.name))
 		}
@@ -254,14 +326,14 @@ func evaluateLeakGate(comparison Comparison, config LeakThreshold) []string {
 	report := BuildLeakCompareReport(comparison)
 	stats := report.Stats
 	var failures []string
-	if config.MaxCandidateTotal > 0 && stats.CandidateTotal > config.MaxCandidateTotal {
-		failures = append(failures, fmt.Sprintf("leaks candidate_total=%d exceeds %d", stats.CandidateTotal, config.MaxCandidateTotal))
+	if config.MaxCandidateTotal != nil && stats.CandidateTotal > *config.MaxCandidateTotal {
+		failures = append(failures, fmt.Sprintf("leaks candidate_total=%d exceeds %d", stats.CandidateTotal, *config.MaxCandidateTotal))
 	}
-	if config.MaxNew > 0 && stats.New > config.MaxNew {
-		failures = append(failures, fmt.Sprintf("leaks new=%d exceeds %d", stats.New, config.MaxNew))
+	if config.MaxNew != nil && stats.New > *config.MaxNew {
+		failures = append(failures, fmt.Sprintf("leaks new=%d exceeds %d", stats.New, *config.MaxNew))
 	}
-	if config.MaxWorse > 0 && stats.Worse > config.MaxWorse {
-		failures = append(failures, fmt.Sprintf("leaks worse=%d exceeds %d", stats.Worse, config.MaxWorse))
+	if config.MaxWorse != nil && stats.Worse > *config.MaxWorse {
+		failures = append(failures, fmt.Sprintf("leaks worse=%d exceeds %d", stats.Worse, *config.MaxWorse))
 	}
 	if config.FailOnNew && stats.New > 0 {
 		failures = append(failures, fmt.Sprintf("leaks new=%d but fail_on_new=true", stats.New))
@@ -269,11 +341,11 @@ func evaluateLeakGate(comparison Comparison, config LeakThreshold) []string {
 	if config.FailOnWorse && stats.Worse > 0 {
 		failures = append(failures, fmt.Sprintf("leaks worse=%d but fail_on_worse=true", stats.Worse))
 	}
-	if config.MaxHigh > 0 && report.Candidate.Stats.High > config.MaxHigh {
-		failures = append(failures, fmt.Sprintf("leaks high=%d exceeds %d", report.Candidate.Stats.High, config.MaxHigh))
+	if config.MaxHigh != nil && report.Candidate.Stats.High > *config.MaxHigh {
+		failures = append(failures, fmt.Sprintf("leaks high=%d exceeds %d", report.Candidate.Stats.High, *config.MaxHigh))
 	}
-	if config.MaxRuntimeOnly > 0 && report.Candidate.Stats.RuntimeOnly > config.MaxRuntimeOnly {
-		failures = append(failures, fmt.Sprintf("leaks runtime_only=%d exceeds %d", report.Candidate.Stats.RuntimeOnly, config.MaxRuntimeOnly))
+	if config.MaxRuntimeOnly != nil && report.Candidate.Stats.RuntimeOnly > *config.MaxRuntimeOnly {
+		failures = append(failures, fmt.Sprintf("leaks runtime_only=%d exceeds %d", report.Candidate.Stats.RuntimeOnly, *config.MaxRuntimeOnly))
 	}
 	if config.FailOnNewHigh {
 		for _, delta := range report.Deltas {
@@ -293,11 +365,11 @@ func evaluateLeakGate(comparison Comparison, config LeakThreshold) []string {
 }
 
 func hasLeakThreshold(config LeakThreshold) bool {
-	return config.MaxCandidateTotal > 0 ||
-		config.MaxNew > 0 ||
-		config.MaxWorse > 0 ||
-		config.MaxHigh > 0 ||
-		config.MaxRuntimeOnly > 0 ||
+	return config.MaxCandidateTotal != nil ||
+		config.MaxNew != nil ||
+		config.MaxWorse != nil ||
+		config.MaxHigh != nil ||
+		config.MaxRuntimeOnly != nil ||
 		config.FailOnNew ||
 		config.FailOnWorse ||
 		config.FailOnNewHigh ||

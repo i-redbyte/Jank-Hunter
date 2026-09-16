@@ -11,6 +11,24 @@ internal object OwnerIds {
         return "${className.replace('/', '.')}.$methodName"
     }
 
+    fun coroutineOwner(
+        className: String,
+        enclosingClassName: String? = null,
+        enclosingMethodName: String? = null,
+    ): String {
+        if (enclosingClassName != null && enclosingMethodName != null) {
+            if (enclosingMethodName == "invokeSuspend") return coroutineOwner(enclosingClassName)
+            return readableOwner(enclosingClassName, enclosingMethodName)
+        }
+        val readableClass = className.replace('/', '.')
+        val segments = readableClass.split('$')
+        val functionIndex = segments.indexOfLast { segment ->
+            segment.isNotEmpty() && !segment.first().isDigit() && segment !in GENERATED_NAME_SEGMENTS
+        }
+        if (functionIndex <= 0) return "${segments.first()}.coroutine"
+        return "${segments.take(functionIndex).joinToString("$")}.${segments[functionIndex]}"
+    }
+
     fun methodId(className: String, methodName: String, descriptor: String): Long {
         val internalClassName = className.replace('.', '/')
         return fnv1a64("$internalClassName\u0000$methodName\u0000$descriptor").toLong()
@@ -28,4 +46,6 @@ internal object OwnerIds {
         }
         return hash
     }
+
+    private val GENERATED_NAME_SEGMENTS = setOf("default", "inlined", "lambda", "special")
 }

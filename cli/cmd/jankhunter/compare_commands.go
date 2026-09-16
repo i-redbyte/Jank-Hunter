@@ -73,6 +73,16 @@ func runCompare(args []string) error {
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("compare needs --baseline and --candidate")
 	}
+	if err := rejectOutputInputOverlap(out, []string{thresholdsPath}); err != nil {
+		return err
+	}
+	gateConfig, err := analyze.LoadThresholdConfig(thresholdsPath)
+	if err != nil {
+		return err
+	}
+	builder.outputPath = out
+	baselineHeap.outputPath = out
+	candidateHeap.outputPath = out
 	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
 		return err
 	}
@@ -158,11 +168,7 @@ func runCompare(args []string) error {
 		}
 	}
 	if thresholdsPath != "" {
-		config, err := analyze.LoadThresholdConfig(thresholdsPath)
-		if err != nil {
-			return err
-		}
-		result := analyze.EvaluateGate(comparison, config)
+		result := analyze.EvaluateGate(comparison, gateConfig)
 		if result.Failed {
 			return gateError{failures: result.Failures}
 		}
@@ -209,6 +215,9 @@ func runScorecard(args []string) error {
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("scorecard needs --baseline and --candidate")
 	}
+	builder.outputPath = out
+	baselineHeap.outputPath = out
+	candidateHeap.outputPath = out
 	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
 		return err
 	}

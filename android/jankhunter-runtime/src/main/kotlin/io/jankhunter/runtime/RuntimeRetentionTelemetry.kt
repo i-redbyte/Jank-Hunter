@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import android.app.Activity
+import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.RetainedLifecycleClassifier
@@ -15,39 +16,39 @@ internal class RuntimeRetentionTelemetry(
         recordRetained(className, holder, ageMs, count, RetentionEvidence.TIME_ONLY)
     }
 
-    fun recordWatchedRetained(
-        className: String?,
-        holder: String?,
-        context: JankHunterContext?,
-        ageMs: Long,
-        count: Long,
-        evidence: RetentionEvidence,
-    ) {
-        if (context == null) {
-            recordRetained(className, holder, ageMs, count, evidence, attemptHeapDump = false)
-            return
-        }
-        val explicitOrContextHolder = firstContextValue(holder, context.owner)
-        val retainedHolder = effectiveHolder(className, explicitOrContextHolder)
-        access.callWithContext(context, retainedHolder) {
-            recordRetained(className, retainedHolder, ageMs, count, evidence, attemptHeapDump = false)
-        }
-    }
+    fun bindWatcher(): WatcherSession = WatcherSession(
+        access.writer, state.retainedHeapDumper, access.captureContext(),
+    )
 
-    fun dumpWatchedRetainedHeap(
-        className: String?,
-        holder: String?,
-        context: JankHunterContext?,
-        ageMs: Long,
-        count: Long,
+    /** A late final check owns its original sinks; it cannot resolve a new runtime's resources. */
+    inner class WatcherSession(
+        private val writer: AsyncLogWriter?,
+        private val heapDumper: RetainedHeapDumper?,
+        private val fallbackContext: JankHunterContext,
     ) {
-        val retainedHolder = effectiveHolder(className, firstContextValue(holder, context?.owner))
-        if (context == null) {
-            maybeDumpHeap(className, retainedHolder, ageMs, count)
-            return
+        fun record(
+            className: String?,
+            holder: String?,
+            context: JankHunterContext?,
+            ageMs: Long,
+            count: Long,
+            evidence: RetentionEvidence,
+        ) {
+            val target = writer?.takeIf { it.isAcceptingEvents() } ?: return
+            val captured = context ?: fallbackContext
+            val retainedHolder = effectiveHolder(className, firstContextValue(holder, captured.owner))
+            target.updateProducerContext(captured.screen, retainedHolder, captured.operationId)
+            target.retained(
+                captured.screen, retainedHolder, className, retainedHolder, ageMs, count,
+                foreground = state.writer === target && access.isUiVisible(), evidence = evidence,
+            )
         }
-        access.callWithContext(context, retainedHolder) {
-            maybeDumpHeap(className, retainedHolder, ageMs, count)
+
+        fun dump(className: String?, holder: String?, context: JankHunterContext?, ageMs: Long, count: Long) {
+            val captured = context ?: fallbackContext
+            val retainedHolder = effectiveHolder(className, firstContextValue(holder, captured.owner))
+            writer?.updateProducerContext(captured.screen, retainedHolder, captured.operationId)
+            maybeDumpHeap(writer, heapDumper, className, retainedHolder, ageMs, count)
         }
     }
 
@@ -86,7 +87,6 @@ internal class RuntimeRetentionTelemetry(
         ageMs: Long,
         count: Long,
         evidence: RetentionEvidence,
-        attemptHeapDump: Boolean = true,
     ) {
         val retainedHolder = effectiveHolder(className, holder)
         val context = access.captureContext(ownerOverride = retainedHolder)
@@ -101,17 +101,30 @@ internal class RuntimeRetentionTelemetry(
             foreground = access.isUiVisible(),
             evidence = evidence,
         )
-        if (attemptHeapDump) maybeDumpHeap(className, retainedHolder, ageMs, count)
+        maybeDumpHeap(className, retainedHolder, ageMs, count)
     }
 
     private fun maybeDumpHeap(className: String?, holder: String?, ageMs: Long, count: Long) {
-        val writer = access.writer ?: return
-        val heapDumper = state.retainedHeapDumper ?: return
-        state.heapDumpInProgress.set(true)
+        maybeDumpHeap(access.writer, state.retainedHeapDumper, className, holder, ageMs, count)
+    }
+
+    private fun maybeDumpHeap(
+        writer: AsyncLogWriter?,
+        heapDumper: RetainedHeapDumper?,
+        className: String?,
+        holder: String?,
+        ageMs: Long,
+        count: Long,
+    ) {
+        if (writer == null || heapDumper == null || !writer.isAcceptingEvents()) return
+        if (!state.heapDumpInProgress.compareAndSet(false, true)) {
+            writer.counter("jankhunter.heap_dump.skipped.concurrent.count", 1)
+            return
+        }
+        val thresholdMs = access.config?.mainThreadStallThresholdMs() ?: HEAP_DUMP_ATTRIBUTION_MIN_MS
         val result = try {
             heapDumper.maybeDump(className, holder, ageMs, count)
         } finally {
-            val thresholdMs = access.config?.mainThreadStallThresholdMs() ?: HEAP_DUMP_ATTRIBUTION_MIN_MS
             val graceMs = maxOf(HEAP_DUMP_ATTRIBUTION_MIN_MS, thresholdMs * 2L)
             state.heapDumpAttributionUntilMs.set(elapsedRealtimeMs.getAsLong() + graceMs)
             state.heapDumpInProgress.set(false)

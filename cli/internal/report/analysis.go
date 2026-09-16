@@ -28,24 +28,10 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		summary.EventCount,
 		summary.LogCount,
 	))
-	if summary.CollectionQuality.DiagnosticCompletenessLevel != "" && summary.CollectionQuality.DiagnosticCompletenessLevel != "excellent" {
-		detail := textf(lang,
-			"Diagnostic completeness is %s (%.2f%%).",
-			"Диагностическая полнота: %s (%.2f%%).",
-			diagnosticCompletenessLevelLabel(summary.CollectionQuality.DiagnosticCompletenessLevel),
-			summary.CollectionQuality.DiagnosticCompletenessPercent,
-		)
-		if summary.CollectionQuality.DiagnosticCompletenessExplanation != "" {
-			detail += " " + summary.CollectionQuality.DiagnosticCompletenessExplanation
-		}
-		detail += collectionQualityConsequence(summary.CollectionQuality)
-		builder.add("medium", text(lang, "Data quality is limited", "Качество данных ограничено"), detail)
-	}
-
 	if summary.EventCount < 50 {
 		builder.add("medium", text(lang, "Low sample size", "Малая выборка"), text(lang,
 			"The run is small, so the verdict is useful as smoke-test feedback but not as a release-quality performance conclusion.",
-			"Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное заключение о производительности для релиза.",
+			"Прогон короткий. Вывод подходит для быстрой проверки, но не для решения о релизе.",
 		))
 		builder.recommend(text(lang,
 			"Collect several runs per scenario before trusting small deltas.",
@@ -188,7 +174,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	if len(builder.findingsWithoutCoverage()) == 0 {
 		builder.add("ok", text(lang, "No serious issues confirmed", "Серьезные проблемы не подтверждены"), text(lang,
 			"Available signals did not cross the heuristic thresholds. This conclusion applies only to the collected scenario and enabled telemetry.",
-			"Доступные сигналы не пересекли эвристические пороги. Вывод относится только к записанному сценарию и включенным источникам телеметрии.",
+			"Доступные сигналы не пересекли заданные пороги. Вывод относится только к записанному сценарию и включённому сбору данных.",
 		))
 		builder.recommend(text(lang,
 			"Use this report as a baseline and compare future runs against it.",
@@ -199,21 +185,12 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	return builder.finish()
 }
 
-func collectionQualityConsequence(quality analyze.CollectionQuality) string {
-	if quality.Complete {
-		return ""
-	}
-	return " Часть количественных оценок может быть занижена. Сохранённые места в коде и длительности пригодны для расследования, если рядом с конкретной проблемой не указано иное."
-}
-
 func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis {
 	builder := analysisBuilder{lang: lang, severity: "ok"}
 	high := 0
 	medium := 0
-	incomparable := 0
 	for _, delta := range comparison.Deltas {
 		if !delta.Comparable {
-			incomparable++
 			continue
 		}
 		switch delta.Severity {
@@ -222,7 +199,7 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 			name := compareDeltaLabel(delta.Name)
 			builder.add("high", textf(lang, "High regression: %s", "Высокая регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s → %s (%s), доверие: %s, выборка: %d.",
+				"%s → %s (%s), надёжность: %s, наблюдений: %d.",
 				compareDeltaValue(delta.Baseline),
 				compareDeltaValue(delta.Candidate),
 				compareDeltaChange(delta.Change),
@@ -234,7 +211,7 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 			name := compareDeltaLabel(delta.Name)
 			builder.add("medium", textf(lang, "Medium regression: %s", "Средняя регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s → %s (%s), доверие: %s, выборка: %d.",
+				"%s → %s (%s), надёжность: %s, наблюдений: %d.",
 				compareDeltaValue(delta.Baseline),
 				compareDeltaValue(delta.Candidate),
 				compareDeltaChange(delta.Change),
@@ -245,27 +222,16 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 	}
 
 	for _, warning := range comparison.CohortWarnings {
-		builder.add("medium", text(lang, "Cohort mismatch", "Несовпадение когорт"), warning)
-	}
-	for _, warning := range comparison.QualityWarnings {
-		builder.add("medium", text(lang, "Data quality warning", "Ограничение качества данных"), warning)
+		builder.add("medium", text(lang, "Cohort mismatch", "Разные условия запуска"), warning)
 	}
 	for _, warning := range comparison.ExposureWarnings {
 		builder.add("medium", text(lang, "Scenario duration differs", "Разная длительность сценариев"), warning)
 	}
-	if incomparable > 0 {
-		builder.add("medium", text(lang, "Metrics without comparable data", "Есть метрики без сопоставимых данных"), textf(lang,
-			"%d metrics were not compared because at least one run had no required measurements.",
-			"Метрик без сравнения: %d. Хотя бы в одном прогоне отсутствовали необходимые измерения; нулевые значения не подставлялись.",
-			incomparable,
-		))
-	}
-
 	switch {
 	case high > 0:
 		builder.recommend(text(lang,
 			"Investigate and reproduce high-severity deltas in the same scenario before release.",
-			"До релиза разберите и повторите изменения высокой серьезности в том же сценарии.",
+			"До релиза разберите и повторите изменения высокого приоритета в том же сценарии.",
 		))
 	case medium > 0:
 		builder.recommend(text(lang,
@@ -274,8 +240,8 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 		))
 	default:
 		builder.add("ok", text(lang, "No regressions confirmed", "Регрессии не подтверждены"), text(lang,
-			"Comparable metrics did not produce high or medium regression signals. Missing measurements and cohort warnings still limit the conclusion.",
-			"Сопоставимые метрики не дали сигналов ухудшения высокой или средней серьезности. Отсутствующие измерения и предупреждения о когортах по-прежнему ограничивают вывод.",
+			"Comparable metrics did not produce high or medium regression signals. Repeat the same scenario to confirm the result.",
+			"Сопоставимые метрики не показали заметного ухудшения. Повторите тот же сценарий, чтобы подтвердить результат.",
 		))
 		builder.recommend(text(lang,
 			"Keep the generated report with the build artifacts for future comparison.",
@@ -330,7 +296,7 @@ func (b analysisBuilder) finish() ReportAnalysis {
 		status = text(b.lang, "Serious issues detected", "Есть серьезные проблемы")
 		summary = text(b.lang,
 			"The report contains high-severity signals that should be investigated before treating this run as healthy.",
-			"В отчете есть сигналы высокой серьезности; их нужно разобрать, прежде чем считать прогон здоровым.",
+			"В отчете есть сигналы высокого приоритета. Разберите их, прежде чем считать прогон исправным.",
 		)
 	case "medium":
 		status = text(b.lang, "Needs attention", "Требует внимания")

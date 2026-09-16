@@ -109,7 +109,7 @@ func compareOperationAnalysis(baseline, candidate Summary) []OperationDelta {
 				row.Note = "Описательное сравнение одинаковой операции; причинность требует одинаковых условий и достаточной выборки."
 				if !row.BudgetComparable && (before.Budgeted > 0 || after.Budgeted > 0) {
 					row.Note += fmt.Sprintf(
-						" Изменение нарушений бюджета не учитывалось: нужно минимум %d операций с заданным бюджетом в каждом наборе; база %d, кандидат %d.",
+						" Изменение нарушений бюджета не учитывалось: нужно минимум %d операций с заданным бюджетом в каждом прогоне; база %d, проверяемый прогон %d.",
 						operationComparisonMinSample,
 						before.Budgeted,
 						after.Budgeted,

@@ -35,6 +35,9 @@ func runExport(args []string) error {
 	if out == "" {
 		return writeExportEvents(os.Stdout, paths)
 	}
+	if err := rejectOutputInputOverlap(out, paths); err != nil {
+		return err
+	}
 	return atomicfile.Write(out, 0o644, func(file *os.File) error {
 		return writeExportEvents(file, paths)
 	})
@@ -169,6 +172,8 @@ func runProblems(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("problems needs at least one log file")
 	}
+	builder.outputPath = out
+	heap.outputPath = out
 	options, err := builder.buildForLogs(paths)
 	if err != nil {
 		return err

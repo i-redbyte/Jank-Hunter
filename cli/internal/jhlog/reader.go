@@ -35,7 +35,7 @@ func ReadSessionHeader(path string) (SegmentHeader, error) {
 	if err != nil {
 		return SegmentHeader{}, fmt.Errorf("%s: read .jhlog magic: %w", path, err)
 	}
-	if !bytes.Equal(prefix[:], Magic) {
+	if !supportedFileMagic(prefix[:]) {
 		return SegmentHeader{}, fmt.Errorf("%s: unsupported .jhlog format; expected %s", path, FormatVersionString)
 	}
 	header, err := readHeader(file)
@@ -70,13 +70,14 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 	if prefixErr != nil && !errors.Is(prefixErr, io.EOF) && !errors.Is(prefixErr, io.ErrUnexpectedEOF) {
 		return result, prefixErr
 	}
-	if n < len(Magic) && bytes.Equal(prefix[:n], Magic[:n]) {
+	if n < len(Magic) && (bytes.Equal(prefix[:n], Magic[:n]) || bytes.Equal(prefix[:n], legacyMagicV500[:n])) {
 		return corruptResult(result, fmt.Errorf("incomplete file magic: %d of %d bytes", n, len(Magic)))
 	}
-	if n == len(Magic) && bytes.Equal(prefix[:], Magic) {
+	if n == len(Magic) && supportedFileMagic(prefix[:]) {
+		result.FormatVersion = fmt.Sprintf("%d.%d.%d", prefix[8], prefix[9], prefix[10])
 		digest := sha256.New()
 		_, _ = digest.Write(prefix[:])
-		return streamBinary(file, result, handle, digest)
+		return streamBinary(file, result, handle, digest, bytes.Equal(prefix[:], legacyMagicV500))
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:8], Magic[:8]) {
 		return corruptResult(result, fmt.Errorf(
@@ -96,7 +97,7 @@ func newStreamResult(source string) StreamResult {
 	}
 }
 
-func streamBinary(file *os.File, result StreamResult, handle EventHandler, digest hash.Hash) (StreamResult, error) {
+func streamBinary(file *os.File, result StreamResult, handle EventHandler, digest hash.Hash, legacyStall bool) (StreamResult, error) {
 	tracked := io.TeeReader(file, digest)
 	header, err := readHeader(tracked)
 	if err != nil {
@@ -114,11 +115,16 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 	dict := map[uint64]string{}
 	kinds := map[uint64]DictKind{}
 	segmentState := &segmentDecodeState{
-		stableAliases:       map[uint64]uint64{},
-		stableIDs:           map[uint64]uint64{},
-		databaseDescriptors: map[uint64]databaseDescriptorKey{},
-		runtimeEdges:        make([]runtimeEdgeKey, 0, 256),
-		qualityCounters:     map[uint64]uint64{},
+		legacyStall:               legacyStall,
+		legacyGaugeSum:            header.RequiredFeatures&FeatureGaugeWideSum == 0,
+		legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
+		legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+		legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0,
+		stableAliases:             map[uint64]uint64{},
+		stableIDs:                 map[uint64]uint64{},
+		databaseDescriptors:       map[uint64]databaseDescriptorKey{},
+		runtimeEdges:              make([]runtimeEdgeKey, 0, 256),
+		qualityCounters:           map[uint64]uint64{},
 	}
 	var expectedSequence uint32
 	var dataRecords uint64
@@ -314,6 +320,11 @@ type recordDecodeState struct {
 }
 
 type segmentDecodeState struct {
+	legacyStall               bool
+	legacyGaugeSum            bool
+	legacyHTTPFirstByte       bool
+	legacyUIDTraffic          bool
+	legacyHTTPCollectionState bool
 	stableAliases             map[uint64]uint64
 	stableIDs                 map[uint64]uint64
 	databaseDescriptors       map[uint64]databaseDescriptorKey
@@ -326,6 +337,17 @@ type segmentDecodeState struct {
 	dictionaryTokens          [][]byte
 	dictionaryTokenBytes      int
 	lastDatabaseTransactionID uint64
+	workspace                 segmentDecodeWorkspace
+}
+
+// segmentDecodeWorkspace owns transient page storage for one sequential segment decode. Keeping
+// it separate from the wire state makes the reuse boundary explicit: callbacks receive Event
+// values, and the workspace may be overwritten only after the current physical record is consumed.
+type segmentDecodeWorkspace struct {
+	microPage       decodedMicroPage
+	events          [maxMicroPageRows]Event
+	weights         [maxMicroPageRows]uint64
+	databaseColumns databaseColumnDecoder
 }
 
 func decodeChunkRecords(
@@ -835,4 +857,8 @@ func readSymbolRef(
 		}
 		return SymbolRef{ID: stableID, Namespace: symbolNamespace, Stable: true}, nil
 	}
+}
+
+func supportedFileMagic(prefix []byte) bool {
+	return bytes.Equal(prefix, Magic) || bytes.Equal(prefix, legacyMagicV500)
 }

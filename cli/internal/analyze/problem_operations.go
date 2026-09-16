@@ -60,7 +60,7 @@ func (b *problemBuilder) detectOperations() {
 		if operationAggregationLimited(analysis) {
 			confidence = "low"
 			reasons = append(reasons, "Защитные пределы анализатора отбросили часть замеров операций.")
-			limits = append(limits, "Полный охват операций не доказан из-за превышения пределов кардинальности.")
+			limits = append(limits, "Полный охват операций не доказан: превышено ограничение по числу разных значений.")
 		}
 		if operation.QuantilesApproximated {
 			confidence = capProblemConfidence(confidence, "medium")
@@ -111,7 +111,7 @@ func (b *problemBuilder) detectOperations() {
 			Status: "observed", Confidence: confidence, ConfidenceReasons: uniqueStrings(reasons),
 			Title: title,
 			WhatHappened: fmt.Sprintf(
-				"Из %d завершений: медиана %s мс, граница верхних 10%% — %s мс, граница верхних 5%% — %s мс, максимум %d мс; бюджет нарушен %d раз, неуспешных итогов %d.",
+				"Из %d завершений: медиана %s мс, граница верхних 10%% - %s мс, граница верхних 5%% - %s мс, максимум %d мс; бюджет нарушен %d раз, неуспешных итогов %d.",
 				operation.Count,
 				operationQuantileObserved(operation.P50MS, operation.QuantilesApproximated),
 				operationQuantileObserved(operation.P90MS, operation.QuantilesApproximated),

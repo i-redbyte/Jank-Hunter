@@ -6,6 +6,15 @@ import org.junit.Test
 
 class RetainedLifecycleClassifierTest {
     @Test
+    fun reflectionMetadataUsesBoundedWeakClassCache() {
+        assertTrue(
+            RetainedLifecycleClassifier::class.java.declaredFields.any {
+                it.type.simpleName == "BoundedWeakIdentityCache"
+            },
+        )
+    }
+
+    @Test
     fun fragmentDestroyViewWatchesBindingFieldsInsteadOfFragmentInstance() {
         val fragment = CheckoutFragment()
 

@@ -53,6 +53,9 @@ func decodeHTTPPayload(
 		TLSFailures: uint16(values[19]), Redirects: uint16(values[20]),
 	}
 	httpEvent.Status = StatusClassForHTTPCode(httpEvent.StatusCode)
+	if err := validateHTTPFirstByte(httpEvent, event.Flags, segmentState.legacyHTTPFirstByte); err != nil {
+		return err
+	}
 	if err := validateHTTPEvent(httpEvent, httpEvent.StatusCode); err != nil {
 		return err
 	}

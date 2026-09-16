@@ -31,10 +31,13 @@ func (encoder eventPayloadEncoder) encode(event Event, state *eventPayloadEncode
 	case EventDictionary:
 		return encoder.encodeDictionary(event.Dictionary)
 	case EventSession:
-		return encoder.encodeSession(event.Session)
+		return encoder.encodeSession(event.Session, state.legacyHTTPCollectionState)
 	case EventContext:
-		return encoder.encodeContext(event.Context)
+		return encoder.encodeContext(event.Context, state.legacyUIDTraffic)
 	case EventHTTP:
+		if err := validateHTTPFirstByte(event.HTTP, event.Flags, state.legacyHTTPFirstByte); err != nil {
+			return err
+		}
 		return encoder.encodeHTTP(event.HTTP)
 	case EventUIWindow:
 		return encoder.encodeUIWindow(event.UIWindow)
@@ -45,7 +48,7 @@ func (encoder eventPayloadEncoder) encode(event Event, state *eventPayloadEncode
 	case EventRetained:
 		return encoder.encodeRetained(event.Retained)
 	case EventCounter, EventGauge:
-		return encoder.encodeMetric(event.Metric)
+		return encoder.encodeMetric(event.Metric, event.Type == EventGauge, state.legacyGaugeSum)
 	case EventOperation:
 		return encoder.encodeOperation(event.Operation)
 	case EventLogSpam:

@@ -1,12 +1,19 @@
 package analyze
 
 import (
-	"bufio"
-	"encoding/json"
+	"bytes"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
+)
+
+const (
+	instrumentationDiagnosticsMaxFileBytes = 512 << 20
+	instrumentationDiagnosticsMaxLineBytes = 10 << 20
+	instrumentationDiagnosticsMaxRecords   = 250_000
+	instrumentationDiagnosticsMaxDetails   = 2_000_000
+	instrumentationDiagnosticsMaxMethods   = 65_535
+	instrumentationDiagnosticsMaxTextBytes = 65_535
 )
 
 type InstrumentationDiagnostics struct {
@@ -16,7 +23,10 @@ type InstrumentationDiagnostics struct {
 	MethodCount          int
 	IgnoredMethodCount   int
 	AnnotatedMethodCount int
+	MethodFilterIncluded int
+	MethodFilterExcluded int
 	HookCount            uint64
+	MethodFilterReasons  []InstrumentationSkippedSummary
 	SkippedMethods       []InstrumentationSkippedSummary
 	Hooks                []InstrumentationHookSummary
 	Decisions            []InstrumentationDecisionSummary
@@ -60,98 +70,135 @@ type InstrumentationAnnotationSummary struct {
 }
 
 type InstrumentationClassDiagnostic struct {
-	ClassName        string
-	Methods          int
-	IgnoredMethods   int
-	AnnotatedMethods int
-	HookCount        uint64
-	SkippedMethods   []InstrumentationSkippedSummary
-	Hooks            []InstrumentationHookSummary
-	Decisions        []InstrumentationDecisionSummary
-	Annotations      []InstrumentationAnnotationSummary
+	ClassName            string
+	Methods              int
+	IgnoredMethods       int
+	AnnotatedMethods     int
+	MethodFilterIncluded int
+	MethodFilterExcluded int
+	HookCount            uint64
+	MethodFilterReasons  []InstrumentationSkippedSummary
+	SkippedMethods       []InstrumentationSkippedSummary
+	Hooks                []InstrumentationHookSummary
+	Decisions            []InstrumentationDecisionSummary
+	Annotations          []InstrumentationAnnotationSummary
 }
 
 func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	file, err := os.Open(path)
+	input, err := openBoundedTextInput(
+		path,
+		"instrumentation diagnostics",
+		instrumentationDiagnosticsMaxFileBytes,
+		64*1024,
+		instrumentationDiagnosticsMaxLineBytes,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer input.Close()
 
 	builder := instrumentationDiagnosticsBuilder{
-		source:      path,
-		skipped:     map[string]uint64{},
-		hooks:       map[instrumentationHookKey]uint64{},
-		decisions:   map[instrumentationDecisionKey]uint64{},
-		annotations: map[instrumentationAnnotationKey]uint64{},
+		source:              path,
+		methodFilterReasons: map[string]uint64{},
+		skipped:             map[string]uint64{},
+		hooks:               map[instrumentationHookKey]uint64{},
+		decisions:           map[instrumentationDecisionKey]uint64{},
+		annotations:         map[instrumentationAnnotationKey]uint64{},
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	scanner := input.Scanner
 	lineNumber := 0
+	detailCount := 0
+	seenClasses := make(map[string]struct{})
 	for scanner.Scan() {
 		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
+		if lineNumber > instrumentationDiagnosticsMaxRecords {
+			return nil, fmt.Errorf("%s: instrumentation diagnostics exceed record limit %d", path, instrumentationDiagnosticsMaxRecords)
+		}
 		var record instrumentationDiagnosticsRecord
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
+		if err := decodeStrictJSON(line, &record); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
 		if err := validateArtifactFormat(path, "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
+		if err := validateInstrumentationDiagnosticsRecord(record); err != nil {
+			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
+		}
+		if _, duplicate := seenClasses[record.ClassName]; duplicate {
+			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: duplicate class %q", lineNumber, record.ClassName)
+		}
+		seenClasses[record.ClassName] = struct{}{}
+		recordDetails := len(record.MethodFilterReasons) + len(record.SkippedMethods) + len(record.Hooks) +
+			len(record.Decisions) + len(record.Annotations)
+		if recordDetails > instrumentationDiagnosticsMaxDetails-detailCount {
+			return nil, fmt.Errorf("%s: instrumentation diagnostics exceed detail limit %d", path, instrumentationDiagnosticsMaxDetails)
+		}
+		detailCount += recordDetails
 		builder.add(record)
 	}
-	if err := scanner.Err(); err != nil {
+	if err := input.Err(); err != nil {
 		return nil, err
 	}
 	return builder.finish(), nil
 }
 
 type instrumentationDiagnosticsBuilder struct {
-	source      string
-	classes     []InstrumentationClassDiagnostic
-	skipped     map[string]uint64
-	hooks       map[instrumentationHookKey]uint64
-	decisions   map[instrumentationDecisionKey]uint64
-	annotations map[instrumentationAnnotationKey]uint64
-	methods     int
-	ignored     int
-	annotated   int
-	hookCount   uint64
+	source               string
+	classes              []InstrumentationClassDiagnostic
+	methodFilterReasons  map[string]uint64
+	skipped              map[string]uint64
+	hooks                map[instrumentationHookKey]uint64
+	decisions            map[instrumentationDecisionKey]uint64
+	annotations          map[instrumentationAnnotationKey]uint64
+	methods              int
+	ignored              int
+	annotated            int
+	methodFilterIncluded int
+	methodFilterExcluded int
+	hookCount            uint64
 }
 
 func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnosticsRecord) {
 	class := InstrumentationClassDiagnostic{
-		ClassName:        record.ClassName,
-		Methods:          record.Methods,
-		IgnoredMethods:   record.IgnoredMethods,
-		AnnotatedMethods: record.AnnotatedMethods,
-		SkippedMethods:   skippedSummaries(record.SkippedMethods),
-		Hooks:            hookSummaries(record.Hooks),
-		Decisions:        decisionSummaries(record.Decisions),
-		Annotations:      annotationSummaries(record.Annotations),
+		ClassName:            record.ClassName,
+		Methods:              record.Methods,
+		IgnoredMethods:       record.IgnoredMethods,
+		AnnotatedMethods:     record.AnnotatedMethods,
+		MethodFilterIncluded: record.MethodFilterIncluded,
+		MethodFilterExcluded: record.MethodFilterExcluded,
+		MethodFilterReasons:  skippedSummaries(record.MethodFilterReasons),
+		SkippedMethods:       skippedSummaries(record.SkippedMethods),
+		Hooks:                hookSummaries(record.Hooks),
+		Decisions:            decisionSummaries(record.Decisions),
+		Annotations:          annotationSummaries(record.Annotations),
+	}
+	for _, item := range class.MethodFilterReasons {
+		b.methodFilterReasons[item.Reason] = saturatingUint64Sum(b.methodFilterReasons[item.Reason], item.Count)
 	}
 	for _, item := range class.SkippedMethods {
-		b.skipped[item.Reason] += item.Count
+		b.skipped[item.Reason] = saturatingUint64Sum(b.skipped[item.Reason], item.Count)
 	}
 	for _, item := range class.Hooks {
-		class.HookCount += item.Count
-		b.hookCount += item.Count
-		b.hooks[instrumentationHookKey{
+		class.HookCount = saturatingUint64Sum(class.HookCount, item.Count)
+		b.hookCount = saturatingUint64Sum(b.hookCount, item.Count)
+		key := instrumentationHookKey{
 			intent:    item.Intent,
 			signature: item.Signature,
 			bridge:    item.Bridge,
 			method:    item.Method,
 			line:      item.Line,
-		}] += item.Count
+		}
+		b.hooks[key] = saturatingUint64Sum(b.hooks[key], item.Count)
 	}
 	for _, item := range class.Decisions {
-		b.decisions[instrumentationDecisionKey{
+		key := instrumentationDecisionKey{
 			kind:   item.Kind,
 			module: item.Module,
 			family: item.Family,
@@ -159,20 +206,24 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 			method: item.Method,
 			detail: item.Detail,
 			line:   item.Line,
-		}] += item.Count
+		}
+		b.decisions[key] = saturatingUint64Sum(b.decisions[key], item.Count)
 	}
 	for _, item := range class.Annotations {
-		b.annotations[instrumentationAnnotationKey{
+		key := instrumentationAnnotationKey{
 			owner:             item.Owner,
 			screen:            item.Screen,
 			operation:         item.Operation,
 			operationKind:     item.OperationKind,
 			operationBudgetMS: item.OperationBudgetMS,
-		}] += item.Count
+		}
+		b.annotations[key] = saturatingUint64Sum(b.annotations[key], item.Count)
 	}
 	b.methods += record.Methods
 	b.ignored += record.IgnoredMethods
 	b.annotated += record.AnnotatedMethods
+	b.methodFilterIncluded += record.MethodFilterIncluded
+	b.methodFilterExcluded += record.MethodFilterExcluded
 	b.classes = append(b.classes, class)
 }
 
@@ -199,7 +250,10 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		MethodCount:          b.methods,
 		IgnoredMethodCount:   b.ignored,
 		AnnotatedMethodCount: b.annotated,
+		MethodFilterIncluded: b.methodFilterIncluded,
+		MethodFilterExcluded: b.methodFilterExcluded,
 		HookCount:            b.hookCount,
+		MethodFilterReasons:  skippedMapSummaries(b.methodFilterReasons),
 		SkippedMethods:       skippedMapSummaries(b.skipped),
 		Hooks:                hookMapSummaries(b.hooks),
 		Decisions:            decisions,
@@ -210,15 +264,146 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 }
 
 type instrumentationDiagnosticsRecord struct {
-	Format           int                               `json:"format"`
-	ClassName        string                            `json:"class"`
-	Methods          int                               `json:"methods"`
-	IgnoredMethods   int                               `json:"ignoredMethods"`
-	AnnotatedMethods int                               `json:"annotatedMethods"`
-	SkippedMethods   []instrumentationSkippedRecord    `json:"skippedMethods"`
-	Hooks            []instrumentationHookRecord       `json:"hooks"`
-	Decisions        []instrumentationDecisionRecord   `json:"decisions"`
-	Annotations      []instrumentationAnnotationRecord `json:"annotations"`
+	Format               int                               `json:"format"`
+	ClassName            string                            `json:"class"`
+	Methods              int                               `json:"methods"`
+	IgnoredMethods       int                               `json:"ignoredMethods"`
+	AnnotatedMethods     int                               `json:"annotatedMethods"`
+	MethodFilterIncluded int                               `json:"methodFilterIncluded"`
+	MethodFilterExcluded int                               `json:"methodFilterExcluded"`
+	MethodFilterReasons  []instrumentationSkippedRecord    `json:"methodFilterReasons"`
+	SkippedMethods       []instrumentationSkippedRecord    `json:"skippedMethods"`
+	Hooks                []instrumentationHookRecord       `json:"hooks"`
+	Decisions            []instrumentationDecisionRecord   `json:"decisions"`
+	Annotations          []instrumentationAnnotationRecord `json:"annotations"`
+}
+
+func validateInstrumentationDiagnosticsRecord(record instrumentationDiagnosticsRecord) error {
+	if strings.TrimSpace(record.ClassName) == "" || len(record.ClassName) > instrumentationDiagnosticsMaxTextBytes {
+		return fmt.Errorf("class must contain 1..%d bytes", instrumentationDiagnosticsMaxTextBytes)
+	}
+	if record.Methods < 0 || record.Methods > instrumentationDiagnosticsMaxMethods {
+		return fmt.Errorf("methods must be between 0 and %d", instrumentationDiagnosticsMaxMethods)
+	}
+	if record.IgnoredMethods < 0 || record.IgnoredMethods > record.Methods {
+		return fmt.Errorf("ignoredMethods must be between 0 and methods")
+	}
+	if record.AnnotatedMethods < 0 || record.AnnotatedMethods > record.Methods {
+		return fmt.Errorf("annotatedMethods must be between 0 and methods")
+	}
+	if record.MethodFilterIncluded < 0 || record.MethodFilterExcluded < 0 {
+		return fmt.Errorf("method filter counters must not be negative")
+	}
+	if record.MethodFilterIncluded > record.Methods-record.MethodFilterExcluded {
+		return fmt.Errorf("method filter counters must not exceed methods")
+	}
+	if err := validateInstrumentationSkippedRecords("methodFilterReasons", record.MethodFilterReasons, record.Methods, false); err != nil {
+		return err
+	}
+	if err := validateInstrumentationSkippedRecords("skippedMethods", record.SkippedMethods, record.Methods, true); err != nil {
+		return err
+	}
+	for index, hook := range record.Hooks {
+		if err := validateInstrumentationText(fmt.Sprintf("hooks[%d].intent", index), hook.Intent, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("hooks[%d].signature", index), hook.Signature, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("hooks[%d].bridge", index), hook.Bridge, false); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("hooks[%d].method", index), hook.Method, true); err != nil {
+			return err
+		}
+		if hook.Line < 0 {
+			return fmt.Errorf("hooks[%d].line must not be negative", index)
+		}
+		if hook.Count == 0 {
+			return fmt.Errorf("hooks[%d].count must be positive", index)
+		}
+	}
+	for index, decision := range record.Decisions {
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].kind", index), decision.Kind, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].module", index), decision.Module, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].family", index), decision.Family, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].reason", index), decision.Reason, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].method", index), decision.Method, true); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("decisions[%d].detail", index), decision.Detail, false); err != nil {
+			return err
+		}
+		if decision.Line < 0 {
+			return fmt.Errorf("decisions[%d].line must not be negative", index)
+		}
+		if decision.Count == 0 {
+			return fmt.Errorf("decisions[%d].count must be positive", index)
+		}
+	}
+	var annotationCount uint64
+	for index, annotation := range record.Annotations {
+		if err := validateInstrumentationText(fmt.Sprintf("annotations[%d].owner", index), annotation.Owner, false); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("annotations[%d].screen", index), annotation.Screen, false); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("annotations[%d].operation", index), annotation.Operation, false); err != nil {
+			return err
+		}
+		if err := validateInstrumentationText(fmt.Sprintf("annotations[%d].operationKind", index), annotation.OperationKind, false); err != nil {
+			return err
+		}
+		if annotation.Count == 0 {
+			return fmt.Errorf("annotations[%d].count must be positive", index)
+		}
+		annotationCount = saturatingUint64Sum(annotationCount, annotation.Count)
+	}
+	if annotationCount != uint64(record.AnnotatedMethods) {
+		return fmt.Errorf("annotation counts must equal annotatedMethods")
+	}
+	return nil
+}
+
+func validateInstrumentationSkippedRecords(
+	field string,
+	records []instrumentationSkippedRecord,
+	methodCount int,
+	requireBoundedTotal bool,
+) error {
+	var total uint64
+	for index, item := range records {
+		if err := validateInstrumentationText(fmt.Sprintf("%s[%d].reason", field, index), item.Reason, true); err != nil {
+			return err
+		}
+		if item.Count == 0 || item.Count > uint64(methodCount) {
+			return fmt.Errorf("%s[%d].count must be between 1 and methods", field, index)
+		}
+		total = saturatingUint64Sum(total, item.Count)
+	}
+	if requireBoundedTotal && total > uint64(methodCount) {
+		return fmt.Errorf("%s counts must not exceed methods", field)
+	}
+	return nil
+}
+
+func validateInstrumentationText(field, value string, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(value) > instrumentationDiagnosticsMaxTextBytes {
+		return fmt.Errorf("%s exceeds %d bytes", field, instrumentationDiagnosticsMaxTextBytes)
+	}
+	return nil
 }
 
 type instrumentationSkippedRecord struct {

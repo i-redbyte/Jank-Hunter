@@ -1,5 +1,8 @@
 package io.jankhunter.runtime
 
+import android.os.SystemClock
+import io.jankhunter.runtime.internal.io.QualityCounterId
+
 /** Process runtime port retained by optional network adapters, without exposing the full graph. */
 internal class RuntimeNetworkAdapterTelemetry(
     private val access: RuntimeTelemetryAccess,
@@ -11,15 +14,49 @@ internal class RuntimeNetworkAdapterTelemetry(
     fun isActive(): Boolean = access.isActive()
 
     fun isHttpActive(): Boolean =
-        access.isActive() && access.config?.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP) == true
+        access.isFeatureActive(JankHunterRuntimeFeature.HTTP)
 
     fun isWebSocketActive(): Boolean =
-        access.isActive() && access.config?.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.WEBSOCKETS) == true
+        access.isFeatureActive(JankHunterRuntimeFeature.WEBSOCKETS)
 
     fun captureContext(): JankHunterContextSnapshot = context.captureSnapshot()
 
+    fun captureHttpContext(): JankHunterContextSnapshot {
+        val epoch = access.collectionEpoch?.takeIf { isHttpActive() }
+        val token = epoch?.tokens?.begin(RuntimeAsyncTokenTable.HTTP, SystemClock.elapsedRealtimeNanos()) ?: 0L
+        return context.captureSnapshot(if (token == 0L) 0L else checkNotNull(epoch).id, token)
+    }
+
     fun recordHttp(event: JankHunterHttpEvent) {
-        http.record(access.writer ?: return, event)
+        val snapshot = event.contextSnapshot
+        val epoch = access.collectionEpoch
+        if (snapshot == null || snapshot.collectionEpochId == 0L) {
+            access.rejectAsyncCompletion(RuntimeAsyncTokenTable.REJECT_INVALID)
+            return
+        }
+        if (epoch == null || snapshot.collectionEpochId != epoch.id) {
+            access.rejectAsyncCompletion(RuntimeAsyncTokenTable.REJECT_CLOSED)
+            return
+        }
+        if (snapshot.httpToken != 0L) {
+            if (access.claimAsync(epoch, snapshot.httpToken, RuntimeAsyncTokenTable.HTTP,
+                    JankHunterRuntimeFeature.HTTP) < 0L) return
+        } else {
+            if (!snapshot.completeHttpOnce()) {
+                access.rejectAsyncCompletion(RuntimeAsyncTokenTable.REJECT_CONSUMED)
+                return
+            }
+            if (!isHttpActive()) {
+                access.rejectAsyncCompletion(RuntimeCollectionEpochs.REJECT_FEATURE_DISABLED)
+                return
+            }
+            epoch.writer.recordQuality(QualityCounterId.HTTP_LEGACY_CONTEXT_COMPLETION)
+        }
+        try {
+            http.record(epoch.writer, event, epoch.config)
+        } finally {
+            epoch.tokens.release(snapshot.httpToken)
+        }
     }
 
     fun recordWebSocket(event: JankHunterWebSocketEvent) {

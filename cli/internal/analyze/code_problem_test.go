@@ -131,11 +131,63 @@ func TestCodeProblemRegistryDoesNotTreatRetainedAgeAsMemory(t *testing.T) {
 			feedActivity = row
 		}
 	}
-	if strings.Contains(feedActivity.Evidence, "память=60000 КБ") {
+	if strings.Contains(feedActivity.Evidence, "макс. оценка памяти=60000 КБ") {
 		t.Fatalf("retained age leaked into memory evidence: %+v", feedActivity)
 	}
-	if !strings.Contains(feedActivity.Evidence, "память=4096 КБ") {
+	if !strings.Contains(feedActivity.Evidence, "макс. оценка памяти=4096 КБ") {
 		t.Fatalf("heap retained size missing from evidence: %+v", feedActivity)
+	}
+}
+
+func TestCodeProblemRegistryKeepsTruthfulMemoryTotalsAtUint64Limit(t *testing.T) {
+	rows := BuildCodeProblemRegistry(Summary{MemoryLeaks: []MemoryLeakSuspect{
+		{
+			ClassName: "com.app.LargeBitmap", Holder: "com.app.FeedActivity",
+			Count: ^uint64(0), TimeOnlyCount: ^uint64(0), EstimatedRetainedKB: 8_192,
+			Severity: "high", Score: 10,
+		},
+		{
+			ClassName: "com.app.SmallBitmap", Holder: "com.app.FeedActivity",
+			Count: 1, EstimatedRetainedKB: 4_096, Severity: "medium", Score: 5,
+		},
+	}})
+
+	var activity CodeProblemStats
+	for _, row := range rows {
+		if row.ClassName == "com.app.FeedActivity" {
+			activity = row
+			break
+		}
+	}
+	if !activity.RuntimeEvidence {
+		t.Fatalf("runtime evidence was lost while merging memory signals: %+v", activity)
+	}
+	if !strings.Contains(activity.Evidence, "удержано=18446744073709551615") {
+		t.Fatalf("retained count wrapped around: %q", activity.Evidence)
+	}
+	if !strings.Contains(activity.Evidence, "макс. оценка памяти=8192 КБ") {
+		t.Fatalf("overlapping retained estimates should use the largest value: %q", activity.Evidence)
+	}
+}
+
+func TestCodeProblemRegistrySaturatesMergedRuntimeCounters(t *testing.T) {
+	rows := BuildCodeProblemRegistry(Summary{RuntimeCalls: []RuntimeCallStats{
+		{Caller: "com.app.FeedPresenter.render", Callee: "com.app.FeedView.bind", Count: ^uint64(0), TotalMS: ^uint64(0)},
+		{Caller: "com.app.FeedPresenter.render", Callee: "com.app.FeedView.bind", Count: 1, TotalMS: 1},
+	}})
+
+	var presenter CodeProblemStats
+	for _, row := range rows {
+		if row.ClassName == "com.app.FeedPresenter" {
+			presenter = row
+			break
+		}
+	}
+	if !strings.Contains(presenter.Evidence, "вызовов=18446744073709551615") {
+		t.Fatalf("runtime call count wrapped around: %q", presenter.Evidence)
+	}
+	if len(presenter.Signals) != 1 || presenter.Signals[0].Count != ^uint64(0) || presenter.Signals[0].TotalMS != ^uint64(0) {
+		t.Fatalf("merged runtime signal counters wrapped around: %+v", presenter.Signals)
 	}
 }
 
@@ -309,7 +361,7 @@ func TestCodeProblemEvidenceAllocationBudget(t *testing.T) {
 		runtimeCalls: 8,
 		maxMS:        9,
 	}
-	want := "Сводка сигналов: проблем=1, главный поток=2 мс, сеть=3 мс, медленных кадров=4, логов=5, удержано=6, память=7 КБ, вызовов=8, макс=9 мс."
+	want := "Сводка сигналов: проблем=1, главный поток=2 мс, сеть=3 мс, медленных кадров=4, логов=5, удержано=6, макс. оценка памяти=7 КБ, вызовов=8, макс=9 мс."
 	if got := codeProblemEvidence(accumulator); got != want {
 		t.Fatalf("evidence = %q, want %q", got, want)
 	}

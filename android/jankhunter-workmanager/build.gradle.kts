@@ -17,4 +17,8 @@ dependencies {
     testImplementation(project(":jankhunter-runtime"))
     testImplementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
+
+    androidTestImplementation(project(":jankhunter-runtime"))
+    androidTestImplementation(libs.androidx.work.runtime)
+    androidTestImplementation(libs.bundles.androidx.test)
 }

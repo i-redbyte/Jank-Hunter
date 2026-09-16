@@ -438,7 +438,7 @@
         addGrowthCell(row, formatGrowthDuration(duration));
         addGrowthCell(row, formatGrowthBytes(session.maximum_retained_bytes));
         addGrowthCell(row, formatGrowthBytes(session.generated_bytes));
-        addGrowthCell(row, speed > 0 ? `${formatGrowthBytes(speed)}/с` : '—');
+        addGrowthCell(row, speed > 0 ? `${formatGrowthBytes(speed)}/с` : '-');
         addGrowthCell(row, formatGrowthBytes(session.configured_limit_bytes));
         addGrowthCell(row, String(session.segment_rotation_count || 0));
         addGrowthCell(row, Number(session.limit_reached_count) > 0 ? 'да' : 'нет', Number(session.limit_reached_count) > 0 ? 'log-growth-limit' : '');
@@ -601,7 +601,7 @@
       if (totals.limitReached === 0) {
         periodInsight.className = 'log-growth-insight is-calm';
         insightTitle.textContent = 'Общий лимит не исчерпывался';
-        insightSummary.textContent = `За выбранный период сбор не останавливался по лимиту. Наибольшее заполнение — ${fillPercent.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% общего бюджета; ротаций сегментов — ${totals.rotations.toLocaleString('ru-RU')}.`;
+        insightSummary.textContent = `За выбранный период сбор не останавливался по лимиту. Наибольшее заполнение - ${fillPercent.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% общего бюджета; ротаций сегментов - ${totals.rotations.toLocaleString('ru-RU')}.`;
       } else if (reachedShare >= 0.3) {
         periodInsight.className = 'log-growth-insight is-warning';
         insightTitle.textContent = 'Общий лимит часто исчерпывается';
@@ -612,7 +612,7 @@
         insightSummary.textContent = `Сбор остановился по лимиту в ${totals.reached.toLocaleString('ru-RU')} из ${totals.sessions.toLocaleString('ru-RU')} сессий. Красные точки показывают конкретные запуски.`;
       }
       const averageRate = totals.duration > 0 ? totals.generated * 1000 / totals.duration : 0;
-      insightDetails.textContent = `Средняя скорость создания данных — ${averageRate > 0 ? `${formatGrowthBytes(averageRate)}/с` : 'нет данных'}. Самый объёмный день — ${growthDayDisplay(growthDayISO(peakDay.day_key))}: ${formatGrowthBytes(peakDay.generated_bytes)}.${totals.evicted > 0 ? ` Для соблюдения бюджета удалено ${formatGrowthBytes(totals.evicted)} завершённых архивных журналов.` : ''}`;
+      insightDetails.textContent = `Средняя скорость создания данных - ${averageRate > 0 ? `${formatGrowthBytes(averageRate)}/с` : 'нет данных'}. Самый объёмный день - ${growthDayDisplay(growthDayISO(peakDay.day_key))}: ${formatGrowthBytes(peakDay.generated_bytes)}.${totals.evicted > 0 ? ` Для соблюдения бюджета удалено ${formatGrowthBytes(totals.evicted)} завершённых архивных журналов.` : ''}`;
       periodResult.hidden = false;
       periodInsight.hidden = false;
       periodNotice.hidden = true;

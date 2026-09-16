@@ -45,9 +45,7 @@ internal class InstrumentationMatcher(
 
         private fun matchesAnyBoundary(className: String, packages: Iterable<String>): Boolean {
             return packages.any { packageName ->
-                className == packageName ||
-                    className.length > packageName.length && className.startsWith(packageName) &&
-                    className[packageName.length] == '.'
+                InstrumentationPackages.matchesPackageBoundary(className, packageName)
             }
         }
     }

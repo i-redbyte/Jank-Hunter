@@ -30,6 +30,7 @@ class MetricAggregatorTest {
                 sum: Long,
                 max: Long,
                 mode: MetricAggregationMode,
+            sumHigh: Long,
             ) = Unit
         })
 
@@ -181,7 +182,28 @@ class MetricAggregatorTest {
     }
 
     @Test
-    fun saturatesLongAggregatesInsteadOfWrappingNegative() {
+    fun stateGaugeKeepsPeakWhenLatestValueIsLower() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.gauge("device.thermal.status", 5, MetricAggregationMode.STATE)
+        aggregator.gauge("device.thermal.status", 2, MetricAggregationMode.STATE)
+        aggregator.flush(sink)
+
+        assertEquals(
+            RecordingGauge(
+                value = 2L,
+                count = 2L,
+                sum = 2L,
+                max = 5L,
+                mode = MetricAggregationMode.STATE,
+            ),
+            sink.gauges["device.thermal.status"],
+        )
+    }
+
+    @Test
+    fun countersSaturateAndGaugeSumsRetainUnsignedBits() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val sink = RecordingSink()
 
@@ -192,7 +214,8 @@ class MetricAggregatorTest {
         aggregator.flush(sink)
 
         assertEquals(Long.MAX_VALUE, sink.counters["large.counter"])
-        assertEquals(Long.MAX_VALUE, sink.gauges["large.gauge"]?.sum)
+        assertEquals(Long.MIN_VALUE, sink.gauges["large.gauge"]?.sum)
+        assertEquals(1L shl 62, sink.gauges["large.gauge"]?.value)
         assertTrue((sink.gauges["large.gauge"]?.value ?: -1L) >= 0L)
     }
 
@@ -277,6 +300,7 @@ class MetricAggregatorTest {
                 sum: Long,
                 max: Long,
                 mode: MetricAggregationMode,
+            sumHigh: Long,
             ) = Unit
         }
         val producers = Executors.newFixedThreadPool(workerCount)
@@ -410,6 +434,7 @@ class MetricAggregatorTest {
             sum: Long,
             max: Long,
             mode: MetricAggregationMode,
+            sumHigh: Long,
         ) {
             gauges[name] = RecordingGauge(value, count, sum, max, mode)
         }

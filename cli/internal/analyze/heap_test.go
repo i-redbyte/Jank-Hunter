@@ -7,11 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-func TestInspectAppliesHeapEvidence(t *testing.T) {
+func TestHeapTraversalRecordsStayCompact(t *testing.T) {
+	if size := unsafe.Sizeof(heapParent{}); size > 32 {
+		t.Fatalf("heap parent record = %d bytes, want <= 32", size)
+	}
+}
+
+func TestInspectKeepsHeapClassEvidenceSeparate(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := jhlog.WriteSample(logPath); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -40,21 +47,20 @@ func TestInspectAppliesHeapEvidence(t *testing.T) {
 	if !ok {
 		t.Fatalf("heap-backed CheckoutActivity leak missing: %+v", summary.MemoryLeaks)
 	}
-	if !leak.HeapEvidence {
-		t.Fatalf("expected heap evidence: %+v", leak)
+	if leak.HeapEvidence || leak.WatchedObjectAssociation != EvidenceUnknown {
+		t.Fatal("class match claimed runtime identity")
 	}
-	if leak.EstimatedRetainedKB != 8192 || leak.RetainedObjectCount != 4 {
-		t.Fatalf("heap retained size/count did not apply: %+v", leak)
+	candidate := leak.HeapClassEvidence
+	if candidate == nil || candidate.RetainedSizeKB != 8192 || candidate.RetainedObjectCount != 4 || candidate.GCRoot != "sticky class" || candidate.HolderField != "com.app.checkout.CheckoutPresenter.activity" {
+		t.Fatalf("lost separate heap candidate: %+v", candidate)
 	}
-	if leak.GCRoot != "sticky class" || leak.HolderField != "com.app.checkout.CheckoutPresenter.activity" {
-		t.Fatalf("heap root/holder field did not apply: %+v", leak)
+	if leak.EstimatedRetainedKB == 8192 || leak.RetainedObjectCount != 0 || leak.GCRoot != "" || leak.HolderField != "" {
+		t.Fatal("candidate details entered watched-object fields")
 	}
-	if leak.DominatorTreeConfidence == "" || leak.LeakChainConfidence == "" {
-		t.Fatalf("expected heap confidence strings: %+v", leak)
+	if codeProblemsHaveSignal(summary.CodeProblems, "Подтвержденный путь удержания HPROF") {
+		t.Fatal("code registry confirms class-only association")
 	}
-	if len(summary.CodeProblems) == 0 || !codeProblemsHaveSignal(summary.CodeProblems, "Подтвержденный путь удержания HPROF") {
-		t.Fatalf("expected code registry to include heap-backed leak: %+v", summary.CodeProblems)
-	}
+
 }
 
 func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
@@ -106,6 +112,107 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	}
 }
 
+func TestNormalizeHprofStringReusesPayloadBuffer(t *testing.T) {
+	payload := []byte("java/lang/String")
+
+	if got := normalizeHprofString(payload); got != "java.lang.String" {
+		t.Fatalf("normalizeHprofString() = %q, want java.lang.String", got)
+	}
+	if got := string(payload); got != "java.lang.String" {
+		t.Fatalf("payload = %q, want in-place normalization before string allocation", got)
+	}
+}
+
+func TestHprofClassHierarchyCachesOnlyBoundedLayoutSize(t *testing.T) {
+	parser := newHprofParser("cached-fields.hprof", nil)
+	parser.idSize = 4
+	parser.classes[1] = &hprofClass{id: 1, fields: []hprofField{{name: "base", typ: hprofTypeObject}}}
+	parser.classes[2] = &hprofClass{
+		id:      2,
+		superID: 1,
+		fields:  []hprofField{{name: "child", typ: hprofTypeInt}},
+	}
+
+	if !parser.classHierarchyResolved(2) || !parser.classHierarchyResolved(2) {
+		t.Fatal("complete class hierarchy was not resolved")
+	}
+	if got := parser.instanceLayoutBytes[2]; got != 8 {
+		t.Fatalf("cached instance layout = %d bytes, want 8", got)
+	}
+	if len(parser.instanceLayoutBytes) != 1 {
+		t.Fatalf("layout cache stores %d entries for one requested class", len(parser.instanceLayoutBytes))
+	}
+}
+
+func TestHprofRejectsDuplicateClassDump(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	builder.classDump(&heap, 0x301, 16, nil, nil)
+	builder.classDump(&heap, 0x301, 16, nil, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	path := writeMiniHprof(t, builder.bytes())
+	parser := newHprofParser(path, map[string]struct{}{"com.app.Target": {}})
+	err := parser.parse()
+
+	if err == nil || !strings.Contains(err.Error(), "duplicate HPROF class dump") {
+		t.Fatalf("parse() error = %v, want duplicate class diagnostic", err)
+	}
+}
+
+func TestHprofDefersInstanceUntilCompleteClassHierarchy(t *testing.T) {
+	builder := newMiniHprof()
+	childName := builder.string("com/app/Child")
+	baseName := builder.string("com/app/Base")
+	targetName := builder.string("com/app/Target")
+	fieldName := builder.string("target")
+	builder.loadClass(0x301, childName)
+	builder.loadClass(0x302, baseName)
+	builder.loadClass(0x303, targetName)
+	var heap bytes.Buffer
+	builder.classDumpWithSuper(&heap, 0x301, 0x302, 16, nil, nil)
+	builder.instanceDump(&heap, 0x401, 0x301, []uint32{0x402})
+	builder.classDump(&heap, 0x302, 16, nil, []miniField{{nameID: fieldName, typ: hprofTypeObject}})
+	builder.classDump(&heap, 0x303, 16, nil, nil)
+	builder.instanceDump(&heap, 0x402, 0x303, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
+	child := parser.nodeByID(0x401)
+	edges := parser.nodeEdges(child)
+	if child == nil || len(edges) != 1 || edges[0].to != 0x402 || edges[0].label != "target" {
+		t.Fatalf("inherited reference was lost before superclass dump: %+v", child)
+	}
+}
+
+func TestHprofDoesNotResolveAliasBeforeAllClassDumpsAreKnown(t *testing.T) {
+	builder := newMiniHprof()
+	sharedName := builder.string("com/app/Shared")
+	targetName := builder.string("com/app/Target")
+	firstField := builder.string("first")
+	secondField := builder.string("second")
+	builder.loadClass(0x301, sharedName)
+	builder.loadClass(0x302, sharedName)
+	builder.loadClass(0x303, sharedName)
+	builder.loadClass(0x304, targetName)
+	var heap bytes.Buffer
+	builder.classDump(&heap, 0x301, 16, nil, []miniField{{nameID: firstField, typ: hprofTypeObject}})
+	builder.instanceDump(&heap, 0x401, 0x303, []uint32{0x402})
+	builder.classDump(&heap, 0x302, 16, nil, []miniField{{nameID: secondField, typ: hprofTypeObject}})
+	builder.classDump(&heap, 0x304, 16, nil, nil)
+	builder.instanceDump(&heap, 0x402, 0x304, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
+	alias := parser.nodeByID(0x401)
+	if alias == nil || len(parser.nodeEdges(alias)) != 0 {
+		t.Fatalf("ambiguous alias used a class layout before the dump was complete: %+v", alias)
+	}
+	if !warningContains(parser.degradationWarnings, "не найдено однозначное описание класса") {
+		t.Fatalf("missing ambiguous alias warning: %+v", parser.degradationWarnings)
+	}
+}
+
 func TestLoadHprofHeapEvidenceIgnoresWeakReferenceReferent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "weak.hprof")
 	if err := os.WriteFile(path, syntheticWeakReferenceHprof(), 0o600); err != nil {
@@ -119,8 +226,8 @@ func TestLoadHprofHeapEvidenceIgnoresWeakReferenceReferent(t *testing.T) {
 	if evidence == nil {
 		t.Fatalf("expected empty evidence object")
 	}
-	if len(evidence.Leaks) != 0 {
-		t.Fatalf("weak referent should not create strong leak path: %+v", evidence.Leaks)
+	if len(evidence.Leaks) != 1 || len(evidence.Leaks[0].ReferencePath) != 0 || evidence.Leaks[0].GCRoot != "" {
+		t.Fatalf("weak referent should produce only negative class evidence, not a strong leak path: %+v", evidence.Leaks)
 	}
 }
 
@@ -216,22 +323,39 @@ func TestBestHeapEvidenceRejectsClassOnlyMatchWithDifferentKnownHolder(t *testin
 	}
 }
 
+func TestBestHeapEvidenceMatchesUnreachableClassWithoutInventingHolder(t *testing.T) {
+	heap := &HeapEvidence{Leaks: []HeapLeakEvidence{{
+		ClassName:  "com.app.LeakedView",
+		Source:     "sample.hprof",
+		Confidence: "высокое: объект найден, но не достижим от распознанных корней GC",
+	}}}
+
+	best := bestHeapEvidence(memoryLeakStats{
+		className: "com.app.LeakedView",
+		holder:    "com.app.Screen.onDestroyView",
+	}, heap)
+
+	if best == nil || best.Source != "sample.hprof" {
+		t.Fatalf("class-level negative HPROF evidence was lost: %+v", best)
+	}
+}
+
 func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
 	parser := newHprofParser("large.hprof", map[string]struct{}{"com.app.LeakedActivity": struct{}{}})
 	rootID := uint64(1)
 	parser.roots = []heapRoot{{id: rootID, kind: "sticky class"}}
 	root := parser.ensureNode(rootID, "java.lang.Class", 16)
-	for i := 0; i < maxHprofExactTargets+8; i++ {
+	for i := 0; i < 512+8; i++ {
 		id := uint64(100 + i)
 		shallowSize := uint64(48)
-		if i >= maxHprofExactTargets {
+		if i >= 512 {
 			shallowSize = 4096
 		}
-		parser.nodes[id] = &heapNode{id: id, className: "com.app.LeakedActivity", shallowSize: shallowSize}
+		parser.ensureNode(id, "com.app.LeakedActivity", shallowSize)
 		parser.addEdge(root, id, "static leaked", "static")
 	}
 
-	evidence := parser.evidence()
+	evidence := parser.evidenceWithBudget(&heapTraversalBudget{remaining: 32})
 
 	if evidence == nil || len(evidence.Leaks) != 1 {
 		t.Fatalf("unexpected evidence: %+v", evidence)
@@ -256,15 +380,14 @@ func TestRetainedSizeReusesRootReachabilityAndNeedsOnlyOneBoundedTraversal(t *te
 	parser.addEdge(root, 4, "unrelated", "static")
 
 	rootReachability := parser.rootBFS()
-	budget := &heapTraversalBudget{remaining: 3}
-	scratch := newHeapReachabilityScratch(len(rootReachability))
+	budget := &heapTraversalBudget{remaining: 15}
+	scratch := newHeapReachabilityScratch(len(parser.nodes))
 	size, count, _, exact := parser.retainedSizeForLimited(
 		target.id,
 		parser.rootIDs(),
 		rootReachability,
 		scratch,
 		budget,
-		true,
 	)
 
 	if !exact {
@@ -289,12 +412,12 @@ func TestRetainedSizeScratchDoesNotLeakReachabilityBetweenTargets(t *testing.T) 
 	parser.addEdge(second, 5, "content", "field")
 
 	reachability := parser.rootBFS()
-	scratch := newHeapReachabilityScratch(len(reachability))
+	scratch := newHeapReachabilityScratch(len(parser.nodes))
 	firstSize, firstCount, _, firstExact := parser.retainedSizeForLimited(
-		first.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 16}, true,
+		first.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 18},
 	)
 	secondSize, secondCount, _, secondExact := parser.retainedSizeForLimited(
-		second.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 16}, true,
+		second.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 18},
 	)
 
 	if !firstExact || firstSize != 96 || firstCount != 2 {
@@ -417,6 +540,78 @@ func TestHprofUnreachableRootIsConsumedButNotRetained(t *testing.T) {
 	}
 }
 
+func TestHprofReportsTargetThatIsPresentButUnreachableFromGCRoots(t *testing.T) {
+	builder := newMiniHprof()
+	targetName := builder.string("com/app/Target")
+	const (
+		targetClassID = uint32(0x301)
+		targetID      = uint32(0x401)
+		rootID        = uint32(0x501)
+	)
+	builder.loadClass(targetClassID, targetName)
+	var heap bytes.Buffer
+	heap.WriteByte(0x05)
+	writeU4(&heap, rootID)
+	builder.classDump(&heap, targetClassID, 16, nil, nil)
+	builder.instanceDump(&heap, targetID, targetClassID, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := newHprofParser(writeMiniHprof(t, builder.bytes()), map[string]struct{}{"com.app.Target": {}})
+	if err := parser.parse(); err != nil {
+		t.Fatalf("parse() error = %v", err)
+	}
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 {
+		t.Fatalf("unreachable target must remain distinguishable from an absent target: %+v", evidence)
+	}
+	target := evidence.Leaks[0]
+	if target.Reachability != EvidenceNegative {
+		t.Fatalf("complete graph lost explicit negative class reachability: %s", target.Reachability)
+	}
+	if target.ClassName != "com.app.Target" || len(target.ReferencePath) != 0 || target.GCRoot != "" {
+		t.Fatalf("unreachable target was reported as a reachable leak: %+v", target)
+	}
+	if !strings.Contains(target.Confidence, "не достижим") {
+		t.Fatalf("unreachable target confidence is ambiguous: %q", target.Confidence)
+	}
+}
+
+func TestHprofWithoutRecognizedGCRootsDoesNotClaimTargetIsUnreachable(t *testing.T) {
+	parser := newHprofParser("rootless.hprof", map[string]struct{}{"com.app.Target": {}})
+	parser.ensureNode(1, "com.app.Target", 16)
+
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 {
+		t.Fatalf("rootless target evidence = %+v", evidence)
+	}
+	confidence := evidence.Leaks[0].Confidence
+	if evidence.Leaks[0].Reachability != EvidenceUnknown {
+		t.Fatalf("rootless graph must have unknown reachability: %s", evidence.Leaks[0].Reachability)
+	}
+	if strings.Contains(confidence, "не достижим") || !strings.Contains(confidence, "нет распознанных GC root") {
+		t.Fatalf("rootless HPROF produced a false reachability conclusion: %q", confidence)
+	}
+}
+
+func TestHprofTargetLimitPrefersReachableObjects(t *testing.T) {
+	parser := newHprofParser("many-targets.hprof", map[string]struct{}{"com.app.Target": {}})
+	root := parser.ensureNode(1, "com.app.Root", 16)
+	parser.roots = append(parser.roots, heapRoot{id: root.id, kind: "ROOT UNKNOWN"})
+	for id := uint64(2); id < uint64(maxHprofTargets)+2; id++ {
+		parser.ensureNode(id, "com.app.Target", 16)
+	}
+	reachable := parser.ensureNode(uint64(maxHprofTargets)+2, "com.app.Target", 16)
+	parser.addEdge(root, reachable.id, "retained", "field")
+
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 || len(evidence.Leaks[0].ReferencePath) == 0 {
+		t.Fatalf("reachable target after bounded unreachable objects was lost: %+v", evidence)
+	}
+}
+
 func TestHprofPrimitiveArrayNoDataKeepsNextSubrecordAligned(t *testing.T) {
 	builder := newMiniHprof()
 	var heap bytes.Buffer
@@ -430,7 +625,7 @@ func TestHprofPrimitiveArrayNoDataKeepsNextSubrecordAligned(t *testing.T) {
 	builder.record(hprofTagHeapDump, heap.Bytes())
 
 	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
-	node := parser.nodes[0x301]
+	node := parser.nodeByID(0x301)
 	if node == nil || node.className != "int[]" || node.shallowSize != 28 {
 		t.Fatalf("primitive array without data = %+v, want int[3] with 28-byte shallow size", node)
 	}
@@ -760,10 +955,14 @@ func (b *miniHprof) record(tag byte, body []byte) {
 }
 
 func (b *miniHprof) classDump(out *bytes.Buffer, classID uint32, instanceSize uint32, staticFields []miniStaticField, fields []miniField) {
+	b.classDumpWithSuper(out, classID, 0, instanceSize, staticFields, fields)
+}
+
+func (b *miniHprof) classDumpWithSuper(out *bytes.Buffer, classID, superID uint32, instanceSize uint32, staticFields []miniStaticField, fields []miniField) {
 	out.WriteByte(hprofSubClassDump)
 	writeU4(out, classID)
 	writeU4(out, 0)
-	writeU4(out, 0)
+	writeU4(out, superID)
 	for i := 0; i < 5; i++ {
 		writeU4(out, 0)
 	}

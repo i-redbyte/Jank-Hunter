@@ -335,7 +335,7 @@ func signalContextCompareRows(baseline, candidate analyze.Summary) []signalConte
 		if hasBaseline && hasCandidate && !comparable {
 			note = "нет метрик с сопоставимым покрытием"
 		} else if hasBaseline && hasCandidate && !countsComparable {
-			note = "количества не сравниваются из-за разной длительности; статус рассчитан по доступным latency/UI метрикам"
+			note = "количества не сравниваются из-за разной длительности; статус рассчитан по доступным задержкам и UI-метрикам"
 		}
 		rows = append(rows, signalContextCompareRow{
 			Screen:                firstNonEmpty(c.Screen, b.Screen),
@@ -389,9 +389,9 @@ func comparePresenceNote(hasBaseline, hasCandidate bool, entity string) string {
 	case hasBaseline && hasCandidate:
 		return ""
 	case hasCandidate:
-		return "новый " + entity + " кандидата; дельта не вычисляется"
+		return entity + " есть только в проверяемом прогоне; изменение не рассчитано"
 	default:
-		return entity + " есть только в базе; дельта не вычисляется"
+		return entity + " есть только в базе; изменение не рассчитано"
 	}
 }
 
@@ -463,6 +463,9 @@ func reportValue(value string, fallback string) string {
 }
 
 func displayDateText(value string) string {
+	if !mightContainISODate(value) {
+		return value
+	}
 	return isoDatePattern.ReplaceAllStringFunc(value, func(candidate string) string {
 		parsed, err := time.Parse("2006-01-02", candidate)
 		if err != nil {
@@ -470,6 +473,26 @@ func displayDateText(value string) string {
 		}
 		return parsed.Format("02.01.2006")
 	})
+}
+
+func mightContainISODate(value string) bool {
+	for start := 0; start+10 <= len(value); start++ {
+		candidate := value[start : start+10]
+		if candidate[4] != '-' || candidate[7] != '-' {
+			continue
+		}
+		valid := true
+		for _, index := range [...]int{0, 1, 2, 3, 5, 6, 8, 9} {
+			if candidate[index] < '0' || candidate[index] > '9' {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return true
+		}
+	}
+	return false
 }
 
 func reportValueHint(value string, fallback string, field string) template.HTML {
@@ -589,17 +612,17 @@ func missingDataHint(field string) string {
 	case "screen":
 		return "Экран определяется по обратным вызовам жизненного цикла Activity. Если он не записался, ActivityTracker не подключился к Application или событие произошло до первого обратного вызова Activity."
 	case "operation":
-		return "Операция появляется из startOperation/traceOperation, @JankHunterOperation или автоматического измерения взаимодействий. Если её нет, участок не был размечен либо инструментирование не попало в пакет."
+		return "Операция приходит из startOperation/traceOperation, @JankHunterOperation или автоматического измерения UI-действий. Если её нет, участок не размечен или его пакет исключён из обработки."
 	case "owner":
-		return "Источник приходит из встроенных символов преобразования байткода, @JankHunterOwner, @JankHunterOperation, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции."
+		return "Источник приходит из данных преобразования байткода, @JankHunterOwner, @JankHunterOperation, withOwner или ownerHint. Если его нет, отчёт не может связать работу с кодом."
 	case "log-source":
-		return "Источник логов определяется при инструментировании вызовов Log/Timber. Если его нет, вызов прошёл без ASM-инструментации или сигнатура логгера не поддержана текущим адаптером."
+		return "Источник логов определяется по ASM-хукам вызовов Log и Timber. Если его нет, ASM-хук не был добавлен или текущий адаптер не поддерживает сигнатуру логгера."
 	case "route", "network-route":
-		return "Маршрут определяется при инструментировании OkHttp/HTTP. Если он отсутствует при сетевых симптомах, проверьте настройки instrument.okhttp и includePackages, полный охват приложения и поддержку используемой версии OkHttp."
+		return "Маршрут определяется по ASM-хукам OkHttp и HTTP. Если его нет, проверьте instrument.okhttp, includePackages и поддержку вашей версии OkHttp."
 	case "query", "sql":
 		return "SQL-шаблон не записан. Откройте указанное рядом место вызова DAO или SQLite и проверьте выполняемый им запрос."
 	case "call", "caller", "callee":
-		return "Узел графа вызовов определяется инструментированием runtimeCallGraph. Если его нет, вызов не попал в указанные пакеты или связь не удалось сохранить из-за ограничения объёма данных."
+		return "Узел графа вызовов создаёт runtimeCallGraph. Если его нет, пакет исключён из обработки или связь не поместилась в лимит данных."
 	case "stack":
 		return "Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра."
 	case "holder":
@@ -615,7 +638,7 @@ func missingDataHint(field string) string {
 	case "network":
 		return "Тип сети записывается в снимке контекста через ConnectivityManager/NetworkCapabilities. Если его нет, снимок не успел выполниться или система не вернула активную сеть."
 	case "cohort":
-		return "Когорта собирается из сведений об устройстве, приложении, сборке, процессе и сети. Неопределённая часть означает, что соответствующее начальное событие или снимок контекста не попал в журнал."
+		return "Группа запуска определяется по устройству, версии приложения, сборке, процессу и сети. Неизвестная часть означает, что начальные данные не попали в журнал."
 	default:
 		return ""
 	}
@@ -743,6 +766,17 @@ func int64Magnitude(value int64) uint64 {
 func saturatingAddUint64(left, right uint64) uint64 {
 	if ^uint64(0)-left < right {
 		return ^uint64(0)
+	}
+	return left + right
+}
+
+func saturatingAddNonNegativeInt(left, right int) int {
+	if right <= 0 {
+		return left
+	}
+	maximum := int(^uint(0) >> 1)
+	if left >= maximum-right {
+		return maximum
 	}
 	return left + right
 }

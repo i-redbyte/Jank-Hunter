@@ -28,6 +28,10 @@ internal class RuntimeGraphProducer {
     val backpressureCount = AtomicLong()
     @JvmField
     val backpressureNanos = AtomicLong()
+    @JvmField
+    val registering = AtomicLong()
+    @JvmField
+    val storageSkippedEntries = AtomicLong()
 }
 
 /** State written by the single graph consumer thread. */
@@ -82,4 +86,14 @@ internal class RuntimeGraphProducerState(
     val epoch: Long,
     val stack: RuntimeCallStack,
     val buffer: RuntimeGraphAggregateBuffer,
-)
+    private val storageBudget: RuntimeGraphStorageBudget? = null,
+) {
+    private val released = AtomicBoolean()
+
+    fun releaseStorage() {
+        if (!released.compareAndSet(false, true)) return
+        stack.releaseStorage()
+        buffer.releaseStorage()
+        storageBudget?.release(RuntimeGraphStorageBudget.METADATA_BYTES)
+    }
+}

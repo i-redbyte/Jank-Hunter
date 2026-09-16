@@ -1,8 +1,6 @@
 package analyze
 
 import (
-	"math"
-	"math/bits"
 	"sort"
 	"strings"
 
@@ -16,39 +14,30 @@ const (
 )
 
 type metricAggregate struct {
-	count uint64
-	sum   uint64
-	max   uint64
+	count   uint64
+	sum     uint64
+	sumHigh uint64
+	max     uint64
 }
 
 func (a *metricAggregate) add(observation metricObservation) {
 	a.count = saturatingUint64Sum(a.count, observation.count)
-	a.sum = saturatingUint64Sum(a.sum, observation.sum)
+	a.sum, a.sumHigh = addMetricSum(a.sum, a.sumHigh, observation.sum, observation.sumHigh)
 	a.max = maxUint64(a.max, observation.maximum)
 }
 
 func (a metricAggregate) average() uint64 {
-	if a.count == 0 {
-		return 0
-	}
-	return a.sum / a.count
+	return metricSumAverage(a.sum, a.sumHigh, a.count)
 }
 
 func (a metricAggregate) averageScaled(scale uint64) uint64 {
-	if a.count == 0 || scale == 0 {
-		return 0
-	}
-	high, low := bits.Mul64(a.sum, scale)
-	if high >= a.count {
-		return math.MaxUint64
-	}
-	quotient, _ := bits.Div64(high, low, a.count)
-	return quotient
+	return metricSumScaledAverage(a.sum, a.sumHigh, a.count, scale)
 }
 
 type metricObservation struct {
 	count   uint64
 	sum     uint64
+	sumHigh uint64
 	maximum uint64
 }
 
@@ -72,18 +61,20 @@ func observationOf(event jhlog.Event) metricObservation {
 	if metric.Count == 0 {
 		maximum = metric.Value
 	}
-	return metricObservation{count: count, sum: sum, maximum: maximum}
+	return metricObservation{count: count, sum: sum, sumHigh: metric.SumHigh, maximum: maximum}
 }
 
 type asyncExecutorAggregate struct {
-	started   uint64
-	failures  uint64
-	wait      metricAggregate
-	service   metricAggregate
-	queue     metricAggregate
-	active    metricAggregate
-	pool      metricAggregate
-	completed metricAggregate
+	started           uint64
+	failures          uint64
+	wait              metricAggregate
+	scheduledDelay    metricAggregate
+	scheduledLateness metricAggregate
+	service           metricAggregate
+	queue             metricAggregate
+	active            metricAggregate
+	pool              metricAggregate
+	completed         metricAggregate
 }
 
 type asyncTaskKey struct {
@@ -92,8 +83,14 @@ type asyncTaskKey struct {
 }
 
 type asyncTaskAggregate struct {
-	duration metricAggregate
-	failures uint64
+	duration          metricAggregate
+	active            metricAggregate
+	suspended         metricAggregate
+	failures          uint64
+	suspensions       uint64
+	threadMigrations  uint64
+	segmentedFailures uint64
+	cancellations     uint64
 }
 
 type asyncAnalysisAccumulator struct {
@@ -119,6 +116,10 @@ func (a *asyncAnalysisAccumulator) add(name string, event jhlog.Event) {
 			aggregate.failures = saturatingUint64Sum(aggregate.failures, observation.sum)
 		case "wait_ms":
 			aggregate.wait.add(observation)
+		case "scheduled_delay_ms":
+			aggregate.scheduledDelay.add(observation)
+		case "scheduled_lateness_ms":
+			aggregate.scheduledLateness.add(observation)
 		case "service_ms":
 			aggregate.service.add(observation)
 		case "queue_depth":
@@ -146,10 +147,23 @@ func (a *asyncAnalysisAccumulator) add(name string, event jhlog.Event) {
 		a.tasks[key] = aggregate
 	}
 	observation := observationOf(event)
-	if metric == "duration_ms" {
+	switch metric {
+	case "duration_ms":
 		aggregate.duration.add(observation)
-	} else {
+	case "failure.count":
 		aggregate.failures = saturatingUint64Sum(aggregate.failures, observation.sum)
+	case "active_duration_ms":
+		aggregate.active.add(observation)
+	case "suspended_duration_ms":
+		aggregate.suspended.add(observation)
+	case "suspension.count":
+		aggregate.suspensions = saturatingUint64Sum(aggregate.suspensions, observation.sum)
+	case "thread_migration.count":
+		aggregate.threadMigrations = saturatingUint64Sum(aggregate.threadMigrations, observation.sum)
+	case "segmented_failure.count":
+		aggregate.segmentedFailures = saturatingUint64Sum(aggregate.segmentedFailures, observation.sum)
+	case "segmented_cancellation.count":
+		aggregate.cancellations = saturatingUint64Sum(aggregate.cancellations, observation.sum)
 	}
 }
 
@@ -160,7 +174,7 @@ func parseExecutorMetric(name string) (string, string, bool) {
 	value := strings.TrimPrefix(name, asyncExecutorPrefix)
 	for _, suffix := range []string{
 		"completed_task_count", "started.count", "failure.count", "queue_depth",
-		"active_count", "pool_size", "service_ms", "wait_ms",
+		"active_count", "pool_size", "service_ms", "scheduled_delay_ms", "scheduled_lateness_ms", "wait_ms",
 	} {
 		separator := "." + suffix
 		if strings.HasSuffix(value, separator) && len(value) > len(separator) {
@@ -175,15 +189,36 @@ func parseAsyncOwnerMetric(name string) (string, string, string, bool) {
 		return "", "", "", false
 	}
 	value := strings.TrimPrefix(name, asyncOwnerPrefix)
-	for _, kind := range []string{"handler_runnable", "coroutine"} {
-		for _, metric := range []string{"duration_ms", "failure.count"} {
-			suffix := "." + kind + "." + metric
-			if strings.HasSuffix(value, suffix) && len(value) > len(suffix) {
-				return strings.TrimSuffix(value, suffix), kind, metric, true
-			}
+	for _, candidate := range asyncTaskKinds {
+		separatorIndex := strings.LastIndex(value, candidate.separator)
+		if separatorIndex <= 0 {
+			continue
+		}
+		metric := value[separatorIndex+len(candidate.separator):]
+		if isAsyncTaskMetric(metric) {
+			return value[:separatorIndex], candidate.kind, metric, true
 		}
 	}
 	return "", "", "", false
+}
+
+func isAsyncTaskMetric(metric string) bool {
+	switch metric {
+	case "duration_ms", "failure.count", "active_duration_ms", "suspended_duration_ms",
+		"suspension.count", "thread_migration.count",
+		"segmented_failure.count", "segmented_cancellation.count":
+		return true
+	default:
+		return false
+	}
+}
+
+var asyncTaskKinds = [...]struct {
+	separator string
+	kind      string
+}{
+	{separator: ".handler_runnable.", kind: "handler_runnable"},
+	{separator: ".coroutine.", kind: "coroutine"},
 }
 
 func (a *asyncAnalysisAccumulator) finalize() *AsyncAnalysis {
@@ -198,6 +233,8 @@ func (a *asyncAnalysisAccumulator) finalize() *AsyncAnalysis {
 		result.Executors = append(result.Executors, AsyncExecutorStats{
 			Name: name, Started: aggregate.started, Failures: aggregate.failures,
 			WaitSamples: aggregate.wait.count, AvgWaitMS: aggregate.wait.average(), MaxWaitMS: aggregate.wait.max,
+			ScheduledDelaySamples: aggregate.scheduledDelay.count, AvgScheduledDelayMS: aggregate.scheduledDelay.average(), MaxScheduledDelayMS: aggregate.scheduledDelay.max,
+			ScheduledLatenessSamples: aggregate.scheduledLateness.count, AvgScheduledLatenessMS: aggregate.scheduledLateness.average(), MaxScheduledLatenessMS: aggregate.scheduledLateness.max,
 			ServiceSamples: aggregate.service.count, AvgServiceMS: aggregate.service.average(), MaxServiceMS: aggregate.service.max,
 			QueueSamples: aggregate.queue.count, AvgQueueDepthX100: aggregate.queue.averageScaled(100), MaxQueueDepth: aggregate.queue.max,
 			ActiveSamples: aggregate.active.count, AvgActiveCountX100: aggregate.active.averageScaled(100), MaxActiveCount: aggregate.active.max,
@@ -208,7 +245,12 @@ func (a *asyncAnalysisAccumulator) finalize() *AsyncAnalysis {
 		result.Tasks = append(result.Tasks, AsyncTaskStats{
 			Kind: key.kind, Owner: key.owner, DurationSamples: aggregate.duration.count,
 			AvgDurationMS: aggregate.duration.average(), MaxDurationMS: aggregate.duration.max,
-			Failures: aggregate.failures,
+			Failures: aggregate.failures, SegmentedSamples: aggregate.active.count,
+			ActiveSamples: aggregate.active.count, AvgActiveMS: aggregate.active.average(),
+			MaxActiveMS: aggregate.active.max, SuspendedSamples: aggregate.suspended.count,
+			AvgSuspendedMS: aggregate.suspended.average(), MaxSuspendedMS: aggregate.suspended.max,
+			Suspensions: aggregate.suspensions, ThreadMigrations: aggregate.threadMigrations,
+			SegmentedFailures: aggregate.segmentedFailures, Cancellations: aggregate.cancellations,
 		})
 	}
 	sort.Slice(result.Executors, func(i, j int) bool { return result.Executors[i].Name < result.Executors[j].Name })

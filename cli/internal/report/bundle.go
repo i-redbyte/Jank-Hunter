@@ -48,8 +48,19 @@ const bundledPageBridge = `<script>
       var named = document.getElementsByName(fragment);
       target = named.length > 0 ? named[0] : null;
     }
-    if (target) target.scrollIntoView({block: "start"});
+    if (!target) return;
+    var details = target.closest && target.closest("details");
+    while (details) {
+      details.open = true;
+      details = details.parentElement && details.parentElement.closest("details");
+    }
+    target.scrollIntoView({block: "start", behavior: "smooth"});
   }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "jankhunter-report:scroll-fragment") return;
+    scrollToFragment(event.data.fragment || "");
+  });
 
   document.addEventListener("click", function (event) {
     var anchor = event.target.closest && event.target.closest("a[href]");
@@ -349,36 +360,38 @@ const singleHTMLBundlePrefix = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Jank Hunter · отчет</title>
   <style>
-    :root { color-scheme: dark; --shell-bg: #06140b; --shell-panel: #0a1c11; --shell-line: rgba(151, 184, 155, .22); --shell-text: #edf4e9; --shell-muted: #91a698; --shell-accent: #a7c990; --shell-rail: #99af9c; --shell-rail-text: #102017; --shell-active: #21452e; }
-    * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--shell-bg); color: var(--shell-text); font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root { color-scheme: dark; --shell-forest: #006400; --shell-attention: #FF4500; --shell-paper: #FFFFE0; --shell-critical: #8B0000; --shell-danger: #DC143C; --shell-medium: #FF8A3D; --shell-low: #F4D35E; --shell-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif; --shell-bg: #071107; --shell-panel: #102014; --shell-line: rgba(255, 255, 224, .22); --shell-text: var(--shell-paper); --shell-muted: #c4c4ae; --shell-rail: var(--shell-paper); --shell-rail-text: #102017; --shell-active: var(--shell-forest); --shell-space-2: .809rem; --shell-space-3: 1.309rem; --shell-space-4: 2.118rem; }
+    * { min-width: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--shell-bg); color: var(--shell-text); font-family: var(--shell-font-ui); font-synthesis: none; text-rendering: optimizeLegibility; }
     button, input, select, textarea { font: inherit; }
-    .report-shell { width: 100%; height: 100%; display: grid; grid-template-columns: 232px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-    .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: 28px 20px 22px; color: var(--shell-rail-text); background: var(--shell-rail); border-right: 1px solid rgba(16, 32, 23, .22); z-index: 2; }
-    .report-brand { flex: 0 0 auto; padding: 0 6px 20px; border-bottom: 1px solid rgba(16, 32, 23, .24); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+    .report-shell { width: 100%; height: 100%; display: grid; grid-template-columns: clamp(210px, 16.18vw, 260px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+    .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: var(--shell-space-4) var(--shell-space-3); color: var(--shell-rail-text); background: var(--shell-rail); border-right: 3px solid var(--shell-low); z-index: 2; }
+    .report-brand { flex: 0 0 auto; padding: 0 0 var(--shell-space-3); border-bottom: 1px solid rgba(0, 100, 0, .28); font-family: var(--shell-font-ui); font-size: 13px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; overflow-wrap: anywhere; }
     .report-logo { display: block; width: 100%; max-width: 184px; height: auto; max-height: 114px; object-fit: contain; object-position: left center; }
-    .report-brand::after { content: "JHLOG 5.0.0"; display: block; margin-top: 8px; color: rgba(16, 32, 23, .64); font-size: 11px; letter-spacing: .08em; }
-    .report-tabs { display: grid; gap: 6px; min-width: 0; margin-top: 24px; }
-    .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 7px 6px; color: rgba(16, 32, 23, .64); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 11px; letter-spacing: .08em; }
-    .report-tab { width: 100%; min-width: 0; appearance: none; border: 0; border-radius: 4px; padding: 11px 10px; background: transparent; color: rgba(16, 32, 23, .72); font-weight: 400; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background .16s ease, color .16s ease; }
-    .report-tab:hover, .report-tab:focus-visible { color: var(--shell-rail-text); background: rgba(237, 244, 233, .24); outline: none; }
-    .report-tab[aria-selected="true"] { color: var(--shell-text); background: var(--shell-active); }
+    .report-tabs { display: grid; gap: var(--shell-space-2); min-width: 0; margin-top: var(--shell-space-3); }
+    .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 0 .5rem; color: rgba(16, 32, 23, .66); font-family: var(--shell-font-ui); font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+    .report-tab { width: 100%; min-width: 0; appearance: none; border: 1px solid transparent; border-radius: 6px; padding: var(--shell-space-2); background: transparent; color: rgba(16, 32, 23, .78); font-weight: 500; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease; }
+    .report-tab:hover, .report-tab:focus-visible { color: var(--shell-rail-text); background: rgba(0, 100, 0, .10); border-color: rgba(0, 100, 0, .24); outline: 2px solid transparent; }
+    .report-tab:focus-visible { border-color: var(--shell-attention); }
+    .report-tab[aria-selected="true"] { color: var(--shell-text); background: var(--shell-active); border-color: var(--shell-active); box-shadow: inset 3px 0 var(--shell-low), inset -3px 0 var(--shell-low); }
     .report-frames { position: relative; min-width: 0; min-height: 0; background: var(--shell-bg); }
     .report-frame { display: none; width: 100%; height: 100%; border: 0; background: var(--shell-bg); }
     .report-frame.active { display: block; }
     .report-error { display: grid; place-items: center; height: 100%; padding: 24px; color: var(--shell-muted); text-align: center; }
     @media (max-width: 820px) {
       .report-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-      .report-toolbar { padding: 16px 18px 14px; border-right: 0; border-bottom: 1px solid rgba(16, 32, 23, .22); }
-      .report-brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 14px; }
+      .report-toolbar { padding: var(--shell-space-3); border-right: 0; border-bottom: 3px solid var(--shell-low); }
+      .report-brand { display: flex; align-items: center; justify-content: center; padding: 0 0 14px; }
       .report-logo { width: 132px; max-height: 80px; }
-      .report-brand::after { display: block; margin: 0; }
-      .report-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+      .report-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: var(--shell-space-2); }
       .report-tabs::before { grid-column: 1 / -1; }
       .report-tab { padding: 9px 10px; }
     }
     @media (max-width: 380px) {
       .report-tabs { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .report-tab { transition: none; }
     }
   </style>
 </head>
@@ -416,6 +429,12 @@ const singleHTMLBundleSuffix = `  <script>
         var path = String(href || "").split(/[?#]/, 1)[0].replace(/\\/g, "/");
         try { path = decodeURIComponent(path); } catch (_) {}
         return path.slice(path.lastIndexOf("/") + 1);
+      }
+
+      function hrefFragment(href) {
+        var value = String(href || "");
+        var index = value.indexOf("#");
+        return index >= 0 ? value.slice(index) : "";
       }
 
       function pageFromLocation() {
@@ -468,6 +487,7 @@ const singleHTMLBundleSuffix = `  <script>
           frame.id = "jankhunter-report-frame-" + page.id;
           frame.title = page.title;
           frame.dataset.page = page.id;
+          frame.addEventListener("load", function () { frame.dataset.loaded = "true"; });
           frame.srcdoc = html;
           frames.appendChild(frame);
           framesByID.set(page.id, frame);
@@ -478,7 +498,19 @@ const singleHTMLBundleSuffix = `  <script>
         return load;
       }
 
-      async function showPage(page, updateLocation) {
+      function scrollFrameToFragment(frame, fragment) {
+        if (!fragment) return;
+        var send = function () {
+          if (frame.contentWindow) frame.contentWindow.postMessage({
+            type: "jankhunter-report:scroll-fragment",
+            fragment: fragment
+          }, "*");
+        };
+        if (frame.dataset.loaded === "true") send();
+        else frame.addEventListener("load", send, {once: true});
+      }
+
+      async function showPage(page, updateLocation, fragment) {
         if (!page) return;
         selectedPageID = page.id;
         framesByID.forEach(function (frame) { frame.classList.remove("active"); });
@@ -489,6 +521,7 @@ const singleHTMLBundleSuffix = `  <script>
         var frame = await ensureFrame(page);
         if (selectedPageID !== page.id) return;
         frame.classList.add("active");
+        scrollFrameToFragment(frame, fragment);
         document.title = "Jank Hunter · " + page.title;
         if (updateLocation) history.replaceState(null, "", "#page=" + encodeURIComponent(page.id));
       }
@@ -512,7 +545,7 @@ const singleHTMLBundleSuffix = `  <script>
       window.addEventListener("message", function (event) {
         if (!event.data || event.data.type !== "jankhunter-report:navigate") return;
         var page = pagesByHref.get(hrefKey(event.data.href));
-        if (page) showPage(page, true);
+        if (page) showPage(page, true, hrefFragment(event.data.href));
       });
       window.addEventListener("hashchange", function () { showPage(pageFromLocation(), false); });
       showPage(pageFromLocation(), false);

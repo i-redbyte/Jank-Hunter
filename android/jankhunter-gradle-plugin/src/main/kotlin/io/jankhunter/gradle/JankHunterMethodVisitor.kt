@@ -37,6 +37,7 @@ internal class JankHunterMethodVisitor(
     private val recordReceiverHookApplied: () -> Unit = {},
     private val binderServer: Boolean = false,
     private val binderDescriptor: String? = null,
+    private val coroutineOwner: String? = null,
     private val recordBinderHookApplied: () -> Unit = {},
 ) : AdviceAdapter(Opcodes.ASM9, next, accessFlags, methodName, methodDescriptor) {
     private val methodId = OwnerIds.methodId(className, methodName, methodDescriptor)
@@ -90,6 +91,7 @@ internal class JankHunterMethodVisitor(
         recordReceiverHookApplied = recordReceiverHookApplied,
         recordBinderHookApplied = recordBinderHookApplied,
     )
+    private var cachedCallerMethod: CallerMethod? = null
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -112,6 +114,10 @@ internal class JankHunterMethodVisitor(
             recordClassHookApplied()
         }
         if (!shouldInstrumentMethod()) return
+        if (coroutineOwner != null) {
+            emitCoroutineSegmentEnter()
+            recordClassHookApplied()
+        }
         if (binderServer) androidComponentEmitter.binderServerEnter()
         if (receiverCallback == AndroidReceiverInvocation.RECEIVE) androidComponentEmitter.receiverCallbackEnter()
         serviceCallback?.let(androidComponentEmitter::serviceCallbackEnter)
@@ -256,6 +262,14 @@ internal class JankHunterMethodVisitor(
 
     override fun onMethodExit(opcode: Int) {
         if (!shouldInstrumentMethod()) return
+        if (state.coroutineSegmentTokenLocal >= 0 && opcode == Opcodes.ARETURN) {
+            dup()
+            if (state.coroutineSegmentResultLocal < 0) {
+                state.coroutineSegmentResultLocal = newLocal(Type.getType(Any::class.java))
+            }
+            storeLocal(state.coroutineSegmentResultLocal)
+            emitCoroutineSegmentExit(throwableLocal = -1)
+        }
         if (state.binderServerStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             androidComponentEmitter.captureBinderServerResult(opcode)
             androidComponentEmitter.binderServerExit(throwableLocal = -1)
@@ -278,14 +292,7 @@ internal class JankHunterMethodVisitor(
         }
         if (state.semanticStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             if (state.semanticOutcomeLocal >= 0 && opcode == Opcodes.ARETURN) {
-                dup()
-                visitMethodInsn(
-                    Opcodes.INVOKESTATIC,
-                    JANK_HUNTER_HOOKS,
-                    "classifyWorkerOutcome",
-                    "(Ljava/lang/Object;)I",
-                    false,
-                )
+                emitWorkerOutcomeClassification()
                 storeLocal(state.semanticOutcomeLocal)
             }
             emitSemanticExit(outcome = SEMANTIC_OUTCOME_SUCCESS, outcomeLocal = state.semanticOutcomeLocal)
@@ -389,6 +396,37 @@ internal class JankHunterMethodVisitor(
         )
     }
 
+    private fun emitWorkerOutcomeClassification() {
+        val failureCheck = newLabel()
+        val retryCheck = newLabel()
+        val unknown = newLabel()
+        val classified = newLabel()
+
+        dup()
+        instanceOf(Type.getObjectType(ANDROIDX_WORK_RESULT_SUCCESS))
+        ifZCmp(EQ, failureCheck)
+        push(SEMANTIC_OUTCOME_SUCCESS)
+        goTo(classified)
+
+        mark(failureCheck)
+        dup()
+        instanceOf(Type.getObjectType(ANDROIDX_WORK_RESULT_FAILURE))
+        ifZCmp(EQ, retryCheck)
+        push(SEMANTIC_OUTCOME_FAILURE)
+        goTo(classified)
+
+        mark(retryCheck)
+        dup()
+        instanceOf(Type.getObjectType(ANDROIDX_WORK_RESULT_RETRY))
+        ifZCmp(EQ, unknown)
+        push(SEMANTIC_OUTCOME_RETRY)
+        goTo(classified)
+
+        mark(unknown)
+        push(SEMANTIC_OUTCOME_UNKNOWN)
+        mark(classified)
+    }
+
     override fun visitMethodInsn(
         opcodeAndSource: Int,
         owner: String,
@@ -480,19 +518,42 @@ internal class JankHunterMethodVisitor(
                 return
             }
         }
+        val namedCandidateMask = HookIntentResolver.namedCandidateMask(name)
+        if (namedCandidateMask == 0) {
+            HookNearMissDiagnostics.resolve(owner, name, descriptor, config)?.let { nearMiss ->
+                diagnostics.recordDecision(nearMiss, methodDiagnosticName, state.currentLine)
+            }
+            super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
+            return
+        }
         val staticDatabaseQuery = consumeDatabaseInvocationOrigin(owner, name, descriptor)
         val databaseQueryArgument = databaseQueryArgumentIndex(owner, name, descriptor)
-        val call = MethodCall(
+        var call = MethodCall(
             owner = owner,
             name = name,
             descriptor = descriptor,
-            caller = CallerMethod(className, methodName, methodDescriptor),
+            caller = callerMethod(),
             line = state.currentLine,
-            ownerHierarchy = resolveOwnerHierarchy(owner),
             databaseQuery = staticDatabaseQuery,
             databaseQueryArgument = databaseQueryArgument,
         )
-        val decision = HookIntentResolver.resolve(call, config)
+        val descriptorCandidateMask = HookIntentResolver.candidateMask(name, descriptor)
+        val directCandidateMask = if (descriptorCandidateMask == 0) namedCandidateMask else descriptorCandidateMask
+        var decision = HookIntentResolver.resolve(
+            call,
+            config,
+            directCandidateMask,
+        )
+        if (decision is HookDecision.NotMatched && directCandidateMask != namedCandidateMask) {
+            decision = HookIntentResolver.resolve(call, config, namedCandidateMask)
+        }
+        if (decision is HookDecision.NotMatched) {
+            val ownerHierarchy = resolveOwnerHierarchy(owner)
+            if (ownerHierarchy.isNotEmpty() && (ownerHierarchy.size != 1 || owner !in ownerHierarchy)) {
+                call = call.copy(ownerHierarchy = ownerHierarchy)
+                decision = HookIntentResolver.resolve(call, config, namedCandidateMask)
+            }
+        }
         if (
             decision is HookDecision.Matched &&
             decision.intent.requiresOkHttpHelper() &&
@@ -500,13 +561,13 @@ internal class JankHunterMethodVisitor(
         ) {
             throw missingOkHttpHelper(call)
         }
-        val invocation = MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface)
         val matchedIntent = (decision as? HookDecision.Matched)?.intent
-        if (matchedIntent != null && emitHook(matchedIntent, invocation)) {
-            diagnostics.recordHook(decision, methodDiagnosticName, call.line)
-            return
-        }
-        if (decision is HookDecision.Matched) {
+        if (matchedIntent != null) {
+            val invocation = MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface)
+            if (emitHook(matchedIntent, invocation)) {
+                diagnostics.recordHook(decision, methodDiagnosticName, call.line)
+                return
+            }
             diagnostics.recordHook(decision, methodDiagnosticName, call.line)
         } else {
             diagnostics.recordDecision(
@@ -520,6 +581,12 @@ internal class JankHunterMethodVisitor(
             )
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
+    }
+
+    private fun callerMethod(): CallerMethod {
+        val cached = cachedCallerMethod
+        if (cached != null) return cached
+        return CallerMethod(className, methodName, methodDescriptor).also { cachedCallerMethod = it }
     }
 
     private fun consumeDatabaseInvocationOrigin(owner: String, name: String, descriptor: String): String? {
@@ -632,6 +699,9 @@ internal class JankHunterMethodVisitor(
             if (state.binderServerStartLocal >= 0) {
                 androidComponentEmitter.binderServerExit(throwableLocal)
             }
+            if (state.coroutineSegmentTokenLocal >= 0) {
+                emitCoroutineSegmentExit(throwableLocal)
+            }
             if (state.semanticStartLocal >= 0) {
                 emitSemanticExit(outcome = SEMANTIC_OUTCOME_FAILURE)
             }
@@ -667,8 +737,12 @@ internal class JankHunterMethodVisitor(
         private const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
         private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
         private const val ANDROIDX_LISTENABLE_WORKER = "androidx/work/ListenableWorker"
+        private const val ANDROIDX_WORK_RESULT_SUCCESS = "androidx/work/ListenableWorker${'$'}Result${'$'}Success"
+        private const val ANDROIDX_WORK_RESULT_FAILURE = "androidx/work/ListenableWorker${'$'}Result${'$'}Failure"
+        private const val ANDROIDX_WORK_RESULT_RETRY = "androidx/work/ListenableWorker${'$'}Result${'$'}Retry"
         private const val SEMANTIC_OUTCOME_SUCCESS = 0
         private const val SEMANTIC_OUTCOME_FAILURE = 1
+        private const val SEMANTIC_OUTCOME_RETRY = 2
         private const val SEMANTIC_OUTCOME_UNKNOWN = 4
     }
 
@@ -787,6 +861,39 @@ internal class JankHunterMethodVisitor(
             || state.serviceCallbackStartLocal >= 0
             || state.receiverCallbackStartLocal >= 0
             || state.binderServerStartLocal >= 0
+            || state.coroutineSegmentTokenLocal >= 0
+    }
+
+    private fun emitCoroutineSegmentEnter() {
+        loadThis()
+        visitLdcInsn(checkNotNull(coroutineOwner))
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "enterCoroutineSegment",
+            "(Ljava/lang/Object;Ljava/lang/String;)J",
+            false,
+        )
+        state.coroutineSegmentTokenLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(state.coroutineSegmentTokenLocal)
+    }
+
+    private fun emitCoroutineSegmentExit(throwableLocal: Int) {
+        loadLocal(state.coroutineSegmentTokenLocal)
+        loadThis()
+        if (state.coroutineSegmentResultLocal >= 0 && throwableLocal < 0) {
+            loadLocal(state.coroutineSegmentResultLocal)
+        } else {
+            visitInsn(Opcodes.ACONST_NULL)
+        }
+        if (throwableLocal >= 0) loadLocal(throwableLocal) else visitInsn(Opcodes.ACONST_NULL)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "exitCoroutineSegment",
+            "(JLjava/lang/Object;Ljava/lang/Object;Ljava/lang/Throwable;)V",
+            false,
+        )
     }
 
     private fun instrumentationIgnored(): Boolean {

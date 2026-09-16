@@ -261,7 +261,9 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 const maxTimezoneOffsetMinutes int64 = 14 * 60
 
 func validateFeatureContract(required, optional uint64) error {
-	if required != RequiredFeatures && required != BestEffortFeatures {
+	const evolved = FeatureGaugeWideSum | FeatureHTTPFirstByte | FeatureUIDTraffic | FeatureHTTPCollectionState
+	base := required &^ evolved
+	if base != RequiredFeatures&^evolved && base != BestEffortFeatures&^evolved {
 		return fmt.Errorf(
 			"required feature contract 0x%x is not JHLOG %s EXACT 0x%x or BEST_EFFORT 0x%x",
 			required,

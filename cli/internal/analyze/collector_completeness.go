@@ -9,6 +9,16 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
+// UnknownDiagnosticCompleteness preserves the numeric JSON contract. It is not a percentage.
+const UnknownDiagnosticCompleteness = -1.0
+
+func (quality CollectionQuality) DiagnosticCompletenessText() string {
+	if quality.DiagnosticCompletenessModel == "" || quality.DiagnosticCompletenessPercent < 0 {
+		return "полнота неизвестна"
+	}
+	return fmt.Sprintf("%.2f%%", quality.DiagnosticCompletenessPercent)
+}
+
 func collectionDiagnosticCompleteness(quality CollectionQuality) (float64, []DiagnosticCompletenessComponent) {
 	components := make([]DiagnosticCompletenessComponent, 0, 4)
 	activeWeight := 0.0
@@ -147,6 +157,9 @@ func collectionDiagnosticCompleteness(quality CollectionQuality) (float64, []Dia
 }
 
 func describeDiagnosticCompleteness(score float64, components []DiagnosticCompletenessComponent) (string, string) {
+	if score < 0 {
+		return "unknown", "Полнота неизвестна: сброс диагностических буферов не завершён; объём несохранённых данных не измерен."
+	}
 	level, explanation := diagnosticCompletenessTier(score)
 	missing := make([]string, 0, len(components))
 	excluded := make([]string, 0, len(components))
@@ -179,15 +192,15 @@ func describeDiagnosticCompleteness(score float64, components []DiagnosticComple
 func diagnosticCompletenessTier(score float64) (string, string) {
 	switch {
 	case score >= 95:
-		return "excellent", "Максимальная полнота: индекс 95–100%; все активные источники диагностических данных практически полностью подтверждены."
+		return "excellent", "Максимальная полнота: индекс 95-100%; все активные источники диагностических данных практически полностью подтверждены."
 	case score >= 85:
-		return "high", "Высокая полнота: индекс 85–94,99%; основные диагностические данные подтверждены, оставшиеся ограничения явно перечислены."
+		return "high", "Высокая полнота: индекс 85-94,99%; основные диагностические данные подтверждены, оставшиеся ограничения явно перечислены."
 	case score >= 65:
-		return "sufficient", "Достаточная полнота: индекс 65–84,99%; выводы применимы с учётом перечисленных ограничений."
+		return "sufficient", "Достаточная полнота: индекс 65-84,99%; выводы применимы с учётом перечисленных ограничений."
 	case score >= 40:
-		return "limited", "Ограниченная полнота: индекс 40–64,99%; существенная часть активных диагностических данных не подтверждена."
+		return "limited", "Ограниченная полнота: индекс 40-64,99%; существенная часть активных диагностических данных не подтверждена."
 	default:
-		return "low", "Низкая полнота: индекс ниже 40%; отчёт нельзя использовать для уверенных выводов без повторного сбора."
+		return "low", "Низкая полнота: индекс ниже 40%. Для надёжных выводов повторите сбор данных."
 	}
 }
 
@@ -213,7 +226,7 @@ func qualityProgressionIssues(results []jhlog.StreamResult) []string {
 			}
 			if err := jhlog.ValidateQualityProgression(*previous.LatestQuality, *current.LatestQuality); err != nil {
 				issues = append(issues, fmt.Sprintf(
-					"session %x имеет немонотонные quality snapshots между segment %d и %d: %v",
+					"сессия %x содержит несогласованные снимки качества сбора между сегментами %d и %d: %v",
 					current.Header.SessionID,
 					previous.Header.SegmentIndex,
 					current.Header.SegmentIndex,

@@ -16,13 +16,13 @@ func (c *collector) instrumentationQualityWarnings() []string {
 		return warnings
 	} else {
 		if diagnostics.ClassCount == 0 {
-			warnings = append(warnings, "Качество сбора: ASM-диагностика пустая, значит instrument matcher не увидел классы или артефакт не был собран.")
+			warnings = append(warnings, "Качество сбора: ASM-диагностика пустая. Правила не нашли классы или файл диагностики не был создан.")
 		}
 		if diagnostics.ClassCount > 0 && diagnostics.HookCount == 0 && diagnostics.AnnotatedMethodCount == 0 {
-			warnings = append(warnings, "Качество сбора: ASM прошел по классам, но не нашел hooks или аннотации; проверьте include/exclude, версии библиотек и включенные bridge-флаги.")
+			warnings = append(warnings, "Качество сбора: ASM проверил классы, но не нашёл ASM-хуки или аннотации. Проверьте includePackages, excludePackages, версии библиотек и включённые адаптеры.")
 		}
 		if unsupported := unsupportedDecisionCount(diagnostics); unsupported > 0 {
-			warnings = append(warnings, fmt.Sprintf("Качество сбора: ASM встретил неподдержанные сигнатуры hooks: %d; часть телеметрии могла не попасть в лог.", unsupported))
+			warnings = append(warnings, fmt.Sprintf("Качество сбора: ASM нашёл %d неподдержанных сигнатур. Часть данных могла не попасть в журнал.", unsupported))
 		}
 	}
 	return warnings
@@ -31,19 +31,19 @@ func (c *collector) instrumentationQualityWarnings() []string {
 func (c *collector) attributionQualityWarnings(summary Summary) []string {
 	var warnings []string
 	if totalProblemWindows(summary) > 0 && unknownProblemOwnerRate(summary.ProblemWindows) >= 0.8 {
-		warnings = append(warnings, "Качество сбора: большинство проблемных окон не имеют понятного owner; добавьте ownerHint/withOwner или проверьте охват ASM-инструментации.")
+		warnings = append(warnings, "Качество сбора: у большинства проблемных интервалов не указано место запуска. Добавьте ownerHint или withOwner либо проверьте охват ASM.")
 	}
 	if len(summary.SignalContexts) > 0 && unknownSignalContextRate(summary.SignalContexts) >= 0.8 {
-		warnings = append(warnings, "Качество сбора: большинство сигналов не имеют экрана, операции или источника; проверьте автоматическое отслеживание экранов, @JankHunterOperation/traceOperation/withOwner и охват инструментирования.")
+		warnings = append(warnings, "Качество сбора: у большинства сигналов нет экрана, операции или источника. Проверьте автоматическое отслеживание экранов, @JankHunterOperation, traceOperation, withOwner и список пакетов для ASM.")
 	}
 	if summary.EventCount > 0 && datavalue.IsUnknown(c.currentDevice) {
-		warnings = append(warnings, "Качество сбора: модель устройства не записана в session-событие; проверьте JankHunter init и device snapshot при старте runtime.")
+		warnings = append(warnings, "Качество сбора: модель устройства не записана в событие запуска. Проверьте инициализацию Jank Hunter.")
 	}
 	if summary.EventCount > 0 && datavalue.IsUnknown(c.currentAppVersion) && datavalue.IsUnknown(c.currentBuild) {
-		warnings = append(warnings, "Качество сбора: версия приложения не записана в session-событие; проверьте PackageInfo/versionName/versionCode на старте runtime.")
+		warnings = append(warnings, "Качество сбора: версия приложения не записана в событие запуска. Проверьте чтение PackageInfo, versionName и versionCode при инициализации Jank Hunter.")
 	}
 	if summary.EventCount > 0 && len(summary.Processes) == 1 && datavalue.IsUnknown(summary.Processes[0].Name) {
-		warnings = append(warnings, "Качество сбора: процесс неизвестен; проверьте session-события и mainProcessOnly/allowedProcesses.")
+		warnings = append(warnings, "Качество сбора: имя процесса не записано. Проверьте событие запуска и настройки mainProcessOnly и allowedProcesses.")
 	}
 	return warnings
 }
@@ -55,7 +55,7 @@ func unsupportedDecisionCount(diagnostics *InstrumentationDiagnostics) uint64 {
 	}
 	for _, decision := range diagnostics.Decisions {
 		if decision.Kind == "unsupported" || decision.Reason == "unsupported_signature" {
-			total += decision.Count
+			total = saturatingUint64Sum(total, decision.Count)
 		}
 	}
 	return total
@@ -68,9 +68,9 @@ func unknownProblemOwnerRate(problems []ProblemWindowStats) float64 {
 		if problem.Count == 0 {
 			continue
 		}
-		total += problem.Count
+		total = saturatingUint64Sum(total, problem.Count)
 		if datavalue.IsUnknown(problem.Owner) {
-			unknown += problem.Count
+			unknown = saturatingUint64Sum(unknown, problem.Count)
 		}
 	}
 	if total == 0 {
@@ -83,15 +83,21 @@ func unknownSignalContextRate(contexts []SignalContextStats) float64 {
 	var total uint64
 	var unknown uint64
 	for _, context := range contexts {
-		count := uint64(context.HTTPCount) + uint64(context.StallCount) + context.LogSpam + context.ProblemCount + uint64(context.UIWindows)
+		count := saturatingUint64Sum(
+			uint64(max(context.HTTPCount, 0)),
+			uint64(max(context.StallCount, 0)),
+			context.LogSpam,
+			context.ProblemCount,
+			uint64(max(context.UIWindows, 0)),
+		)
 		if count == 0 {
 			count = 1
 		}
-		total += count
+		total = saturatingUint64Sum(total, count)
 		if datavalue.IsUnknown(context.Screen) &&
 			datavalue.IsUnknown(context.Operation) &&
 			datavalue.IsUnknown(context.Owner) {
-			unknown += count
+			unknown = saturatingUint64Sum(unknown, count)
 		}
 	}
 	if total == 0 {
@@ -116,7 +122,7 @@ func (c *collector) filterWarnings(summary Summary) []string {
 	}
 	return []string{
 		fmt.Sprintf(
-			"Фильтр применен к событиям с маршрутом, экраном, источником или классом; %s не несут полного контекста выполнения и показаны глобально.",
+			"Качество сбора: Фильтр применен к событиям с маршрутом, экраном, источником или классом; %s не несут полного контекста выполнения и показаны глобально.",
 			strings.Join(globalSignals, " и "),
 		),
 	}

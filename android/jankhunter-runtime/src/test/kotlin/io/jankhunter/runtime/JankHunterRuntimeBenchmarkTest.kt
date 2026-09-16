@@ -204,7 +204,7 @@ class JankHunterRuntimeBenchmarkTest {
             delegate = Executor { command -> command.run() },
             name = "benchmark executor",
             ownerName = "BenchmarkOwner",
-            callbacks = JankHunter.asyncTelemetry(),
+            callbacks = activeExecutorTestCallbacks(),
         )
         val command = Runnable {
             executionState[0] = nextBenchmarkState(executionState[0])
@@ -287,6 +287,7 @@ class JankHunterRuntimeBenchmarkTest {
                     sum: Long,
                     max: Long,
                     mode: MetricAggregationMode,
+                sumHigh: Long,
                 ) = Unit
             })
         }
