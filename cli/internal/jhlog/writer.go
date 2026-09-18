@@ -35,6 +35,7 @@ type recordEncodeState struct {
 }
 
 type eventPayloadEncodeState struct {
+	symbolOrigins             bool
 	legacyGaugeSum            bool
 	legacyHTTPFirstByte       bool
 	legacyUIDTraffic          bool
@@ -70,7 +71,7 @@ type Writer struct {
 	lastElapsedUS       uint64
 	digest              hash.Hash
 	segmentDigest       []byte
-	stableAliases       map[uint64]uint64
+	stableAliases       stableAliasTable
 	databaseDescriptors map[databaseDescriptorKey]uint64
 	microPage           microPageBuilder
 	microPageFlushing   bool
@@ -129,13 +130,14 @@ func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
 		latestQuality:       QualitySnapshot{Counters: map[uint64]uint64{}},
 		lastElapsedUS:       header.SegmentStartElapsedUS,
 		digest:              digest,
-		stableAliases:       map[uint64]uint64{},
+		stableAliases:       stableAliasTable{},
 		databaseDescriptors: map[databaseDescriptorKey]uint64{},
 		runtimeBlock:        newRuntimeBlockEncoder(),
 		microPage:           newMicroPageBuilder(),
 		payloadState: eventPayloadEncodeState{legacyGaugeSum: header.RequiredFeatures&FeatureGaugeWideSum == 0,
 			legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
 			legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+			symbolOrigins:             header.RequiredFeatures&FeatureSymbolOrigin != 0,
 			legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0},
 	}
 	writer.payload.Grow(256)
@@ -213,15 +215,15 @@ func (w *Writer) WriteEvent(event Event) error {
 	if event.Type == EventRuntimeCall {
 		return w.WriteRuntimeCallBlock([]Event{event})
 	}
-	var pendingStableID uint64
+	var pendingStableID stableSymbolKey
 	var hasPendingStableAlias bool
 	if event.Type == EventDictionary && event.Dictionary != nil && event.Dictionary.Kind == DictStableSymbol {
 		entry := *event.Dictionary
-		if alias, ok := w.stableAliases[entry.ID]; ok {
+		if alias, ok := w.stableAliases[stableSymbolKey{entry.ID, entry.Origin}]; ok {
 			entry.Alias = alias
 		} else {
 			entry.Alias = uint64(len(w.stableAliases)) + 1
-			pendingStableID = entry.ID
+			pendingStableID = stableSymbolKey{entry.ID, entry.Origin}
 			hasPendingStableAlias = true
 		}
 		event.Dictionary = &entry
@@ -772,7 +774,7 @@ func encodeRecord(event Event, state recordEncodeState) ([]byte, recordEncodeSta
 func encodeRecordWithAliases(
 	event Event,
 	state recordEncodeState,
-	stableAliases map[uint64]uint64,
+	stableAliases stableAliasTable,
 ) ([]byte, recordEncodeState, uint64, error) {
 	return encodeRecordWithPayloadState(event, state, stableAliases, nil)
 }
@@ -780,7 +782,7 @@ func encodeRecordWithAliases(
 func encodeRecordWithPayloadState(
 	event Event,
 	state recordEncodeState,
-	stableAliases map[uint64]uint64,
+	stableAliases stableAliasTable,
 	payloadState *eventPayloadEncodeState,
 ) ([]byte, recordEncodeState, uint64, error) {
 	if event.Type == 0 {

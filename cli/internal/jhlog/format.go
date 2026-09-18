@@ -42,33 +42,34 @@ func (scope ProcessScope) String() string {
 }
 
 type SegmentHeader struct {
-	Schema                           uint64       `json:"schema"`
-	RequiredFeatures                 uint64       `json:"required_features"`
-	OptionalFeatures                 uint64       `json:"optional_features"`
-	RunID                            ID128        `json:"run_id"`
-	ProcessInstanceID                ID128        `json:"process_instance_id"`
-	SessionID                        ID128        `json:"session_id"`
-	SegmentIndex                     uint64       `json:"segment_index"`
-	OSPID                            uint64       `json:"os_pid"`
-	CollectorStartElapsedUS          uint64       `json:"collector_start_elapsed_us"`
-	SegmentStartElapsedUS            uint64       `json:"segment_start_elapsed_us"`
-	SegmentStartUnixMS               uint64       `json:"segment_start_unix_ms"`
-	TimezoneOffsetMinutes            int64        `json:"timezone_offset_minutes"`
-	IdentitySource                   uint64       `json:"identity_source"`
-	ProcessName                      string       `json:"process_name"`
-	SymbolNamespace                  []byte       `json:"symbol_namespace,omitempty"`
-	ProcessScope                     ProcessScope `json:"process_scope"`
-	AllowedProcessCount              uint64       `json:"allowed_process_count,omitempty"`
-	ProcessScopeFingerprint          []byte       `json:"process_scope_fingerprint,omitempty"`
-	PreviousSegmentDigest            []byte       `json:"previous_segment_digest,omitempty"`
-	ExpectedProcessCount             uint64       `json:"expected_process_count"`
-	ExpectedProcessFingerprint       []byte       `json:"expected_process_fingerprint,omitempty"`
-	ProcessRosterDeclarationComplete bool         `json:"process_roster_declaration_complete"`
+	BuildIdentity                    BuildIdentity `json:"build_identity"`
+	Schema                           uint64        `json:"schema"`
+	RequiredFeatures                 uint64        `json:"required_features"`
+	OptionalFeatures                 uint64        `json:"optional_features"`
+	RunID                            ID128         `json:"run_id"`
+	ProcessInstanceID                ID128         `json:"process_instance_id"`
+	SessionID                        ID128         `json:"session_id"`
+	SegmentIndex                     uint64        `json:"segment_index"`
+	OSPID                            uint64        `json:"os_pid"`
+	CollectorStartElapsedUS          uint64        `json:"collector_start_elapsed_us"`
+	SegmentStartElapsedUS            uint64        `json:"segment_start_elapsed_us"`
+	SegmentStartUnixMS               uint64        `json:"segment_start_unix_ms"`
+	TimezoneOffsetMinutes            int64         `json:"timezone_offset_minutes"`
+	IdentitySource                   uint64        `json:"identity_source"`
+	ProcessName                      string        `json:"process_name"`
+	SymbolNamespace                  []byte        `json:"symbol_namespace,omitempty"`
+	ProcessScope                     ProcessScope  `json:"process_scope"`
+	AllowedProcessCount              uint64        `json:"allowed_process_count,omitempty"`
+	ProcessScopeFingerprint          []byte        `json:"process_scope_fingerprint,omitempty"`
+	PreviousSegmentDigest            []byte        `json:"previous_segment_digest,omitempty"`
+	ExpectedProcessCount             uint64        `json:"expected_process_count"`
+	ExpectedProcessFingerprint       []byte        `json:"expected_process_fingerprint,omitempty"`
+	ProcessRosterDeclarationComplete bool          `json:"process_roster_declaration_complete"`
 }
 
 func DefaultSegmentHeader() SegmentHeader {
 	return SegmentHeader{
-		Schema:           HeaderSchemaV2,
+		Schema:           HeaderSchemaCurrent,
 		RequiredFeatures: RequiredFeatures,
 		OptionalFeatures: OptionalFeatures,
 		ProcessScope:     ProcessScopeAll,
@@ -210,9 +211,10 @@ func HasObservedHTTPFirstByte(flags uint64) bool {
 }
 
 type SymbolRef struct {
-	ID        uint64 `json:"id,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	Stable    bool   `json:"stable,omitempty"`
+	ID        uint64       `json:"id,omitempty"`
+	Namespace string       `json:"namespace,omitempty"`
+	Stable    bool         `json:"stable,omitempty"`
+	Origin    SymbolOrigin `json:"origin,omitempty"`
 }
 
 func LocalSymbol(id uint64) SymbolRef  { return SymbolRef{ID: id} }
@@ -443,12 +445,13 @@ func (e RetentionEvidence) String() string {
 }
 
 type DictionaryEntry struct {
-	Kind        DictKind `json:"kind"`
-	ID          uint64   `json:"id"`
-	Alias       uint64   `json:"alias,omitempty"`
-	Encoding    uint64   `json:"encoding,omitempty"`
-	Data        []byte   `json:"data,omitempty"`
-	Value       string   `json:"value"`
+	Origin      SymbolOrigin `json:"origin,omitempty"`
+	Kind        DictKind     `json:"kind"`
+	ID          uint64       `json:"id"`
+	Alias       uint64       `json:"alias,omitempty"`
+	Encoding    uint64       `json:"encoding,omitempty"`
+	Data        []byte       `json:"data,omitempty"`
+	Value       string       `json:"value"`
 	frontPrefix uint64
 	frontData   []byte
 	frontReady  bool

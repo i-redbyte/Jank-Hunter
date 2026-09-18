@@ -16,6 +16,9 @@ type stallObservation struct {
 }
 
 func (c *collector) addStallObservation(dict map[uint64]string, event jhlog.Event) {
+	if c.nameMap != nil && !event.Stall.StackRef.IsUnknown() && event.Stall.StackRef.Origin == jhlog.SymbolOriginUnknown {
+		c.summary.MappingIdentity.UnknownOriginReferences++
+	}
 	owner := c.currentAttrOwner
 	observation := stallObservation{
 		event: event, context: c.eventContext("", owner), owner: owner,
@@ -74,7 +77,7 @@ func (c *collector) addCompletedStall(observation stallObservation) {
 	c.summary.StallCount++
 	c.summary.StallStates.add(event.Stall.State)
 	c.summary.StallMaxMS = maxUint64(c.summary.StallMaxMS, event.Stall.DurationMS)
-	addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, observation.stack)
+	addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, observation.stack, event.Stall.StackRef.Origin)
 	contextStats := c.ensureSignalContext(signalContextKeyFromStats(context))
 	contextStats.StallCount++
 	contextStats.StallStates.add(event.Stall.State)

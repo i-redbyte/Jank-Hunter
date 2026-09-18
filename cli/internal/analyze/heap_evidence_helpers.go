@@ -137,7 +137,10 @@ func heapHolderField(path []HeapPathElement, targetClass string) string {
 		if prev.ClassName == "" || strings.HasPrefix(prev.ClassName, "GC root: ") || step.FieldName == "" {
 			return ""
 		}
-		return prev.ClassName + "." + step.FieldName
+		if step.FieldRetrace != nil && step.FieldRetrace.Status == "missing_declaring_owner" {
+			return ""
+		}
+		return firstNonEmpty(step.DeclaringClass, prev.ClassName) + "." + step.FieldLabel()
 	}
 	return ""
 }

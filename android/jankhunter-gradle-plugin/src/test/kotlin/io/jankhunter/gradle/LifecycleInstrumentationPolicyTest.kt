@@ -5,6 +5,16 @@ import org.junit.Test
 
 class LifecycleInstrumentationPolicyTest {
     @Test
+    fun legacyAndroidSupportRootsUseTheSameTypedContract() {
+        val fragment = LifecycleInstrumentationPolicy(true, false, false, "onDestroyView", "()V", setOf("android/support/v4/app/Fragment"))
+        assertEquals(2, fragment.targetKind)
+        assertEquals(LifecycleHookPoint.ENTER, fragment.hookPoint)
+        val model = LifecycleInstrumentationPolicy(true, false, false, "onCleared", "()V", setOf("android/arch/lifecycle/ViewModel"))
+        assertEquals(3, model.targetKind)
+        assertEquals(LifecycleHookPoint.EXIT, model.hookPoint)
+    }
+
+    @Test
     fun fragmentViewIsCapturedBeforeDestroyViewAndFragmentAfterDestroy() {
         val hierarchy = setOf("androidx/fragment/app/Fragment")
 

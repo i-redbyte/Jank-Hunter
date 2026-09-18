@@ -218,7 +218,7 @@ func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeatures != 0x7fbfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
+	if RequiredFeatures != 0xffbfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
 		t.Fatalf(
 			"features = required 0x%x gzip optional 0x%x raw optional 0x%x",
 			RequiredFeatures,
@@ -668,7 +668,7 @@ func TestCompactPayloadDecoderRejectsUndefinedAliases(t *testing.T) {
 }
 
 func TestCompactDominantPayloadSizeRegression(t *testing.T) {
-	aliases := map[uint64]uint64{11: 1, 22: 2, 33: 3}
+	aliases := stableAliasTable{{ID: 11}: 1, {ID: 22}: 2, {ID: 33}: 3}
 	var inlineRef bytes.Buffer
 	if err := writeSymbolRef(&inlineRef, StableSymbol(11), nil); err != nil {
 		t.Fatal(err)

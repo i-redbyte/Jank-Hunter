@@ -21,7 +21,16 @@ func (encoder eventPayloadEncoder) encodeDictionary(payload *DictionaryEntry) er
 	if prefix > uint64(len(data)) {
 		return fmt.Errorf("dictionary prefix %d exceeds value length %d", prefix, len(data))
 	}
-	if err := encoder.writeValues(uint64(payload.Kind)); err != nil {
+	if payload.Origin > SymbolOriginRuntimeStack {
+		return fmt.Errorf("invalid symbol origin %d", payload.Origin)
+	}
+	kind := uint64(payload.Kind)
+	if encoder.symbolOrigins {
+		kind = kind<<2 | uint64(payload.Origin)
+	} else if payload.Origin != SymbolOriginUnknown {
+		return fmt.Errorf("symbol origin requires feature31")
+	}
+	if err := encoder.writeValues(kind); err != nil {
 		return err
 	}
 	if payload.Kind == DictStableSymbol {

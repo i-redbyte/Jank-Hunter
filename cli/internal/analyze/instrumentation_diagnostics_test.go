@@ -122,7 +122,7 @@ func TestInstrumentationDiagnosticsCountersSaturateInsteadOfWrapping(t *testing.
 func TestLoadInstrumentationDiagnosticsRejectsUnsupportedFormat(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
-	if err := os.WriteFile(path, []byte(`{"format":2,"class":"com.app.Feed"}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"format":3,"class":"com.app.Feed"}`+"\n"), 0o644); err != nil {
 		t.Fatalf("write diagnostics fixture: %v", err)
 	}
 

@@ -457,10 +457,24 @@ internal object JankHunterHooks {
         }
     }
 
+    /**
+     * Legacy ABI for previously instrumented bytecode. Without generated V1 accessors,
+     * automatic lifecycle/binding coverage is partial, including under R8. Rebuild with
+     * the current Gradle plugin for the typed instrumentation contract.
+     */
     @JvmStatic
     fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
         try {
             hooks().watchLifecycleObject(instance, lifecycleEvent, ownerHint)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun watchLifecycleObject(instance: Any?, targetKind: Int, lifecycleEvent: String?, ownerHint: String?) {
+        try {
+            hooks().watchLifecycleObject(instance, targetKind, lifecycleEvent, ownerHint)
         } catch (throwable: Throwable) {
             recordFailure(throwable)
         }

@@ -24,6 +24,15 @@ func analyzeMathInputs(paths []string, options analyze.Options) (mathInputAnalys
 }
 
 func analyzeMathInputsWithBudget(paths []string, options analyze.Options, budget *collectionBudget) (mathInputAnalysis, error) {
+	if options.ObfuscationMap != nil {
+		inputs, err := analyze.OrderedSessionInputs(paths)
+		if err != nil {
+			return mathInputAnalysis{}, err
+		}
+		if _, err := analyze.ValidateMappingInputs(inputs, options.ObfuscationMap, options.AllowUnverifiedMapping); err != nil {
+			return mathInputAnalysis{}, err
+		}
+	}
 	metadata := budget.account("run metadata")
 	defer metadata.close()
 	if !metadata.reserveItems(len(paths), 1024) {
@@ -109,6 +118,9 @@ func detectScaleAndCollectRobust(paths []string, options analyze.Options, budget
 			return budget.err()
 		}
 		streamResult, streamErr := stalls.streamWithResult(path, symbols, consume)
+		if streamErr == nil {
+			_, streamErr = analyze.ValidateMappingInputs([]analyze.SessionInput{{Path: path, Header: streamResult.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping)
+		}
 		if streamResult.Sealed && streamResult.LatestQuality != nil {
 			r := ranges[runKey]
 			end := streamResult.LatestQuality.CapturedElapsedUS / 1000
@@ -196,6 +208,9 @@ func collectBucketedMathInputs(paths []string, options analyze.Options, scale ti
 			return budget.err()
 		}
 		streamResult, streamErr := stalls.streamWithResult(path, symbols, consume)
+		if streamErr == nil {
+			_, streamErr = analyze.ValidateMappingInputs([]analyze.SessionInput{{Path: path, Header: streamResult.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping)
+		}
 		timelineCollector.traffic.tracker.EndSegment(streamResult)
 		coverage.end(streamResult)
 		symbols.account.close()

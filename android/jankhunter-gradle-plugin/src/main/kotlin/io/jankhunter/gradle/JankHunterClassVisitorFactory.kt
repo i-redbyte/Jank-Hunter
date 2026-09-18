@@ -31,7 +31,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
                 visitor,
                 classData.className,
                 when {
-                    selection.runtime -> hookConfig
+                    selection.runtime -> hookConfig.copy(lifecycleLeaks = false)
                     selection.networkBoundary || selection.databaseBoundary -> hookConfig.boundaryOnly(
                         network = selection.networkBoundary,
                         database = selection.databaseBoundary,
@@ -76,11 +76,16 @@ internal class JankHunterClassVisitor(
     private val instrumentationMarkerDescriptor: String = InstrumentationMarker.DESCRIPTOR,
     private val markerOnlyWhenHookApplied: Boolean = false,
     private val diagnosticsOnlyWhenHookApplied: Boolean = false,
+    private val syntheticLifecycleCallbacks: Map<String, Int>? = null,
+    private val existingLifecycleMethods: Set<String> = emptySet(),
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
     private val lambdaCaptures = if (config.classGraph) LambdaCaptureClassBuilder(className) else null
     private val classAnnotations = JankAnnotationMetadata.Builder()
-    private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
+    private val diagnostics = InstrumentationDiagnosticsClassBuilder(
+        className,
+        if (instrumentationMarkerDescriptor == LifecycleInstrumentationMarker.DESCRIPTOR) "lifecycle" else "main",
+    )
     private val roomPolicy = RoomDaoInstrumentationPolicy(config.roomTracing, config.databaseTracing)
     private val classHierarchy = classHierarchy.mapTo(linkedSetOf()) { it.replace('.', '/') }
     private val androidComponentCatalog = AndroidComponentCatalogClassBuilder(className, this.classHierarchy)
@@ -94,6 +99,7 @@ internal class JankHunterClassVisitor(
     private var enclosingOwner: String? = null
     private var enclosingMethod: String? = null
     private var classAccess: Int = 0
+    private val declaredMethods = hashSetOf<String>()
     private var autoInitMethodPresent = false
     private var alreadyInstrumented = false
     private var classHookApplied = false
@@ -166,6 +172,7 @@ internal class JankHunterClassVisitor(
         signature: String?,
         exceptions: Array<out String>?,
     ): MethodVisitor {
+        declaredMethods.add(name + descriptor)
         androidComponentCatalog.recordMethod(access, name, descriptor)
         val next = super.visitMethod(access, name, descriptor, signature, exceptions)
         val autoInitEntryPoint = autoInitComponent?.matches(name, descriptor) == true
@@ -191,7 +198,7 @@ internal class JankHunterClassVisitor(
             androidComponentCatalog.declaredAidlDescriptor(),
         )
         if (autoInitEntryPoint) autoInitMethodPresent = true
-        if (alreadyInstrumented) {
+        if (alreadyInstrumented || (config.lifecycleLeaks && name + descriptor in existingLifecycleMethods)) {
             diagnostics.recordSkippedMethod("already_instrumented")
             return lambdaCaptureOnlyMethod(next, access, name, descriptor, signature, exceptions)
         }
@@ -321,6 +328,7 @@ internal class JankHunterClassVisitor(
     }
 
     override fun visitEnd() {
+        emitSyntheticLifecycleMethodsIfNeeded()
         emitSyntheticAutoInitMethodIfNeeded()
         if (!alreadyInstrumented && (!markerOnlyWhenHookApplied || classHookApplied)) {
             super.visitAnnotation(instrumentationMarkerDescriptor, false)?.visitEnd()
@@ -347,6 +355,34 @@ internal class JankHunterClassVisitor(
             androidComponentCatalog.finish(),
         )
         super.visitEnd()
+    }
+
+    private fun emitSyntheticLifecycleMethodsIfNeeded() {
+        if (!config.lifecycleLeaks || alreadyInstrumented || classAccess and Opcodes.ACC_INTERFACE != 0) return
+        val parent = superName ?: return
+        // Only known framework declarations can safely be overridden without method metadata.
+        // A custom ancestor may declare a final callback; its own instrumented declaration
+        // remains responsible for inherited delivery to descendants.
+        val callbacks = syntheticLifecycleCallbacks?.toList() ?: when (parent) {
+            "android/app/Fragment", "androidx/fragment/app/Fragment" ->
+                listOf("onDestroyView" to Opcodes.ACC_PUBLIC, "onDestroy" to Opcodes.ACC_PUBLIC)
+            "androidx/lifecycle/ViewModel" -> listOf("onCleared" to Opcodes.ACC_PROTECTED)
+            "android/app/Activity" -> listOf("onDestroy" to Opcodes.ACC_PROTECTED)
+            "android/app/Service" -> listOf("onDestroy" to Opcodes.ACC_PUBLIC)
+            else -> emptyList()
+        }
+        callbacks.forEach { (name, access) ->
+            if (name + "()V" !in declaredMethods) {
+                visitMethod(access, name, "()V", null, null).apply {
+                    visitCode()
+                    visitVarInsn(Opcodes.ALOAD, 0)
+                    visitMethodInsn(Opcodes.INVOKESPECIAL, parent, name, "()V", false)
+                    visitInsn(Opcodes.RETURN)
+                    visitMaxs(1, 1)
+                    visitEnd()
+                }
+            }
+        }
     }
 
     private fun emitSyntheticAutoInitMethodIfNeeded() {

@@ -1,0 +1,2 @@
+Exception in thread "main" java.lang.IllegalStateException: fixture
+	at probe.Entry.main(r8-map-id-37ab4fc69eec4d3815e5d68d85d3a7867f6f6cf4f1703c04e6d22c48719d398b:3)

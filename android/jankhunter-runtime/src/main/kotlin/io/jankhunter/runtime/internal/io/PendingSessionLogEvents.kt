@@ -145,9 +145,10 @@ internal class PendingStallEvent(
     private val foreground: Boolean,
     private val incidentId: Long,
     private val state: Long,
+    private val stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
 ) : PendingLogEvent(Jhlog.TYPE_STALL, producerContext) {
     override fun writePayload(writer: BinaryLogWriter) {
-        writer.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state)
+        writer.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state, stackOrigin)
     }
 }
 
@@ -173,8 +174,9 @@ internal class PendingRetainedEvent(
     private val count: Long,
     private val foreground: Boolean,
     private val evidence: Long,
+    private val classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
 ) : PendingLogEvent(Jhlog.TYPE_RETAINED, producerContext) {
     override fun writePayload(writer: BinaryLogWriter) {
-        writer.retained(screen, owner, className, holder, ageMs, count, foreground, evidence)
+        writer.retained(screen, owner, className, holder, ageMs, count, foreground, evidence, classOrigin)
     }
 }

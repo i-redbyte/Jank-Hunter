@@ -20,21 +20,21 @@ internal class BinaryDictionaryEncoder(
     private var tokenState: SegmentDictionaryTokens? = null
     private var tokenPayload: BinaryPayload? = null
 
-    fun symbolId(kind: Int, rawValue: String?): Long {
-        dictionary.resolve(kind, rawValue, lookupResult)
+    fun symbolId(kind: Int, rawValue: String?, origin: SymbolOrigin = SymbolOrigin.UNKNOWN): Long {
+        dictionary.resolve((kind shl 2) or origin.wireValue, rawValue, lookupResult)
         if (lookupResult.overflowed) quality.add(QualityCounterId.DICTIONARY_OVERFLOW_TOTAL)
         if (lookupResult.truncated) quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
         lookupResult.definition?.let(::writeDefinition)
         return lookupResult.id
     }
 
-    fun defineStableSymbol(stableId: Long, rawName: String?): Long {
-        val existing = stableSymbols.get(stableId)
+    fun defineStableSymbol(stableId: Long, rawName: String?, origin: SymbolOrigin = SymbolOrigin.UNKNOWN): Long {
+        val existing = stableSymbols.get(stableId, origin)
         if (existing != null) {
             require(existing == rawName) {
                 "stable symbol $stableId changed from '$existing' to '$rawName'"
             }
-            return stableSymbols.alias(stableId)
+            return stableSymbols.alias(stableId, origin)
         }
         val name = requireNotNull(rawName?.takeIf(String::isNotBlank)) {
             "stable symbol $stableId requires a readable embedded name"
@@ -46,24 +46,25 @@ internal class BinaryDictionaryEncoder(
             quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
             utf8Prefix(encoded, MAX_ENCODED_VALUE_BYTES)
         }
-        val alias = stableSymbols.put(stableId, name)
-        writeEncodedDefinition(BinaryLogWriter.DICT_STABLE_SYMBOL, alias, stableId, bytes)
+        val alias = stableSymbols.put(stableId, name, origin)
+        writeEncodedDefinition(BinaryLogWriter.DICT_STABLE_SYMBOL, alias, stableId, bytes, origin)
         return alias
     }
 
     private fun writeDefinition(definition: DictionaryIds.Definition) {
         writeEncodedDefinition(
-            definition.kind,
+            definition.kind ushr 2,
             definition.id,
             stableId = null,
             definition.value.toByteArray(StandardCharsets.UTF_8),
+            origin = SymbolOrigin.entries[definition.kind and 3],
         )
     }
 
-    private fun writeEncodedDefinition(kind: Int, alias: Long, stableId: Long?, bytes: ByteArray) {
+    private fun writeEncodedDefinition(kind: Int, alias: Long, stableId: Long?, bytes: ByteArray, origin: SymbolOrigin = SymbolOrigin.UNKNOWN) {
         val prefix = frontState.commonPrefix(kind, bytes)
         val encoded = payload.clear()
-            .uvarint(kind.toLong())
+            .uvarint((kind.toLong() shl 2) or origin.wireValue.toLong())
         if (stableId == null) {
             encoded.uvarint(alias)
         } else {

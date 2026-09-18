@@ -36,6 +36,7 @@ internal fun Project.configureJvm17() {
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
+            freeCompilerArgs.add("-Xjdk-release=17")
         }
     }
     configureKotlinWarnings()

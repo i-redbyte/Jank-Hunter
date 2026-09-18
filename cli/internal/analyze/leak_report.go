@@ -549,7 +549,7 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		}
 		kind := leakGraphKind(step.Kind, step.ClassName, suspect.ClassName)
 		label := firstNonEmpty(step.ClassName, "object")
-		detail := step.FieldName
+		detail := step.FieldLabel()
 		if detail == "" {
 			detail = step.Kind
 		}
@@ -570,7 +570,7 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 			edges = append(edges, LeakGraphEdge{
 				From:  prevID,
 				To:    id,
-				Label: firstNonEmpty(step.FieldName, step.Kind, "ref"),
+				Label: firstNonEmpty(step.FieldLabel(), step.Kind, "ref"),
 				Kind:  step.Kind,
 			})
 		}

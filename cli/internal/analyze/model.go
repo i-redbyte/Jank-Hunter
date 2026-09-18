@@ -39,6 +39,7 @@ type Filter struct {
 }
 
 type Options struct {
+	AllowUnverifiedMapping          bool
 	MathMemoryLimitBytes            uint64
 	MathSpectralWorkLimitOperations uint64
 	Filter                          Filter
@@ -725,12 +726,14 @@ type StartupScreenStats struct {
 }
 
 type OwnerStats struct {
-	Owner     string
-	Count     int
-	TotalMS   uint64
-	MaxMS     uint64
-	Kind      string
-	StackHint string
+	Owner        string
+	Count        int
+	TotalMS      uint64
+	MaxMS        uint64
+	Kind         string
+	StackOrigin  jhlog.SymbolOrigin
+	StackHint    string
+	StackRetrace *StackRetraceEvidence
 }
 
 type StallStateCounts struct {
@@ -944,10 +947,13 @@ const (
 )
 
 type HeapPathElement struct {
-	ClassName string `json:"class_name,omitempty"`
-	FieldName string `json:"field_name,omitempty"`
-	ObjectID  string `json:"object_id,omitempty"`
-	Kind      string `json:"kind,omitempty"`
+	DeclaredType   string                `json:"declared_type,omitempty"`
+	FieldRetrace   *FieldRetraceEvidence `json:"field_retrace,omitempty"`
+	DeclaringClass string                `json:"declaring_class,omitempty"`
+	ClassName      string                `json:"class_name,omitempty"`
+	FieldName      string                `json:"field_name,omitempty"`
+	ObjectID       string                `json:"object_id,omitempty"`
+	Kind           string                `json:"kind,omitempty"`
 }
 
 type CollectionSegment struct {
@@ -1312,6 +1318,8 @@ type OperationDatabaseStatementStats struct {
 }
 
 type Summary struct {
+	ArtifactIdentity         *ArtifactIdentityEvidence `json:",omitempty"`
+	MappingIdentity          MappingIdentityEvidence
 	HeapDiagnostics          []HeapDiagnostic `json:",omitempty"`
 	Acquisition              *AcquisitionEvidence
 	Title                    string
@@ -1461,9 +1469,10 @@ type LogGrowthSummary struct {
 }
 
 type ClassGraph struct {
-	Format  int                        `json:"format,omitempty"`
-	Classes map[string]ClassGraphClass `json:"classes"`
-	Edges   []ClassGraphEdge           `json:"edges"`
+	sourceIdentity artifactSourceIdentity
+	Format         int                        `json:"format,omitempty"`
+	Classes        map[string]ClassGraphClass `json:"classes"`
+	Edges          []ClassGraphEdge           `json:"edges"`
 }
 
 type ClassGraphClass struct {

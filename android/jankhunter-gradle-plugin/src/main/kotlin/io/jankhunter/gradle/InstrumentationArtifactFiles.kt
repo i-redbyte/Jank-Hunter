@@ -88,12 +88,17 @@ internal object InstrumentationArtifactFiles {
     }
 
     fun mergeJsonl(directory: File?, outputFile: File) {
+        mergeJsonlFiles(
+            directory?.takeIf { it.isDirectory }?.walkTopDown()
+                ?.filter { it.isFile && it.extension == "jsonl" }?.toList().orEmpty(),
+            outputFile,
+        )
+    }
+
+    fun mergeJsonlFiles(files: Collection<File>, outputFile: File) {
         writeAtomically(outputFile) { writer ->
-            if (directory?.isDirectory != true) return@writeAtomically
-            directory
-                .walkTopDown()
-                .filter { it.isFile && it.extension == "jsonl" }
-                .sortedBy { it.relativeTo(directory).invariantSeparatorsPath }
+            files
+                .sortedWith(compareBy<File> { it.name }.thenBy { it.parentFile.name })
                 .forEach { file ->
                     file.useLines { lines ->
                         lines.forEach { line ->

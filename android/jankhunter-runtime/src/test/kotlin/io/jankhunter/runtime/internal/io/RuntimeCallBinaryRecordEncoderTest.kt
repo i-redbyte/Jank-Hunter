@@ -30,6 +30,8 @@ class RuntimeCallBinaryRecordEncoderTest {
 
         override fun payload(): BinaryPayload = payload.clear()
 
+        override fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long = symbolId(kind, value)
+
         override fun optionalSymbolId(kind: Int, value: String?): Long = 0L
 
         override fun defineStableSymbol(id: Long, name: String?): Long = id

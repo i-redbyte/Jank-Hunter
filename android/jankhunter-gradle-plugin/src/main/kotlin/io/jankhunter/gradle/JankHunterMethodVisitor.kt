@@ -911,13 +911,14 @@ internal class JankHunterMethodVisitor(
 
     private fun emitLifecycleWatch() {
         loadThis()
+        push(lifecyclePolicy.targetKind)
         visitLdcInsn(methodName)
         visitLdcInsn(annotationContext.owner)
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
             "watchLifecycleObject",
-            "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)V",
+            "(Ljava/lang/Object;ILjava/lang/String;Ljava/lang/String;)V",
             false,
         )
         diagnostics.recordLifecycleHook(methodName, methodDescriptor, superName)

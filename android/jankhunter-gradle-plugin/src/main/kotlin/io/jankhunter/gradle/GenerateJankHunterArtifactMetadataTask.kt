@@ -209,7 +209,7 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
             lambdaCaptureDirectory.orNull?.asFile,
             lambdaCaptureOutputFile.get().asFile,
         )
-        InstrumentationArtifactFiles.mergeJsonl(diagnosticsDirectory.orNull?.asFile, diagnosticsOutputFile.get().asFile)
+        InstrumentationArtifactFiles.mergeJsonlFiles(diagnosticsFiles.files, diagnosticsOutputFile.get().asFile)
         InstrumentationArtifactFiles.mergeJsonl(
             androidComponentCatalogDirectory.orNull?.asFile,
             androidComponentCatalogOutputFile.get().asFile,

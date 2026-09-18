@@ -14,13 +14,16 @@ internal class LifecycleInstrumentationPolicy(
     methodDescriptor: String,
     hierarchy: Set<String>,
 ) {
+    // Stable ABI tags describe the pre-R8 hierarchy, never the runtime class name.
+    private val kind = hierarchy.firstNotNullOfOrNull(LifecycleTargetKind::fromRoot) ?: LifecycleTargetKind.NONE
+    val targetKind: Int = kind.code
+
     val hookPoint: LifecycleHookPoint = select(
         enabled,
         constructor,
         staticMethod,
         methodName,
         methodDescriptor,
-        hierarchy,
     )
 
     private fun select(
@@ -29,24 +32,21 @@ internal class LifecycleInstrumentationPolicy(
         staticMethod: Boolean,
         methodName: String,
         methodDescriptor: String,
-        hierarchy: Set<String>,
     ): LifecycleHookPoint {
         if (!enabled || constructor || staticMethod || methodDescriptor != VOID_METHOD_DESCRIPTOR) {
             return LifecycleHookPoint.NONE
         }
         if (methodName == "onDestroyView") {
-            return if (ANDROIDX_FRAGMENT in hierarchy || ANDROID_FRAGMENT in hierarchy) {
+            return if (kind == LifecycleTargetKind.FRAGMENT) {
                 LifecycleHookPoint.ENTER
             } else {
                 LifecycleHookPoint.NONE
             }
         }
         val watched = when (methodName) {
-            "onDestroy" -> ANDROID_ACTIVITY in hierarchy ||
-                ANDROIDX_FRAGMENT in hierarchy ||
-                ANDROID_FRAGMENT in hierarchy ||
-                ANDROID_SERVICE in hierarchy
-            "onCleared" -> ANDROIDX_VIEW_MODEL in hierarchy
+            "onDestroy" -> kind == LifecycleTargetKind.ACTIVITY ||
+                kind == LifecycleTargetKind.FRAGMENT || kind == LifecycleTargetKind.SERVICE
+            "onCleared" -> kind == LifecycleTargetKind.VIEW_MODEL
             else -> false
         }
         return if (watched) LifecycleHookPoint.EXIT else LifecycleHookPoint.NONE
@@ -54,10 +54,5 @@ internal class LifecycleInstrumentationPolicy(
 
     private companion object {
         private const val VOID_METHOD_DESCRIPTOR = "()V"
-        private const val ANDROID_ACTIVITY = "android/app/Activity"
-        private const val ANDROID_FRAGMENT = "android/app/Fragment"
-        private const val ANDROID_SERVICE = "android/app/Service"
-        private const val ANDROIDX_FRAGMENT = "androidx/fragment/app/Fragment"
-        private const val ANDROIDX_VIEW_MODEL = "androidx/lifecycle/ViewModel"
     }
 }

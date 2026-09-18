@@ -43,6 +43,7 @@ internal class AsyncLogWriter internal constructor(
     private val prepareSession: () -> LogGrowthManager?,
     private val onTerminalStop: AsyncWriterTerminalObserver,
     private val workerThreadFactory: (Runnable, String) -> Thread = ::Thread,
+    private val buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
 ) : OperationEventSink {
     @Volatile
     private var logGrowthManager: LogGrowthManager? = null
@@ -330,6 +331,7 @@ internal class AsyncLogWriter internal constructor(
         foreground: Boolean,
         incidentId: Long = 0L,
         state: Long = Jhlog.STALL_STATE_RECOVERED,
+        stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
         validateStallLifecycle(incidentId, state)
         enqueue(Jhlog.TYPE_STALL, LogEventLane.CRITICAL) {
@@ -342,6 +344,7 @@ internal class AsyncLogWriter internal constructor(
                 foreground,
                 incidentId,
                 state,
+                stackOrigin,
             )
         }
     }
@@ -361,6 +364,7 @@ internal class AsyncLogWriter internal constructor(
         count: Long,
         foreground: Boolean,
         evidence: RetentionEvidence,
+        classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
         enqueue(Jhlog.TYPE_RETAINED, LogEventLane.CRITICAL) {
             PendingRetainedEvent(
@@ -373,6 +377,7 @@ internal class AsyncLogWriter internal constructor(
                 count,
                 foreground,
                 evidence.wireValue,
+                classOrigin,
             )
         }
     }
@@ -1076,6 +1081,7 @@ internal class AsyncLogWriter internal constructor(
             collectorStartElapsedUs = collectorStartElapsedUs,
             quality = quality,
             logGrowthManager = logGrowthManager,
+            buildIdentity = buildIdentity,
         )
     }
 

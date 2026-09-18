@@ -358,6 +358,12 @@ internal class RuntimeInstrumentationHooks(
         }
     }
 
+    fun watchLifecycleObject(instance: Any?, targetKind: Int, lifecycleEvent: String?, ownerHint: String?) {
+        if (isEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS)) {
+            retentionTelemetry.watchLifecycleObject(instance, targetKind, lifecycleEvent, ownerHint)
+        }
+    }
+
     private fun isEnabled(feature: JankHunterRuntimeFeature): Boolean {
         return telemetryAccess.isFeatureActive(feature)
     }

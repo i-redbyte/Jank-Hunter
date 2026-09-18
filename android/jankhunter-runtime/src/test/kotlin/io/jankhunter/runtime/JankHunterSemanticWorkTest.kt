@@ -61,16 +61,31 @@ class JankHunterSemanticWorkTest {
     }
 
     @Test
-    fun workerResultNamesAreClassifiedWithoutWorkManagerDependency() {
-        assertEquals(JankHunterWorkerOutcome.SUCCESS.code, JankHunterHooks.classifyWorkerOutcome(Success()))
-        assertEquals(JankHunterWorkerOutcome.FAILURE.code, JankHunterHooks.classifyWorkerOutcome(Failure()))
-        assertEquals(JankHunterWorkerOutcome.RETRY.code, JankHunterHooks.classifyWorkerOutcome(Retry()))
+    fun unrelatedResultNamesRemainUnknown() {
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN.code, JankHunterHooks.classifyWorkerOutcome(Success()))
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN.code, JankHunterHooks.classifyWorkerOutcome(Failure()))
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN.code, JankHunterHooks.classifyWorkerOutcome(Retry()))
         assertEquals(JankHunterWorkerOutcome.UNKNOWN.code, JankHunterHooks.classifyWorkerOutcome(PlainResult()))
         assertEquals(JankHunterWorkerOutcome.UNKNOWN.code, JankHunterHooks.classifyWorkerOutcome(null))
-        assertEquals(JankHunterWorkerOutcome.SUCCESS, JankHunterWorkerRuntime.classify(Success()))
-        assertEquals(JankHunterWorkerOutcome.FAILURE, JankHunterWorkerRuntime.classify(Failure()))
-        assertEquals(JankHunterWorkerOutcome.RETRY, JankHunterWorkerRuntime.classify(Retry()))
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN, JankHunterWorkerRuntime.classify(Success()))
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN, JankHunterWorkerRuntime.classify(Failure()))
+        assertEquals(JankHunterWorkerOutcome.UNKNOWN, JankHunterWorkerRuntime.classify(Retry()))
         assertEquals(JankHunterWorkerOutcome.UNKNOWN, JankHunterWorkerRuntime.classify(null))
+    }
+
+    @Test
+    fun realWorkManagerResultsUseBothLegacyEntrypoints() {
+        val results = listOf(
+            androidx.work.ListenableWorker.Result.success() to JankHunterWorkerOutcome.SUCCESS,
+            androidx.work.ListenableWorker.Result.failure() to JankHunterWorkerOutcome.FAILURE,
+            androidx.work.ListenableWorker.Result.retry() to JankHunterWorkerOutcome.RETRY,
+        )
+        repeat(2) {
+            results.forEach { (result, outcome) ->
+                assertEquals(outcome.code, JankHunterHooks.classifyWorkerOutcome(result))
+                assertEquals(outcome, JankHunterWorkerRuntime.classify(result))
+            }
+        }
     }
 
     @Test

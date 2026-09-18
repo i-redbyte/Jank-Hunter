@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,6 +19,7 @@ const (
 )
 
 type InstrumentationDiagnostics struct {
+	sourceIdentity       artifactSourceIdentity
 	Available            bool
 	Source               string
 	ClassCount           int
@@ -70,6 +73,8 @@ type InstrumentationAnnotationSummary struct {
 }
 
 type InstrumentationClassDiagnostic struct {
+	Pass                 string
+	Passes               []InstrumentationClassDiagnostic
 	ClassName            string
 	Methods              int
 	IgnoredMethods       int
@@ -88,12 +93,14 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
+	digest := sha256.New()
 	input, err := openBoundedTextInput(
 		path,
 		"instrumentation diagnostics",
 		instrumentationDiagnosticsMaxFileBytes,
 		64*1024,
 		instrumentationDiagnosticsMaxLineBytes,
+		digest,
 	)
 	if err != nil {
 		return nil, err
@@ -111,7 +118,7 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 	scanner := input.Scanner
 	lineNumber := 0
 	detailCount := 0
-	seenClasses := make(map[string]struct{})
+	seenClasses := make(map[string]uint8)
 	for scanner.Scan() {
 		lineNumber++
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -125,16 +132,18 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 		if err := decodeStrictJSON(line, &record); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
-		if err := validateArtifactFormat(path, "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat); err != nil {
+		if err := validateInstrumentationPass(record); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
 		if err := validateInstrumentationDiagnosticsRecord(record); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
-		if _, duplicate := seenClasses[record.ClassName]; duplicate {
-			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: duplicate class %q", lineNumber, record.ClassName)
+		bit := instrumentationPassBit(record.Pass)
+		seen := seenClasses[record.ClassName]
+		if seen&bit != 0 || (seen != 0 && (bit == 1 || seen&1 != 0)) {
+			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: duplicate class %q or conflicting pass %q", lineNumber, record.ClassName, record.Pass)
 		}
-		seenClasses[record.ClassName] = struct{}{}
+		seenClasses[record.ClassName] = seen | bit
 		recordDetails := len(record.MethodFilterReasons) + len(record.SkippedMethods) + len(record.Hooks) +
 			len(record.Decisions) + len(record.Annotations)
 		if recordDetails > instrumentationDiagnosticsMaxDetails-detailCount {
@@ -146,7 +155,9 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 	if err := input.Err(); err != nil {
 		return nil, err
 	}
-	return builder.finish(), nil
+	result := builder.finish()
+	result.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
+	return result, nil
 }
 
 type instrumentationDiagnosticsBuilder struct {
@@ -168,6 +179,7 @@ type instrumentationDiagnosticsBuilder struct {
 func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnosticsRecord) {
 	class := InstrumentationClassDiagnostic{
 		ClassName:            record.ClassName,
+		Pass:                 record.Pass,
 		Methods:              record.Methods,
 		IgnoredMethods:       record.IgnoredMethods,
 		AnnotatedMethods:     record.AnnotatedMethods,
@@ -179,11 +191,13 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		Decisions:            decisionSummaries(record.Decisions),
 		Annotations:          annotationSummaries(record.Annotations),
 	}
-	for _, item := range class.MethodFilterReasons {
-		b.methodFilterReasons[item.Reason] = saturatingUint64Sum(b.methodFilterReasons[item.Reason], item.Count)
-	}
-	for _, item := range class.SkippedMethods {
-		b.skipped[item.Reason] = saturatingUint64Sum(b.skipped[item.Reason], item.Count)
+	if record.Pass != "lifecycle" {
+		for _, item := range class.MethodFilterReasons {
+			b.methodFilterReasons[item.Reason] = saturatingUint64Sum(b.methodFilterReasons[item.Reason], item.Count)
+		}
+		for _, item := range class.SkippedMethods {
+			b.skipped[item.Reason] = saturatingUint64Sum(b.skipped[item.Reason], item.Count)
+		}
 	}
 	for _, item := range class.Hooks {
 		class.HookCount = saturatingUint64Sum(class.HookCount, item.Count)
@@ -209,25 +223,28 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		}
 		b.decisions[key] = saturatingUint64Sum(b.decisions[key], item.Count)
 	}
-	for _, item := range class.Annotations {
-		key := instrumentationAnnotationKey{
-			owner:             item.Owner,
-			screen:            item.Screen,
-			operation:         item.Operation,
-			operationKind:     item.OperationKind,
-			operationBudgetMS: item.OperationBudgetMS,
+	if record.Pass != "lifecycle" {
+		for _, item := range class.Annotations {
+			key := instrumentationAnnotationKey{
+				owner:             item.Owner,
+				screen:            item.Screen,
+				operation:         item.Operation,
+				operationKind:     item.OperationKind,
+				operationBudgetMS: item.OperationBudgetMS,
+			}
+			b.annotations[key] = saturatingUint64Sum(b.annotations[key], item.Count)
 		}
-		b.annotations[key] = saturatingUint64Sum(b.annotations[key], item.Count)
+		b.methods += record.Methods
+		b.ignored += record.IgnoredMethods
+		b.annotated += record.AnnotatedMethods
+		b.methodFilterIncluded += record.MethodFilterIncluded
+		b.methodFilterExcluded += record.MethodFilterExcluded
 	}
-	b.methods += record.Methods
-	b.ignored += record.IgnoredMethods
-	b.annotated += record.AnnotatedMethods
-	b.methodFilterIncluded += record.MethodFilterIncluded
-	b.methodFilterExcluded += record.MethodFilterExcluded
 	b.classes = append(b.classes, class)
 }
 
 func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics {
+	b.classes = combineInstrumentationPasses(b.classes)
 	sort.SliceStable(b.classes, func(i, j int) bool {
 		left := b.classes[i]
 		right := b.classes[j]
@@ -264,6 +281,7 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 }
 
 type instrumentationDiagnosticsRecord struct {
+	Pass                 string                            `json:"pass"`
 	Format               int                               `json:"format"`
 	ClassName            string                            `json:"class"`
 	Methods              int                               `json:"methods"`

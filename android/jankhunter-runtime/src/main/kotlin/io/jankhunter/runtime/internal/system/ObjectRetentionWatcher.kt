@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.system
 
 import android.os.SystemClock
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import io.jankhunter.runtime.JankHunterContext
 import io.jankhunter.runtime.RuntimeHookGuard
 import io.jankhunter.runtime.RuntimeHookFailureReason
@@ -24,6 +25,7 @@ internal typealias RetentionReporter = (
     ageMs: Long,
     count: Long,
     evidence: RetentionEvidence,
+    classOrigin: SymbolOrigin,
 ) -> Unit
 
 internal typealias HeapDumpReporter = (
@@ -153,12 +155,12 @@ internal class ObjectRetentionWatcher(
     private fun canDiagnose(): Boolean = running.get() ||
         (exactAdmission && finalCheck?.let { it.deadlineNs - System.nanoTime() > 0L } == true)
 
-    fun watch(instance: Any?, description: String?, ownerHint: String?, context: JankHunterContext?) {
+    fun watch(instance: Any?, description: String?, ownerHint: String?, context: JankHunterContext?, classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN) {
         if (instance == null || !running.get()) return
-        addWatched(instance, description, ownerHint, context)
+        addWatched(instance, description, ownerHint, context, classOrigin)
     }
 
-    private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?) {
+    private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?, classOrigin: SymbolOrigin) {
         var dropped = false
         synchronized(registryLock) {
             drainClearedLocked()
@@ -171,6 +173,7 @@ internal class ObjectRetentionWatcher(
                         referent = instance,
                         queue = queue,
                         className = safeClassName(instance, description),
+                        classOrigin = if (description.isNullOrBlank()) SymbolOrigin.RUNTIME_CLASS else classOrigin,
                         ownerHint = ownerHint?.takeIf { it.isNotBlank() },
                         context = context,
                         watchStartedMs = clock.getAsLong(),
@@ -213,8 +216,8 @@ internal class ObjectRetentionWatcher(
     private fun checkRetainedLocked() {
         if (!canDiagnose()) return
         val now = clock.getAsLong()
-        var retainedGroups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>? = null
-        var heapDumpGroups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>? = null
+        var retainedGroups: LinkedHashMap<Pair<String, SymbolOrigin>, LinkedHashMap<String?, RetainedGroup>>? = null
+        var heapDumpGroups: LinkedHashMap<Pair<String, SymbolOrigin>, LinkedHashMap<String?, RetainedGroup>>? = null
         var shouldRequestGc = false
 
         synchronized(registryLock) {
@@ -312,28 +315,28 @@ internal class ObjectRetentionWatcher(
     }
 
     private fun addToGroups(
-        groups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>?,
+        groups: LinkedHashMap<Pair<String, SymbolOrigin>, LinkedHashMap<String?, RetainedGroup>>?,
         ref: WatchedReference,
         ageMs: Long,
         evidence: RetentionEvidence?,
-    ): LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>> {
+    ): LinkedHashMap<Pair<String, SymbolOrigin>, LinkedHashMap<String?, RetainedGroup>> {
         val target = groups ?: linkedMapOf()
-        val group = target.getOrPut(ref.className, ::linkedMapOf)
+        val group = target.getOrPut(ref.className to ref.classOrigin, ::linkedMapOf)
             .getOrPut(ref.ownerHint, ref::newGroup)
         if (evidence == null) group.add(ageMs) else group.add(ageMs, evidence)
         return target
     }
 
-    private fun Map<String, Map<String?, RetainedGroup>>.reportTo(target: RetentionReporter) {
+    private fun Map<Pair<String, SymbolOrigin>, Map<String?, RetainedGroup>>.reportTo(target: RetentionReporter) {
         for (ownerGroups in values) {
             for (group in ownerGroups.values) {
                 if (!canDiagnose()) return
-                target(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count, group.evidence)
+                target(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count, group.evidence, group.classOrigin)
             }
         }
     }
 
-    private fun Map<String, Map<String?, RetainedGroup>>.reportTo(target: HeapDumpReporter) {
+    private fun Map<Pair<String, SymbolOrigin>, Map<String?, RetainedGroup>>.reportTo(target: HeapDumpReporter) {
         for (ownerGroups in values) {
             for (group in ownerGroups.values) {
                 if (!canDiagnose()) return
@@ -352,6 +355,7 @@ internal class ObjectRetentionWatcher(
 
     private class RetainedGroup(
         val className: String,
+        val classOrigin: SymbolOrigin,
         val ownerHint: String?,
         val context: JankHunterContext?,
     ) {
@@ -381,6 +385,7 @@ internal class ObjectRetentionWatcher(
         referent: Any,
         queue: ReferenceQueue<Any>,
         val className: String,
+        val classOrigin: SymbolOrigin,
         val ownerHint: String?,
         val context: JankHunterContext?,
         val watchStartedMs: Long,
@@ -393,7 +398,7 @@ internal class ObjectRetentionWatcher(
         var gcCompleted = false
         var retentionReported = false
 
-        fun newGroup(): RetainedGroup = RetainedGroup(className, ownerHint, context)
+        fun newGroup(): RetainedGroup = RetainedGroup(className, classOrigin, ownerHint, context)
 
         fun retire() {
             watchedIndex = -1
@@ -432,7 +437,7 @@ internal class ObjectRetentionWatcher(
     private companion object {
         const val DEFAULT_STOP_TIMEOUT_MS = 5_000L
         const val DEFAULT_MAX_WATCHED_REFERENCES = 2_048
-        val NO_OP_REPORTER: RetentionReporter = { _, _, _, _, _, _ -> }
+        val NO_OP_REPORTER: RetentionReporter = { _, _, _, _, _, _, _ -> }
         val NO_OP_CARDINALITY_LOSS = RuntimeLongConsumer { }
     }
 }

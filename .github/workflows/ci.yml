@@ -43,7 +43,10 @@ jobs:
           java-version: "17"
       - name: Test and assemble
         working-directory: android
-        run: ./gradlew test assemble --no-daemon --stacktrace
+        run: ./gradlew test :jankhunter-gradle-plugin:test assemble --no-daemon --stacktrace
+      - name: Test standalone plugin on Java 17
+        working-directory: android
+        run: ./gradlew -p jankhunter-gradle-plugin test --no-daemon --stacktrace
 
   publish-dry-run:
     name: Publish dry run
@@ -56,7 +59,11 @@ jobs:
           java-version: "17"
       - name: Publish to Maven Local
         working-directory: android
-        run: ./gradlew publishToMavenLocal --no-daemon --stacktrace
+        run: |
+          ./gradlew publishToMavenLocal --no-daemon --stacktrace
+          version="$(sed -n 's/^jankHunterVersion=//p' gradle.properties)"
+          python3 ../scripts/validate-maven-publication.py \
+            --repository "$HOME/.m2/repository" --version "$version"
 
   cli-report-artifact:
     name: CLI report artifact

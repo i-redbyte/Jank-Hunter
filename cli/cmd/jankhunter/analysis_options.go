@@ -12,17 +12,18 @@ import (
 )
 
 type analysisOptionsBuilder struct {
-	outputPath           string
-	filter               analyze.Filter
-	artifactsDir         string
-	mappingPath          string
-	classGraphPath       string
-	diagnosticsPath      string
-	diCatalogPath        string
-	componentCatalogPath string
-	lambdaCapturePath    string
-	databaseEvidencePath string
-	artifactNS           []byte
+	allowUnverifiedMapping bool
+	outputPath             string
+	filter                 analyze.Filter
+	artifactsDir           string
+	mappingPath            string
+	classGraphPath         string
+	diagnosticsPath        string
+	diCatalogPath          string
+	componentCatalogPath   string
+	lambdaCapturePath      string
+	databaseEvidencePath   string
+	artifactNS             []byte
 }
 
 func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
@@ -35,6 +36,10 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 		return analysisOptionsBuilder{}, nil, err
 	}
 	mappingPath, remaining, err := takeStringFlag(remaining, "mapping", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	allowUnverifiedMapping, remaining, err := takeBoolFlag(remaining, "allow-unverified-mapping")
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
@@ -59,14 +64,15 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 		return analysisOptionsBuilder{}, nil, err
 	}
 	return analysisOptionsBuilder{
-		filter:               filter,
-		artifactsDir:         artifactsDir,
-		mappingPath:          mappingPath,
-		classGraphPath:       classGraphPath,
-		diagnosticsPath:      diagnosticsPath,
-		diCatalogPath:        diCatalogPath,
-		componentCatalogPath: componentCatalogPath,
-		databaseEvidencePath: databaseEvidencePath,
+		allowUnverifiedMapping: allowUnverifiedMapping,
+		filter:                 filter,
+		artifactsDir:           artifactsDir,
+		mappingPath:            mappingPath,
+		classGraphPath:         classGraphPath,
+		diagnosticsPath:        diagnosticsPath,
+		diCatalogPath:          diCatalogPath,
+		componentCatalogPath:   componentCatalogPath,
+		databaseEvidencePath:   databaseEvidencePath,
 	}, remaining, nil
 }
 
@@ -138,6 +144,7 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 		return analyze.Options{}, err
 	}
 	return analyze.Options{
+		AllowUnverifiedMapping:     b.allowUnverifiedMapping,
 		Filter:                     b.filter,
 		ObfuscationMap:             nameMapping,
 		ClassGraph:                 classGraph,

@@ -736,9 +736,10 @@ func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvide
 		},
 	}
 	complete := completeCollector.analysisInputCompleteness(Summary{
-		LogCount:        1,
-		DataRecordCount: 10,
-		Influence:       InfluenceSummary{HasClassGraph: true},
+		ArtifactIdentity: &ArtifactIdentityEvidence{Status: "mapping_bound", VerifiedArtifacts: 2},
+		LogCount:         1,
+		DataRecordCount:  10,
+		Influence:        InfluenceSummary{HasClassGraph: true},
 	})
 	if !complete.Complete || complete.Status != "complete" || len(complete.Missing) != 0 ||
 		!complete.ArtifactsAutoDiscovered || !complete.ArtifactIdentityVerified || complete.ArtifactDirectory == "" {

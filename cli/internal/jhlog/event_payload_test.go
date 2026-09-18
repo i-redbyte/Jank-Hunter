@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func encodeEventPayload(w io.Writer, event Event, stableAliases map[uint64]uint64) error {
+func encodeEventPayload(w io.Writer, event Event, stableAliases stableAliasTable) error {
 	return encodeEventPayloadWithState(w, event, stableAliases, nil)
 }
 
@@ -50,7 +50,7 @@ func TestRuntimeEdgeWireSeparatesDefinitionMaskFromIDs(t *testing.T) {
 	var encoded bytes.Buffer
 	if err := encodeEventPayload(&encoded, Event{
 		Type: EventRuntimeCall, RuntimeCall: &RuntimeCallEvent{}, runtimeCalls: rows,
-	}, map[uint64]uint64{1: 1, 2: 2, 3: 3}); err != nil {
+	}, stableAliasTable{{ID: 1}: 1, {ID: 2}: 2, {ID: 3}: 3}); err != nil {
 		t.Fatal(err)
 	}
 	want := readWireGolden(t, "runtime-edge-columnar.bin")

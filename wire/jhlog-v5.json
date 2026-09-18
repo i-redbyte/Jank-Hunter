@@ -5,11 +5,29 @@
     "major": 5,
     "minor": 1,
     "patch": 0,
-    "header_schema": 2,
+    "header_schema": 3,
     "chunk_magic_hex": "4a484331",
     "commit_magic_hex": "4a48434d"
   },
+  "readable_legacy_header_schemas": [2],
+  "build_identity_contract": {
+    "header_schema": 3,
+    "append_after_roster": ["build_identity_state:uvarint", "mapping_sha256:bounded_bytes_32", "build_identity_reason:uvarint"],
+    "states": "unknown=0, unminified=1, mapped=2. Only mapped carries exactly 32 digest bytes; other states carry none.",
+    "reasons": "unknown state only: unspecified=0, missing_asset=1, unreadable_asset=2, malformed_asset=3, unsupported_asset_schema=4, namespace_mismatch=5. Known states require reason=0.",
+    "identity": "Digest of exact post-R8 mapping bytes, generated as an APK/AAB asset after R8. Libraries use the host identity. APK/AAB and instrumentation artifact hashes are recorded separately after packaging.",
+    "legacy": "Schema2 remains readable as unverified. Older readers reject schema3 explicitly. Header schema is independent of unchanged data-record format5.1.0.",
+    "policy": "Matching SHA permits mapping; mismatch rejects mapping. Legacy or unknown identity requires explicit trust override and unverified labeling. No mapping is needed for unminified identity."
+  },
   "readable_legacy_versions": [{"major": 5, "minor": 0, "patch": 0}],
+  "symbol_origin_contract": {
+    "version": 1,
+    "required_feature_bit": 31,
+    "dictionary_kind": "With bit31 dictionary kind is (baseKind << 2) | origin. Front coding remains scoped by baseKind. References retain their prior encoding; origin is resolved from the referenced dictionary definition.",
+    "origins": {"unknown": 0, "source_label": 1, "runtime_class": 2, "runtime_stack": 3},
+    "legacy": "Without bit31 all origins are unknown. Stable IDs do not imply source provenance. Old readers reject required bit31.",
+    "mapping": "Apply mapping to runtime_class and official Retrace to runtime_stack only. Preserve source_label and unknown text."
+  },
   "http_first_byte_contract": {
     "introduced": "5.1.0",
     "required_feature_bit": 28,
@@ -114,7 +132,8 @@
     {"kotlin": "FEATURE_GAUGE_WIDE_SUM", "go": "FeatureGaugeWideSum", "bit": 27},
     {"kotlin": "FEATURE_HTTP_FIRST_BYTE", "go": "FeatureHTTPFirstByte", "bit": 28},
     {"kotlin": "FEATURE_UID_TRAFFIC", "go": "FeatureUIDTraffic", "bit": 29},
-    {"kotlin": "FEATURE_HTTP_COLLECTION_STATE", "go": "FeatureHTTPCollectionState", "bit": 30}
+    {"kotlin": "FEATURE_HTTP_COLLECTION_STATE", "go": "FeatureHTTPCollectionState", "bit": 30},
+    {"kotlin": "FEATURE_SYMBOL_ORIGIN", "go": "FeatureSymbolOrigin", "bit": 31}
   ],
   "optional_features": [
     {"kotlin": "OPTIONAL_FEATURE_GZIP_CHUNKS", "go": "FeatureGZIPChunks", "bit": 0, "profiles": ["gzip"]},

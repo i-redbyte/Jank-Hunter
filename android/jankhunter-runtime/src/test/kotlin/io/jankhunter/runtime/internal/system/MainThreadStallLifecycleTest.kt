@@ -127,7 +127,25 @@ class MainThreadStallLifecycleTest {
         }
     }
 
-    private class Fixture {
+    @Test
+    fun rawStackNeverReplacesMissingOrExactContextOwner() {
+        for (owner in listOf(null, "precise.owner")) {
+            val fixture = Fixture(owner)
+            try {
+                fixture.watchdog.start()
+                fixture.main.now.set(200L)
+                assertTrue(fixture.recorded.await(1L, TimeUnit.SECONDS))
+                org.junit.Assert.assertSame(fixture.context, fixture.contexts.first())
+                assertEquals(owner, fixture.contexts.first().owner)
+            } finally {
+                fixture.watchdog.stop()
+            }
+        }
+    }
+
+    private class Fixture(owner: String? = "owner") {
+        val context = JankHunterContextSnapshot("screen", owner)
+        val contexts = CopyOnWriteArrayList<JankHunterContextSnapshot>()
         val captured = CountDownLatch(1)
         val recorded = CountDownLatch(1)
         val terminated = CountDownLatch(1)
@@ -146,10 +164,11 @@ class MainThreadStallLifecycleTest {
                 "nextMainThreadStallId" -> ids.incrementAndGet()
                 "captureMainThreadStallContext" -> {
                     captured.countDown()
-                    JankHunterContextSnapshot("screen", "owner")
+                    context
                 }
                 "recordMainThreadStall" -> {
                     val values = requireNotNull(args)
+                    contexts.add(values[0] as JankHunterContextSnapshot)
                     val state = values[4] as MainThreadStallState
                     val id = values[3] as Long
                     beforeRecord?.invoke(id, state)

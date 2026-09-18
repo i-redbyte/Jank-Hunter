@@ -5,36 +5,37 @@ internal class StableSymbolRegistry(initialCapacity: Int = DEFAULT_CAPACITY) {
     private var keys = LongArray(tableCapacity(initialCapacity))
     private var values = arrayOfNulls<String>(keys.size)
     private var aliases = LongArray(keys.size)
+    private var origins = ByteArray(keys.size)
     private var size = 0
     private var nextAlias = 1L
 
-    fun get(id: Long): String? {
-        var index = hash(id) and (keys.size - 1)
+    fun get(id: Long, origin: SymbolOrigin = SymbolOrigin.UNKNOWN): String? {
+        var index = hash(id xor origin.wireValue.toLong()) and (keys.size - 1)
         while (true) {
             val value = values[index] ?: return null
-            if (keys[index] == id) return value
+            if (keys[index] == id && origins[index].toInt() == origin.wireValue) return value
             index = (index + 1) and (keys.size - 1)
         }
     }
 
-    fun alias(id: Long): Long {
-        var index = hash(id) and (keys.size - 1)
+    fun alias(id: Long, origin: SymbolOrigin = SymbolOrigin.UNKNOWN): Long {
+        var index = hash(id xor origin.wireValue.toLong()) and (keys.size - 1)
         while (true) {
             if (values[index] == null) return 0L
-            if (keys[index] == id) return aliases[index]
+            if (keys[index] == id && origins[index].toInt() == origin.wireValue) return aliases[index]
             index = (index + 1) and (keys.size - 1)
         }
     }
 
-    fun put(id: Long, value: String): Long {
+    fun put(id: Long, value: String, origin: SymbolOrigin = SymbolOrigin.UNKNOWN): Long {
         if (size * 2 >= keys.size) grow()
-        return insert(id, value, 0L)
+        return insert(id, value, 0L, origin)
     }
 
-    private fun insert(id: Long, value: String, retainedAlias: Long): Long {
-        var index = hash(id) and (keys.size - 1)
+    private fun insert(id: Long, value: String, retainedAlias: Long, origin: SymbolOrigin): Long {
+        var index = hash(id xor origin.wireValue.toLong()) and (keys.size - 1)
         while (values[index] != null) {
-            if (keys[index] == id) {
+            if (keys[index] == id && origins[index].toInt() == origin.wireValue) {
                 values[index] = value
                 return aliases[index]
             }
@@ -42,6 +43,7 @@ internal class StableSymbolRegistry(initialCapacity: Int = DEFAULT_CAPACITY) {
         }
         val alias = retainedAlias.takeIf { it > 0L } ?: nextAlias++
         keys[index] = id
+        origins[index] = origin.wireValue.toByte()
         values[index] = value
         aliases[index] = alias
         size++
@@ -52,13 +54,15 @@ internal class StableSymbolRegistry(initialCapacity: Int = DEFAULT_CAPACITY) {
         val oldKeys = keys
         val oldValues = values
         val oldAliases = aliases
+        val oldOrigins = origins
         keys = LongArray(oldKeys.size shl 1)
         values = arrayOfNulls(keys.size)
         aliases = LongArray(keys.size)
+        origins = ByteArray(keys.size)
         size = 0
         for (index in oldValues.indices) {
             val value = oldValues[index] ?: continue
-            insert(oldKeys[index], value, oldAliases[index])
+            insert(oldKeys[index], value, oldAliases[index], SymbolOrigin.entries[oldOrigins[index].toInt()])
         }
     }
 

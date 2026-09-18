@@ -5,11 +5,16 @@ import android.os.SystemClock
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.io.Jhlog
+import java.lang.ref.WeakReference
 
 internal class RuntimeWorkerTelemetry(
     private val access: RuntimeTelemetryAccess,
     private val semantic: RuntimeSemanticTelemetry,
 ) {
+    private val outcomeClasses = BoundedWeakIdentityCache<Class<*>, JankHunterWorkerOutcome>(16)
+    @Volatile private var successType: WeakReference<Class<*>>? = null
+    @Volatile private var failureType: WeakReference<Class<*>>? = null
+    @Volatile private var retryType: WeakReference<Class<*>>? = null
     private val instanceSalt = mixInstanceId(System.nanoTime(), System.identityHashCode(this).toLong())
 
     fun classifyOutcome(result: Any?): Int = inferOutcome(result).code
@@ -198,12 +203,44 @@ internal class RuntimeWorkerTelemetry(
     }
 
     private fun inferOutcome(result: Any?): JankHunterWorkerOutcome {
-        val className = result?.javaClass?.name ?: return JankHunterWorkerOutcome.UNKNOWN
-        return when {
-            className.endsWith("${'$'}Success") -> JankHunterWorkerOutcome.SUCCESS
-            className.endsWith("${'$'}Failure") -> JankHunterWorkerOutcome.FAILURE
-            className.endsWith("${'$'}Retry") -> JankHunterWorkerOutcome.RETRY
-            else -> JankHunterWorkerOutcome.UNKNOWN
+        val type = result?.javaClass ?: return JankHunterWorkerOutcome.UNKNOWN
+        // The three real result classes use a lock-free path. The bounded fallback
+        // handles unknown types and alternate class loaders without retaining them.
+        if (successType?.get() === type) return JankHunterWorkerOutcome.SUCCESS
+        if (failureType?.get() === type) return JankHunterWorkerOutcome.FAILURE
+        if (retryType?.get() === type) return JankHunterWorkerOutcome.RETRY
+        return outcomeClasses.getOrPut(type) {
+            resolveOutcomeClass(type).also { outcome ->
+                when (outcome) {
+                    JankHunterWorkerOutcome.SUCCESS -> successType = WeakReference(type)
+                    JankHunterWorkerOutcome.FAILURE -> failureType = WeakReference(type)
+                    JankHunterWorkerOutcome.RETRY -> retryType = WeakReference(type)
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    private fun resolveOutcomeClass(type: Class<*>): JankHunterWorkerOutcome {
+        // Consumer rules preserve this narrow legacy reflection contract under R8.
+        // Literal names also allow shrinkers to recognize the class references.
+        // No initialization and no mandatory WorkManager dependency; the bounded cache
+        // retains neither result objects nor their class loaders.
+        return try {
+            val loader = type.classLoader
+            when (type) {
+                Class.forName("androidx.work.ListenableWorker${'$'}Result${'$'}Success", false, loader) ->
+                    JankHunterWorkerOutcome.SUCCESS
+                Class.forName("androidx.work.ListenableWorker${'$'}Result${'$'}Failure", false, loader) ->
+                    JankHunterWorkerOutcome.FAILURE
+                Class.forName("androidx.work.ListenableWorker${'$'}Result${'$'}Retry", false, loader) ->
+                    JankHunterWorkerOutcome.RETRY
+                else -> JankHunterWorkerOutcome.UNKNOWN
+            }
+        } catch (_: ClassNotFoundException) {
+            JankHunterWorkerOutcome.UNKNOWN
+        } catch (_: LinkageError) {
+            JankHunterWorkerOutcome.UNKNOWN
         }
     }
 

@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -20,9 +22,10 @@ const (
 )
 
 type LambdaCaptureCatalog struct {
-	Available bool
-	Source    string
-	Captures  []LambdaCapture
+	sourceIdentity artifactSourceIdentity
+	Available      bool
+	Source         string
+	Captures       []LambdaCapture
 }
 
 type LambdaCapture struct {
@@ -67,12 +70,14 @@ func LoadLambdaCaptureCatalog(path string) (*LambdaCaptureCatalog, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
+	digest := sha256.New()
 	input, err := openBoundedTextInput(
 		path,
 		"lambda capture catalog",
 		lambdaCaptureMaxFileBytes,
 		64*1024,
 		lambdaCaptureMaxLineBytes,
+		digest,
 	)
 	if err != nil {
 		return nil, err
@@ -124,6 +129,7 @@ func LoadLambdaCaptureCatalog(path string) (*LambdaCaptureCatalog, error) {
 	sort.Slice(catalog.Captures, func(i, j int) bool {
 		return catalog.Captures[i].CallsiteID < catalog.Captures[j].CallsiteID
 	})
+	catalog.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
 	return catalog, nil
 }
 
@@ -236,25 +242,6 @@ func BuildLambdaCaptureAnalysis(catalog *LambdaCaptureCatalog) *LambdaCaptureAna
 		}
 	}
 	return analysis
-}
-
-func DeobfuscateLambdaCaptureCatalog(catalog *LambdaCaptureCatalog, mapping *NameMapping) *LambdaCaptureCatalog {
-	if catalog == nil || mapping == nil {
-		return catalog
-	}
-	out := &LambdaCaptureCatalog{Available: catalog.Available, Source: catalog.Source, Captures: make([]LambdaCapture, len(catalog.Captures))}
-	for index, capture := range catalog.Captures {
-		capture.Owner = mapping.Deobfuscate(capture.Owner)
-		capture.Implementation = mapping.Deobfuscate(capture.Implementation)
-		capture.FunctionalInterface = mapping.Deobfuscate(capture.FunctionalInterface)
-		capture.Values = append([]LambdaCapturedValue(nil), capture.Values...)
-		for valueIndex := range capture.Values {
-			capture.Values[valueIndex].Type = mapping.Deobfuscate(capture.Values[valueIndex].Type)
-		}
-		capture.Sinks = append([]string(nil), capture.Sinks...)
-		out.Captures[index] = capture
-	}
-	return out
 }
 
 func sortUniqueStringsInPlace(values []string) []string {

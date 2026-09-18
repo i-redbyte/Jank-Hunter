@@ -41,7 +41,7 @@ func normalizedHeader(header SegmentHeader) SegmentHeader {
 
 func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 	header = normalizedHeader(header)
-	if header.Schema != HeaderSchemaV2 {
+	if header.Schema != HeaderSchemaV2 && header.Schema != HeaderSchemaV3 {
 		return nil, SegmentHeader{}, fmt.Errorf("unsupported header schema %d", header.Schema)
 	}
 	if err := validateFeatureContract(header.RequiredFeatures, header.OptionalFeatures); err != nil {
@@ -124,6 +124,9 @@ func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 	if err := writeUvarint(&payload, complete); err != nil {
 		return nil, SegmentHeader{}, err
 	}
+	if err := writeBuildIdentity(&payload, header); err != nil {
+		return nil, SegmentHeader{}, err
+	}
 	if payload.Len() > maxHeaderPayloadSize {
 		return nil, SegmentHeader{}, fmt.Errorf("header payload too large: %d > %d", payload.Len(), maxHeaderPayloadSize)
 	}
@@ -154,7 +157,7 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	if header.Schema, err = read("schema"); err != nil {
 		return SegmentHeader{}, err
 	}
-	if header.Schema != HeaderSchemaV2 {
+	if header.Schema != HeaderSchemaV2 && header.Schema != HeaderSchemaV3 {
 		return SegmentHeader{}, fmt.Errorf("unsupported header schema %d", header.Schema)
 	}
 	if header.RequiredFeatures, err = read("required features"); err != nil {
@@ -252,6 +255,11 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	if err := validateProcessRoster(header.ExpectedProcessCount, header.ExpectedProcessFingerprint); err != nil {
 		return SegmentHeader{}, err
 	}
+	if header.Schema == HeaderSchemaV3 {
+		if header.BuildIdentity, err = readBuildIdentity(reader); err != nil {
+			return SegmentHeader{}, err
+		}
+	}
 	if reader.Len() != 0 {
 		return SegmentHeader{}, fmt.Errorf("header schema %d leaves %d trailing bytes", header.Schema, reader.Len())
 	}
@@ -261,7 +269,7 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 const maxTimezoneOffsetMinutes int64 = 14 * 60
 
 func validateFeatureContract(required, optional uint64) error {
-	const evolved = FeatureGaugeWideSum | FeatureHTTPFirstByte | FeatureUIDTraffic | FeatureHTTPCollectionState
+	const evolved = FeatureGaugeWideSum | FeatureHTTPFirstByte | FeatureUIDTraffic | FeatureHTTPCollectionState | FeatureSymbolOrigin
 	base := required &^ evolved
 	if base != RequiredFeatures&^evolved && base != BestEffortFeatures&^evolved {
 		return fmt.Errorf(
