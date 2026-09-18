@@ -1,9 +1,7 @@
 package io.jankhunter.runtime.internal.system
 
-import io.jankhunter.runtime.JankHunterContextSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,13 +14,12 @@ class MainThreadStallEvidenceTest {
         evidence.addSample(stack("com.example.BlockingStore", "read", 20))
         evidence.addSample(stack("com.example.BlockingStore", "read", 21))
 
-        assertEquals("com.example.BlockingStore", evidence.owner)
         assertTrue(evidence.stackHint.contains("com.example.BlockingStore.read"))
         assertEquals(3, evidence.sampleCount)
     }
 
     @Test
-    fun applicationFrameIsPreferredAndSamplingIsBounded() {
+    fun callerChainIsPreservedAndSamplingIsBounded() {
         val evidence = MainThreadStallEvidence(maxSamples = 2)
         val infrastructure = StackTraceElement("android.os.MessageQueue", "nativePollOnce", "MessageQueue.java", 1)
 
@@ -31,32 +28,34 @@ class MainThreadStallEvidenceTest {
         assertFalse(evidence.addSample(stack("com.example.Unbounded", "work", 99)))
 
         assertEquals(2, evidence.sampleCount)
-        assertEquals("com.example.Feed", evidence.owner)
         assertTrue(evidence.stackHint.contains("com.example.Feed.render"))
     }
 
     @Test
-    fun finalEvidenceOwnerFillsOnlyMissingContextOwner() {
-        val contextWithoutOwner = JankHunterContextSnapshot(
-            screen = "Feed",
-            owner = null,
-            initiatorPresent = true,
-            initiatorId = 7L,
-            initiatorName = "tap",
-            operationId = 11L,
-        )
+    fun obfuscatedLibraryFrameDoesNotBecomeOwnerAndCallerIsRetained() {
+        val evidence = MainThreadStallEvidence(maxSamples = 2)
+        evidence.addSample(arrayOf(frame("o0.f", "getValue", 10), frame("a.b", "render", 22)))
+        assertTrue(evidence.stackHint.contains("o0.f.getValue"))
+        assertTrue(evidence.stackHint.contains("a.b.render"))
+    }
 
-        val resolved = contextWithoutOwner.withStallOwnerFallback("com.example.BlockingStore")
+    @Test
+    fun oversizedStackHasAnExplicitBoundedTruncationMarker() {
+        val evidence = MainThreadStallEvidence(maxSamples = 2)
+        evidence.addSample(Array(1000) { frame("a.b", "call$it", it) })
+        assertTrue(evidence.stackHint.length <= 4096)
+        assertTrue(evidence.stackHint.contains("stack truncated"))
+        assertTrue(evidence.stackHint.lines().count { it.startsWith("\tat ") } <= 32)
+    }
 
-        assertEquals("Feed", resolved.screen)
-        assertEquals("com.example.BlockingStore", resolved.owner)
-        assertTrue(resolved.initiatorPresent)
-        assertEquals(7L, resolved.initiatorId)
-        assertEquals("tap", resolved.initiatorName)
-        assertEquals(11L, resolved.operationId)
-
-        val attributed = JankHunterContextSnapshot(screen = "Feed", owner = "FeedOperation")
-        assertSame(attributed, attributed.withStallOwnerFallback("com.example.BlockingStore"))
+    @Test
+    fun stackHonorsUtf8DictionaryBudgetWithoutLosingTruncationStatus() {
+        for (budget in listOf(1, 32, 64, 1024, 4096)) {
+            val evidence = MainThreadStallEvidence(maxSamples = 2, maxStackBytes = budget)
+            evidence.addSample(Array(100) { frame("пример.Экран", "вызов$it", it) })
+            assertTrue(evidence.stackHint.toByteArray(Charsets.UTF_8).size <= budget)
+            assertTrue(evidence.stackHint.contains("stack truncated") || evidence.stackHint == "!")
+        }
     }
 
     private fun stack(className: String, methodName: String, line: Int): Array<StackTraceElement> {

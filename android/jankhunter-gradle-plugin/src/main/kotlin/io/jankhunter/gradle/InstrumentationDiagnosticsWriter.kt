@@ -27,6 +27,7 @@ internal data class AnnotationDiagnosticKey(
 )
 
 internal data class InstrumentationDiagnosticsRecord(
+    val pass: String,
     val className: String,
     val methods: Int,
     val skippedMethods: Map<String, Int>,
@@ -42,6 +43,7 @@ internal data class InstrumentationDiagnosticsRecord(
 
 internal class InstrumentationDiagnosticsClassBuilder(
     private val className: String,
+    private val pass: String,
 ) {
     private var methods = 0
     private var ignoredMethods = 0
@@ -164,6 +166,7 @@ internal class InstrumentationDiagnosticsClassBuilder(
 
     fun finish(): InstrumentationDiagnosticsRecord {
         return InstrumentationDiagnosticsRecord(
+            pass = pass,
             className = className.replace('/', '.'),
             methods = methods,
             skippedMethods = skippedMethods.toMap(),
@@ -189,6 +192,9 @@ internal object InstrumentationDiagnosticsWriter {
         return buildString {
             append("{\"format\":")
             append(ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT)
+            append(",\"pass\":\"")
+            append(escapeJsonString(record.pass))
+            append('"')
             append(",\"class\":\"")
             append(escapeJsonString(record.className))
             append("\",\"methods\":")

@@ -12,6 +12,7 @@ SMOKE_CONFIGURATION_CACHE="${SMOKE_CONFIGURATION_CACHE:-1}"
 SMOKE_MARKER_NAME=".jankhunter-gradle-smoke-owned"
 SMOKE_MARKER_VALUE="jankhunter-gradle-smoke:v1"
 SMOKE_RUN_DIR=""
+SMOKE_HELPER_SOURCE="${SMOKE_HELPER_SOURCE:-external}"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ Environment:
   SMOKE_AGP_VERSION            AGP version for the consumer; defaults to the version catalog.
   SMOKE_COMPILE_SDK            Compile/target SDK; defaults to the version catalog.
   ANDROID_BUILD_TOOLS_VERSION  Installed Build Tools version; defaults to the highest installed.
+  SMOKE_HELPER_SOURCE          Helper source: external (default), project, or composite.
   SMOKE_CONFIGURATION_CACHE    Set to 0 to disable the create/reuse configuration-cache check.
   SMOKE_WORK_DIR               Parent for a unique cold run directory preserved for inspection.
   KEEP_SMOKE_DIR               Set to 1 to preserve an automatically created work directory.
@@ -479,9 +481,16 @@ import okhttp3.Request;
 import okhttp3.WebSocketListener;
 
 public class MainActivity extends Activity {
+    public static class LifecycleFragment extends android.app.Fragment {
+        @Override public void onDestroyView() { super.onDestroyView(); }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (io.jankhunter.runtime.JankHunterHooks.classifyWorkerOutcome(new Object()) != 4) {
+            throw new AssertionError("Unknown worker result must stay unknown");
+        }
         Helper.work();
         com.example.jhsmoke.feature.FeatureEntry.touch();
         org.example.jhsmoke.network.ReleaseNetworkClient.create();
@@ -559,6 +568,56 @@ sdk.dir=$sdk_dir_properties
 EOF
 }
 
+
+# Exercise real producer dependencies, including a transitive SDK dependency substitution.
+write_helper_source_fixture() {
+  local fixture_dir="$1" build_tools_version="$2" group="$3" version="$4"
+  [[ "$SMOKE_HELPER_SOURCE" != "external" ]] || return 0
+  local helper_dir="$fixture_dir/jankhunter-okhttp3"
+  mkdir -p "$helper_dir/src"
+  cp -R "$ANDROID_DIR/jankhunter-okhttp3/src/main" "$helper_dir/src/"
+  cp "$ANDROID_DIR/jankhunter-okhttp3/consumer-rules.pro" "$helper_dir/consumer-rules.pro"
+  cat > "$helper_dir/build.gradle.kts" <<EOF
+plugins { id("com.android.library") version "$SMOKE_AGP_VERSION" }
+group = "$group"
+version = "$version"
+android {
+    namespace = "io.jankhunter.okhttp3"
+    compileSdk = $SMOKE_COMPILE_SDK
+    buildToolsVersion = "$build_tools_version"
+    defaultConfig { minSdk = 23; consumerProguardFiles("consumer-rules.pro") }
+}
+dependencies {
+    implementation("$group:jankhunter-runtime:$version")
+    compileOnly("com.squareup.okhttp3:okhttp:3.12.13")
+}
+EOF
+  if [[ "$SMOKE_HELPER_SOURCE" == "project" ]]; then
+    cat >> "$fixture_dir/settings.gradle.kts" <<'EOF'
+include(":jankhunter-okhttp3")
+EOF
+    cat >> "$fixture_dir/build.gradle.kts" <<EOF
+allprojects {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("$group:jankhunter-okhttp3")).using(project(":jankhunter-okhttp3"))
+        }
+    }
+}
+EOF
+  else
+    cp "$fixture_dir/local.properties" "$helper_dir/local.properties"
+    # Reuse repository declarations, but give this included build its own root project.
+    sed '/rootProject.name/,$d' "$fixture_dir/settings.gradle.kts" > "$helper_dir/settings.gradle.kts"
+    cat >> "$helper_dir/settings.gradle.kts" <<'EOF'
+rootProject.name = "jankhunter-okhttp3"
+EOF
+    cat >> "$fixture_dir/settings.gradle.kts" <<'EOF'
+includeBuild("jankhunter-okhttp3")
+EOF
+  fi
+}
+
 main() {
   if [[ $# -gt 0 ]]; then
     if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
@@ -568,6 +627,10 @@ main() {
     fail "unknown or unexpected arguments: $*"
   fi
 
+  case "$SMOKE_HELPER_SOURCE" in
+    external|project|composite) ;;
+    *) fail "SMOKE_HELPER_SOURCE must be external, project, or composite" ;;
+  esac
   require_boolean_environment KEEP_SMOKE_DIR "$KEEP_SMOKE_DIR"
   require_boolean_environment SMOKE_CONFIGURATION_CACHE "$SMOKE_CONFIGURATION_CACHE"
   SMOKE_COMPILE_SDK="$(resolve_compile_sdk)"
@@ -634,10 +697,6 @@ main() {
     -PjankHunterBuildToolsVersion="$build_tools_version" \
     -Dmaven.repo.local="$maven_repo" \
     --no-daemon --console=plain --warning-mode all
-  JAVA_HOME="$java17_home" ANDROID_HOME="$sdk_dir" ANDROID_SDK_ROOT="$sdk_dir" \
-    "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR/jankhunter-gradle-plugin" publishToMavenLocal \
-    -Dmaven.repo.local="$maven_repo" \
-    --no-daemon --console=plain --warning-mode all
 
   local group_path
   group_path="$(printf '%s' "$group" | tr '.' '/')"
@@ -659,11 +718,15 @@ main() {
 
   write_fixture "$fixture_dir" "$maven_repo" "$sdk_dir" "$build_tools_version" "$group" "$version"
 
-  log "building external Android consumer"
+  write_helper_source_fixture "$fixture_dir" "$build_tools_version" "$group" "$version"
+
+  log "building external Android consumer (helper: $SMOKE_HELPER_SOURCE)"
   local consumer_args=(
     -p "$fixture_dir"
-    :app:assembleDebug
-    :app:assembleRelease
+    :app:packageDebug
+    :app:packageRelease
+    :app:signReleaseBundle
+    --stacktrace
     --no-daemon
     --console=plain
     --warning-mode all
@@ -695,6 +758,19 @@ main() {
     assert_single_banner "$cached_output" "$version"
   fi
 
+  python3 "$ROOT_DIR/scripts/validate-build-manifests.py" "$fixture_dir/app/build"
+
+  local variant variant_title transport_jar transport_signature
+  for variant in debug release; do
+    require_file_contains "$fixture_dir/app/build/intermediates/jankhunter/$variant/transport-capability.txt" \
+      'transport-v1:available' "Transport capability ($variant)"
+    if [[ "$variant" == "debug" ]]; then variant_title="Debug"; else variant_title="Release"; fi
+    transport_jar="$fixture_dir/app/build/intermediates/classes/$variant/ALL/instrument${variant_title}JankHunterTransport/classes.jar"
+    transport_signature="$("$java17_home/bin/javap" -classpath "$transport_jar" okhttp3.internal.connection.RealConnection)"
+    [[ "$transport_signature" == *"io.jankhunter.okhttp3.JankHunterHttpTransportV1"* ]] || \
+      fail "RealConnection did not receive its transport ABI ($variant)"
+  done
+
   local artifact_metadata="$fixture_dir/app/build/generated/jankhunter/debug/artifact-metadata.json"
   require_file_contains "$artifact_metadata" '"kind":"artifact-metadata"' "Application artifact metadata"
   require_file_contains "$artifact_metadata" '"methodCounters":true' "Application artifact metadata"
@@ -713,12 +789,15 @@ main() {
   require_file_contains "$class_graph" '"calleeClass":"com.example.jhsmoke.feature.FeatureEntry"' "Application class graph"
 
   local diagnostics="$fixture_dir/app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl"
+  require_file_contains "$diagnostics" '"format":2,"pass":"main"' "Versioned main diagnostics"
+  require_file_contains "$diagnostics" '"format":2,"pass":"lifecycle","class":"com.example.jhsmoke.MainActivity$LifecycleFragment"' "Application lifecycle pass diagnostics"
   require_file_contains "$diagnostics" '"class":"com.example.jhsmoke.MainActivity"' "Application instrumentation diagnostics"
   require_file_contains "$diagnostics" '"intent":"handler.wrap_runnable.single_runnable"' "Handler hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"logspam.android.util.Log.d"' "Log hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.install_event_listener_factory"' "OkHttp hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.wrap_websocket_listener"' "WebSocket hook diagnostics"
   local feature_diagnostics="$fixture_dir/feature/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl"
+  require_file_contains "$feature_diagnostics" '"format":2,"pass":"lifecycle"' "Versioned lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"owner":"smoke.feature"' "Feature annotation diagnostics"
   require_file_contains "$feature_diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Feature lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"intent":"lifecycle.watch_retained"' "Feature lifecycle diagnostics"
@@ -768,4 +847,6 @@ assert_single_banner() {
   [[ "$count" -eq 1 ]] || fail "expected one Jank Hunter build banner, found $count in $output"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

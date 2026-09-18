@@ -35,7 +35,22 @@ class BinaryDictionaryEncoderTest {
         encoder.defineStableSymbol(0x0102_0304_0506_0708L, "y")
 
         assertArrayEquals(byteArrayOf(0, 1, 0, 1, 'x'.code.toByte()), sink.records[0])
-        assertArrayEquals(wireGolden("dictionary-stable.bin"), sink.records[1])
+        val expected = wireGolden("dictionary-stable.bin").copyOf()
+        expected[0] = (BinaryLogWriter.DICT_STABLE_SYMBOL shl 2).toByte()
+        assertArrayEquals(expected, sink.records[1])
+    }
+
+    @Test
+    fun identicalNamesKeepExplicitOriginsSeparate() {
+        val sink = CapturingSink()
+        val encoder = BinaryDictionaryEncoder(sink, LogQualityCounters(), 16, 256)
+        for (origin in SymbolOrigin.entries) {
+            val id = encoder.symbolId(BinaryLogWriter.DICT_CLASS, "a", origin)
+            assertEquals(origin.ordinal.toLong() + 1L, id)
+            assertEquals(id, encoder.symbolId(BinaryLogWriter.DICT_CLASS, "a", origin))
+            assertEquals((BinaryLogWriter.DICT_CLASS shl 2) or origin.wireValue, sink.records.last()[0].toInt())
+        }
+        assertEquals(4, sink.records.size)
     }
 
     private class CapturingSink : BinaryEncodingSink {
@@ -45,6 +60,8 @@ class BinaryDictionaryEncoderTest {
         private val payload = BinaryPayload()
 
         override fun payload(): BinaryPayload = payload.clear()
+
+        override fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long = symbolId(kind, value)
 
         override fun optionalSymbolId(kind: Int, value: String?): Long = 0L
 

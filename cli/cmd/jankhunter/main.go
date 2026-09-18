@@ -9,7 +9,7 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-var version = "1.0.0"
+var version = "1.0.11"
 
 const (
 	defaultCLIGCPercent              = 75
@@ -61,12 +61,12 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json|--csv] [--presentation] [--animated-background] [--thresholds thresholds.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json|--csv] [--presentation] [--animated-background] [--thresholds thresholds.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text] [--baseline-mapping mapping.txt] [--candidate-mapping mapping.txt] [--baseline-artifacts-dir dir] [--candidate-artifacts-dir dir]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 
 CI thresholds:

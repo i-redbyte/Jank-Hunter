@@ -9,20 +9,21 @@ import (
 )
 
 type eventPayloadEncoder struct {
+	symbolOrigins bool
 	writer        io.Writer
-	stableAliases map[uint64]uint64
+	stableAliases stableAliasTable
 }
 
 func encodeEventPayloadWithState(
 	w io.Writer,
 	event Event,
-	stableAliases map[uint64]uint64,
+	stableAliases stableAliasTable,
 	state *eventPayloadEncodeState,
 ) error {
 	if state == nil {
 		state = &eventPayloadEncodeState{}
 	}
-	encoder := eventPayloadEncoder{writer: w, stableAliases: stableAliases}
+	encoder := eventPayloadEncoder{writer: w, stableAliases: stableAliases, symbolOrigins: state.symbolOrigins}
 	return encoder.encode(event, state)
 }
 
@@ -108,7 +109,7 @@ func equalAttribution(a, b AttributionContext) bool {
 	return a.Screen == b.Screen && a.Owner == b.Owner && a.OperationID == b.OperationID
 }
 
-func writeAttribution(w io.Writer, context AttributionContext, stableAliases map[uint64]uint64) error {
+func writeAttribution(w io.Writer, context AttributionContext, stableAliases stableAliasTable) error {
 	mask := uint64(0)
 	if !context.Screen.IsUnknown() {
 		mask |= 1 << 0
@@ -138,13 +139,16 @@ func writeAttribution(w io.Writer, context AttributionContext, stableAliases map
 	return nil
 }
 
-func writeSymbolRef(w io.Writer, ref SymbolRef, stableAliases map[uint64]uint64) error {
+func writeSymbolRef(w io.Writer, ref SymbolRef, stableAliases stableAliasTable) error {
 	if ref.Stable {
-		if alias, ok := stableAliases[ref.ID]; ok {
+		if alias, ok := stableAliases[ref.stableKey()]; ok {
 			if alias > math.MaxUint64>>1 {
 				return fmt.Errorf("stable symbol alias %d is too large", alias)
 			}
 			return writeUvarint(w, alias<<1|1)
+		}
+		if ref.Origin != SymbolOriginUnknown {
+			return fmt.Errorf("typed stable symbol %d has no alias for origin %d", ref.ID, ref.Origin)
 		}
 		if err := writeUvarint(w, 1); err != nil {
 			return err

@@ -1,4 +1,12 @@
 {
+  "MappingIdentity": {
+    "Status": "not_requested",
+    "Applied": false,
+    "SHA256": "",
+    "VerifiedLogs": 0,
+    "UnverifiedLogs": 0,
+    "UnknownOriginReferences": 0
+  },
   "Acquisition": {
     "IndependentGroups": 1,
     "IdentityComplete": true,

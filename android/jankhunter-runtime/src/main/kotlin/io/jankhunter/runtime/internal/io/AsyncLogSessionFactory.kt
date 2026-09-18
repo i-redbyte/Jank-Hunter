@@ -21,6 +21,7 @@ internal class AsyncLogSessionFactory(
     private val collectorStartElapsedUs: Long,
     private val quality: LogQualityCounters,
     private val logGrowthManager: LogGrowthManager?,
+    private val buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
 ) {
     fun open(
         localDate: String,
@@ -63,6 +64,7 @@ internal class AsyncLogSessionFactory(
             identitySource = 0L,
             processName = processName,
             symbolNamespace = config.symbolNamespace(),
+            buildIdentity = buildIdentity,
             processScope = processScope,
             allowedProcessCount = allowedProcessCount,
             processScopeFingerprint = processScopeFingerprint(allowedProcesses),

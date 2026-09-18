@@ -10,6 +10,13 @@ import (
 func (c *collector) finish() Summary {
 	c.finalizeCollectionQuality()
 	summary := c.summary
+	if count := summary.MappingIdentity.UnknownOriginReferences; count > 0 {
+		summary.Warnings = append(summary.Warnings, fmt.Sprintf("Качество символов: %d ссылок имеют неизвестное происхождение; их строки сохранены без применения mapping. Совпадение identity сборки не подтверждает происхождение отдельных строк.", count))
+	}
+	if legacy := c.counterValues["jankhunter.lifecycle.coverage.legacy_partial.count"]; legacy > 0 {
+		summary.Warnings = append(summary.Warnings, fmt.Sprintf(
+			"Качество сбора: lifecycle/binding-покрытие частичное: наблюдалось %d вызовов legacy-пути без сгенерированного accessor. Сохранена совместимость ABI; для полного автоматического наблюдения обновите Gradle plugin и пересоберите приложение. Отсутствие записей об удержании объектов не доказывает отсутствие удержаний.", legacy))
+	}
 	var acquisition AcquisitionEvidence
 	if c.acquisition != nil {
 		acquisition = c.acquisition.result()

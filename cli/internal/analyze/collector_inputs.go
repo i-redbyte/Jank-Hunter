@@ -27,9 +27,9 @@ func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputComp
 	if !diagnostics {
 		missing = append(missing, "instrumentation-diagnostics.jsonl")
 	}
-	artifactIdentityVerified := len(c.artifactNamespace) == symbolNamespaceBytes
+	artifactIdentityVerified := summary.ArtifactIdentity != nil && summary.ArtifactIdentity.Status == "mapping_bound"
 	if (classGraph || diagnostics) && !artifactIdentityVerified {
-		missing = append(missing, "совпадающее пространство имён артефактов")
+		missing = append(missing, "подтверждённая связь артефактов со сборкой")
 	}
 	complete := len(missing) == 0
 	status := "complete"
@@ -83,12 +83,12 @@ func (c *collector) telemetryHealthWarnings(summary Summary) []string {
 func (c *collector) artifactIdentityWarnings() []string {
 	hasClassGraph := c.classGraph != nil && len(c.classGraph.Edges) > 0
 	hasDiagnostics := c.diagnostics != nil && c.diagnostics.Available && c.diagnostics.ClassCount > 0
-	if (!hasClassGraph && !hasDiagnostics) || len(c.artifactNamespace) == symbolNamespaceBytes {
+	if (!hasClassGraph && !hasDiagnostics) || (c.summary.ArtifactIdentity != nil && c.summary.ArtifactIdentity.Status == "mapping_bound") {
 		return nil
 	}
 	return []string{
-		"Совместимость class graph/ASM diagnostics с выбранными .jhlog не подтверждена: " +
-			"передайте файлы рядом с соответствующим artifact-metadata.json либо используйте --artifacts-dir.",
+		"Связь class graph/ASM diagnostics со сборкой выбранных .jhlog не подтверждена: " +
+			"нужны соответствующий build-manifest и mapping identity журнала; одного artifact-metadata.json недостаточно.",
 	}
 }
 

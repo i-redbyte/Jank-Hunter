@@ -8,6 +8,8 @@ const FormatMinor = 1
 const FormatPatch = 0
 const FormatVersionString = "5.1.0"
 const HeaderSchemaV2 uint64 = 2
+const HeaderSchemaV3 uint64 = 3
+const HeaderSchemaCurrent = HeaderSchemaV3
 const magicSize = 11
 
 const (
@@ -53,13 +55,14 @@ const (
 	FeatureHTTPFirstByte             uint64 = 1 << 28
 	FeatureUIDTraffic                uint64 = 1 << 29
 	FeatureHTTPCollectionState       uint64 = 1 << 30
+	FeatureSymbolOrigin              uint64 = 1 << 31
 	FeatureGZIPChunks                uint64 = 1 << 0
 	FeatureDatabaseTransactionDelta  uint64 = 1 << 1
 	FeatureColumnarDatabasePages     uint64 = 1 << 2
 	FeatureSegmentDictionaryTokens   uint64 = 1 << 3
 	FeatureRuntimeNumericColumns     uint64 = 1 << 4
 	FeatureRANSMicroPageSections     uint64 = 1 << 5
-	RequiredFeatures                 uint64 = 0x7fbfffff
+	RequiredFeatures                 uint64 = 0xffbfffff
 	BestEffortFeatures               uint64 = RequiredFeatures &^ FeatureExactEventAdmission
 	OptionalFeatures                 uint64 = 0x1f
 	RawOptionalFeatures              uint64 = 0x3e

@@ -32,7 +32,7 @@
       <div class="hero-meta">
         <div class="chip">Проблемы в проверяемом прогоне <strong>{{.Comparison.ProblemComparison.Summary.Total}}</strong></div>
         <div class="chip">Критичный / высокий приоритет <strong>{{.Comparison.ProblemComparison.Summary.Critical}} / {{.Comparison.ProblemComparison.Summary.High}}</strong></div>
-        <div class="chip">Изменения проблем <strong>{{len .Comparison.ProblemComparison.Deltas}}</strong></div>
+        {{if .Comparison.Baseline.MappingIdentity.Applied}}<div class="chip">Mapping базы <strong>{{if eq .Comparison.Baseline.MappingIdentity.Status "verified"}}подтверждён{{else}}непроверен{{end}}</strong></div>{{end}}{{if .Comparison.Candidate.MappingIdentity.Applied}}<div class="chip">Mapping прогона <strong>{{if eq .Comparison.Candidate.MappingIdentity.Status "verified"}}подтверждён{{else}}непроверен{{end}}</strong></div>{{end}}<div class="chip">Изменения проблем <strong>{{len .Comparison.ProblemComparison.Deltas}}</strong></div>
       </div>
       {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">Подробный анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Связи с кодом</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">Диагностика сборки</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">Зависимости</a>{{end}}</div>{{end}}
       </div>

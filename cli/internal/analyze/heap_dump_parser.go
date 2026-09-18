@@ -227,7 +227,7 @@ func (p *hprofParser) parseClassDump(reader *hprofReader) error {
 				return err
 			}
 			if value != 0 {
-				p.addEdge(classNode, value, "static "+emptyFieldName(fieldName), "static")
+				p.addFieldEdge(classNode, value, "static "+emptyFieldName(fieldName), "static", name)
 			}
 			continue
 		}
@@ -428,7 +428,7 @@ func (p *hprofParser) parseInstancePayload(
 					return err
 				}
 				if target != 0 && !ignoredReferenceField(className, field.owner, field.name) {
-					p.addEdge(node, target, field.name, "field")
+					p.addFieldEdge(node, target, field.name, "field", field.owner)
 				}
 			} else if err := reader.skip(size); err != nil {
 				return err
@@ -575,6 +575,10 @@ func (p *hprofParser) ensureNode(id uint64, className string, shallowSize uint64
 }
 
 func (p *hprofParser) addEdge(node *heapNode, to uint64, label, kind string) {
+	p.addFieldEdge(node, to, label, kind, "")
+}
+
+func (p *hprofParser) addFieldEdge(node *heapNode, to uint64, label, kind, owner string) {
 	if node == nil || node.id == 0 || to == 0 {
 		return
 	}
@@ -591,6 +595,7 @@ func (p *hprofParser) addEdge(node *heapNode, to uint64, label, kind string) {
 	p.edges = append(p.edges, storedHeapEdge{
 		to:      to,
 		labelID: p.internEdgeLabel(label),
+		ownerID: p.internEdgeLabel(owner),
 		kind:    storedHeapEdgeKind(kind),
 	})
 	edgeSlot := uint32(len(p.edges))
@@ -616,7 +621,11 @@ func (p *hprofParser) edgeAt(slot uint32) (heapEdge, uint32) {
 	if stored.labelID > 0 {
 		label = p.edgeLabels[stored.labelID-1]
 	}
-	return heapEdge{to: stored.to, label: label, kind: heapEdgeKindName(stored.kind)}, stored.next
+	owner := ""
+	if stored.ownerID > 0 {
+		owner = p.edgeLabels[stored.ownerID-1]
+	}
+	return heapEdge{to: stored.to, label: label, kind: heapEdgeKindName(stored.kind), owner: owner}, stored.next
 }
 
 func (p *hprofParser) nodeEdges(node *heapNode) []heapEdge {

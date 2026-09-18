@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import android.os.Looper
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicLong
 
@@ -33,7 +34,7 @@ internal class RuntimeContextTelemetry(
                 incidentId: Long, state: MainThreadStallState,
             ) {
                 writer?.updateProducerContext(context.screen, context.owner, context.operationId)
-                writer?.stall(context.screen, context.owner, stackHint, durationMs, foreground, incidentId, state.wireValue)
+                writer?.stall(context.screen, context.owner, stackHint, durationMs, foreground, incidentId, state.wireValue, SymbolOrigin.RUNTIME_STACK)
                 // Make the first observation available in an open log, without main-thread recovery.
                 writer?.flush()
             }
@@ -47,7 +48,7 @@ internal class RuntimeContextTelemetry(
         } finally {
             val durationMs = elapsedRealtimeMs.getAsLong() - start
             if (shouldRecordOwnerStall(durationMs)) {
-                recordStall(ownerName, "explicit_owner_block", durationMs)
+                recordStall(ownerName, "explicit_owner_block", durationMs, SymbolOrigin.SOURCE_LABEL)
             }
         }
     }
@@ -59,7 +60,7 @@ internal class RuntimeContextTelemetry(
         } finally {
             val durationMs = elapsedRealtimeMs.getAsLong() - start
             if (shouldRecordOwnerStall(durationMs)) {
-                recordStall(ownerName, "explicit_owner_block", durationMs)
+                recordStall(ownerName, "explicit_owner_block", durationMs, SymbolOrigin.SOURCE_LABEL)
             }
         }
     }
@@ -112,7 +113,7 @@ internal class RuntimeContextTelemetry(
         state.systemContextSampler?.onUserRelevanceChanged()
     }
 
-    fun recordStall(owner: String?, stackHint: String?, durationMs: Long) {
+    fun recordStall(owner: String?, stackHint: String?, durationMs: Long, stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN) {
         val attributedOwner = firstContextValue(owner, contexts.ownerOrNull())
         val context = access.captureContext(ownerOverride = attributedOwner)
         access.ensureContextRecorded(screenOverride = context.screen, ownerOverride = context.owner)
@@ -122,6 +123,7 @@ internal class RuntimeContextTelemetry(
             stackHint,
             durationMs,
             foreground = access.isUiVisible(),
+            stackOrigin = stackOrigin,
         )
     }
 
@@ -161,6 +163,7 @@ internal class RuntimeContextTelemetry(
             foreground = access.isUiVisible(),
             incidentId = incidentId,
             state = stallState.wireValue,
+            stackOrigin = SymbolOrigin.RUNTIME_STACK,
         )
     }
 

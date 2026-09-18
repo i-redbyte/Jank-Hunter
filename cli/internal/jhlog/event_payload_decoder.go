@@ -61,7 +61,7 @@ func readPayloadRef(
 	segmentState *segmentDecodeState,
 	name string,
 ) (SymbolRef, error) {
-	ref, err := readSymbolRef(reader, symbolNamespace, segmentState.stableAliases)
+	ref, err := readSymbolRef(reader, symbolNamespace, segmentState.stableAliases, &segmentState.origins)
 	if err != nil {
 		return SymbolRef{}, fmt.Errorf("%s: %w", name, err)
 	}

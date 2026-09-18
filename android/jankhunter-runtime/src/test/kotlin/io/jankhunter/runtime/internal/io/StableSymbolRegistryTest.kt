@@ -6,6 +6,19 @@ import org.junit.Test
 
 class StableSymbolRegistryTest {
     @Test
+    fun originSeparatesAliasesAcrossGrowth() {
+        val registry = StableSymbolRegistry(initialCapacity = 1)
+        for (origin in SymbolOrigin.entries) {
+            assertEquals(origin.ordinal.toLong() + 1L, registry.put(17L, "a", origin))
+        }
+        repeat(100) { registry.put(it.toLong() + 100L, "other-$it") }
+        for (origin in SymbolOrigin.entries) {
+            assertEquals("a", registry.get(17L, origin))
+            assertEquals(origin.ordinal.toLong() + 1L, registry.alias(17L, origin))
+        }
+    }
+
+    @Test
     fun storesPrimitiveIdsAcrossGrowthAndHashCollisions() {
         val registry = StableSymbolRegistry(initialCapacity = 2)
 

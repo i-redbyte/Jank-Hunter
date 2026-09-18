@@ -30,6 +30,7 @@ dependencies {
     implementation(libs.asm.commons)
     implementation(libs.asm.tree)
     implementation(libs.kotlin.metadata.jvm)
+    implementation(libs.h2.mvstore)
     testImplementation(libs.android.gradle.plugin)
     testImplementation(libs.androidx.room.runtime)
     testImplementation(libs.asm.util)

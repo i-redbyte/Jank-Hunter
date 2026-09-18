@@ -381,7 +381,7 @@ type ownerStatKey struct {
 	kind  string
 }
 
-func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration uint64, stack string) {
+func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration uint64, stack string, origins ...jhlog.SymbolOrigin) {
 	if owner == "" {
 		owner = "unknown"
 	}
@@ -400,6 +400,9 @@ func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration u
 	}
 	if item.StackHint == "" {
 		item.StackHint = stack
+		if len(origins) != 0 {
+			item.StackOrigin = origins[0]
+		}
 	}
 }
 

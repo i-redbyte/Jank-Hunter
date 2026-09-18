@@ -3,6 +3,7 @@ package analyze
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,9 @@ import (
 )
 
 func TestHeapTraversalRecordsStayCompact(t *testing.T) {
+	if size := unsafe.Sizeof(storedHeapEdge{}); size > 24 {
+		t.Fatalf("stored edge = %d bytes, want <=24", size)
+	}
 	if size := unsafe.Sizeof(heapParent{}); size > 32 {
 		t.Fatalf("heap parent record = %d bytes, want <= 32", size)
 	}
@@ -182,6 +186,17 @@ func TestHprofDefersInstanceUntilCompleteClassHierarchy(t *testing.T) {
 	edges := parser.nodeEdges(child)
 	if child == nil || len(edges) != 1 || edges[0].to != 0x402 || edges[0].label != "target" {
 		t.Fatalf("inherited reference was lost before superclass dump: %+v", child)
+	}
+	encoded, err := json.Marshal(parser.pathElement(0x402, edges[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var element map[string]any
+	if err := json.Unmarshal(encoded, &element); err != nil {
+		t.Fatal(err)
+	}
+	if element["declaring_class"] != "com.app.Base" {
+		t.Fatalf("lost exact inherited field owner: %s", encoded)
 	}
 }
 

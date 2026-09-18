@@ -6,6 +6,8 @@ internal interface BinaryEncodingSink {
 
     fun symbolId(kind: Int, value: String?): Long = optionalSymbolId(kind, value)
 
+    fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long
+
     fun optionalSymbolId(kind: Int, value: String?): Long
 
     fun defineStableSymbol(id: Long, name: String?): Long

@@ -61,7 +61,10 @@ internal class RuntimeCollectorService(
             callbacks.recordCounter("jankhunter.activity_tracker.unavailable.count", 1)
         }
         RuntimeHookGuard.run {
-            state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs(), callbacks.bindMainThreadStallCallbacks()).also { it.start() }
+            state.watchdog = MainThreadWatchdog(
+                config.mainThreadStallThresholdMs(), callbacks.bindMainThreadStallCallbacks(),
+                maxStackBytes = config.maxDictionaryValueBytes(),
+            ).also { it.start() }
         }
         if (config.mainLooperDispatchMonitorEnabled()) {
             RuntimeHookGuard.run {

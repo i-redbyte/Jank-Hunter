@@ -18,6 +18,8 @@ func TestCollectionDiagnosticsAppearOnlyInMathematicalDataQuality(t *testing.T) 
 	summary.CollectionQuality.AsyncAttribution = &analyze.AsyncAttributionQuality{Status: "unknown", HandlerPostsWithoutContext: 7}
 	summary.CollectionQuality.HTTPFirstByte = &analyze.HTTPFirstByteQuality{Known: 1, Unknown: 1, Legacy: 1}
 	const graphStorageReason = "исчерпан бюджет памяти сборщиков графа"
+	const legacyReason = "lifecycle/binding-покрытие частичное: для полного автоматического наблюдения обновите Gradle plugin"
+	summary.Warnings = append(summary.Warnings, "Качество сбора: "+legacyReason)
 	summary.CollectionQuality.Reasons = append(summary.CollectionQuality.Reasons, graphStorageReason)
 	summary.Warnings = append(summary.Warnings, "Качество сбора: "+graphStorageReason)
 	comparison := analyze.Compare(summary, summary)
@@ -40,7 +42,7 @@ func TestCollectionDiagnosticsAppearOnlyInMathematicalDataQuality(t *testing.T) 
 			if mainErr != nil || mathErr != nil {
 				t.Fatalf("render: %v / %v", mainErr, mathErr)
 			}
-			assertHTMLNotContains(t, mainPath, "post без контекста:", "полнота неизвестна", "Неполные размеры HTTP-тел", "Покрытие измерения первого байта", graphStorageReason)
+			assertHTMLNotContains(t, mainPath, "post без контекста:", "полнота неизвестна", "Неполные размеры HTTP-тел", "Покрытие измерения первого байта", graphStorageReason, legacyReason)
 			data, err := os.ReadFile(mathPath)
 			if err != nil {
 				t.Fatal(err)
@@ -50,7 +52,7 @@ func TestCollectionDiagnosticsAppearOnlyInMathematicalDataQuality(t *testing.T) 
 			if start < 0 {
 				t.Fatal("missing data-quality section")
 			}
-			for _, text := range []string{"post без контекста:", "полнота неизвестна", "Неполные размеры HTTP-тел", "Покрытие измерения первого байта", graphStorageReason} {
+			for _, text := range []string{"post без контекста:", "полнота неизвестна", "Неполные размеры HTTP-тел", "Покрытие измерения первого байта", graphStorageReason, legacyReason} {
 				if strings.Contains(html[:start], text) || !strings.Contains(html[start:], text) {
 					t.Fatalf("%q must occur only inside data-quality", text)
 				}

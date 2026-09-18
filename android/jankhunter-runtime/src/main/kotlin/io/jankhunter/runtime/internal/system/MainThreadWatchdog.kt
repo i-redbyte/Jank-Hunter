@@ -16,6 +16,7 @@ internal class MainThreadWatchdog(
     thresholdMs: Long,
     private val callbacks: MainThreadStallCallbacks,
     private val mainThread: WatchdogMainThread = AndroidWatchdogMainThread(),
+    private val maxStackBytes: Int = 1024,
     private val watchdogThreadFactory: (Runnable, String) -> Thread = ::Thread,
 ) {
     private val thresholdMs = max(MIN_THRESHOLD_MS, thresholdMs)
@@ -205,7 +206,7 @@ internal class MainThreadWatchdog(
 
     private fun recordStall(stall: StallCapture, durationMs: Long, state: MainThreadStallState) {
         callbacks.recordMainThreadStall(
-            stall.context.withStallOwnerFallback(stall.evidence.owner),
+            stall.context,
             stall.evidence.stackHint,
             durationMs.coerceAtLeast(0L),
             stall.incidentId,
@@ -214,7 +215,7 @@ internal class MainThreadWatchdog(
     }
 
     private fun captureStall(startedAtMs: Long): StallCapture {
-        val evidence = MainThreadStallEvidence(MAX_STALL_STACK_SAMPLES)
+        val evidence = MainThreadStallEvidence(MAX_STALL_STACK_SAMPLES, maxStackBytes)
         evidence.addSample(mainThread.stackTrace())
         return StallCapture(
             incidentId = callbacks.nextMainThreadStallId(),
@@ -282,29 +283,19 @@ private class AndroidWatchdogMainThread : WatchdogMainThread {
     override fun stackTrace(): Array<StackTraceElement> = looper.thread.stackTrace
 }
 
-internal fun JankHunterContextSnapshot.withStallOwnerFallback(fallbackOwner: String?): JankHunterContextSnapshot {
-    if (owner != null || fallbackOwner == null) return this
-    return JankHunterContextSnapshot(
-        screen = screen,
-        owner = fallbackOwner,
-        initiatorPresent = initiatorPresent,
-        initiatorId = initiatorId,
-        initiatorName = initiatorName,
-        operationId = operationId,
-    )
-}
-
 /**
  * Keeps a bounded vote over stack samples collected only while the main thread is already stalled.
- * Frames are grouped by class and method so adjacent source lines from the same blocked call site
- * reinforce each other instead of looking like unrelated samples.
+ * Samples are grouped by the observed top frame and retain the bounded caller chain.
+ * Observed frames never become owners: obfuscation erases package-based provenance.
  */
 internal class MainThreadStallEvidence(
     maxSamples: Int,
+    maxStackBytes: Int = 4096,
 ) {
     private val maxSamples = maxSamples.also {
-        require(it > 0) { "maxSamples must be positive" }
+        require(it in 1..8) { "maxSamples must be between 1 and 8" }
     }
+    private val maxStackBytes = maxStackBytes.coerceIn(1, MAX_STACK_CHARS)
     private val classNames = arrayOfNulls<String>(maxSamples)
     private val methodNames = arrayOfNulls<String>(maxSamples)
     private val stackHints = arrayOfNulls<String>(maxSamples)
@@ -313,9 +304,6 @@ internal class MainThreadStallEvidence(
     private var strongestFrame = -1
 
     var sampleCount: Int = 0
-        private set
-
-    var owner: String? = null
         private set
 
     var stackHint: String = UNKNOWN_STACK
@@ -327,18 +315,17 @@ internal class MainThreadStallEvidence(
     fun addSample(stack: Array<StackTraceElement>): Boolean {
         if (!canSample) return false
         sampleCount++
-        val frame = selectFrame(stack) ?: return true
-        val index = frameIndex(frame)
+        val frame = stack.firstOrNull() ?: return true
+        val index = frameIndex(frame, stack)
         votes[index]++
         if (strongestFrame < 0 || votes[index] > votes[strongestFrame]) {
             strongestFrame = index
-            owner = classNames[index]
             stackHint = stackHints[index] ?: UNKNOWN_STACK
         }
         return true
     }
 
-    private fun frameIndex(frame: StackTraceElement): Int {
+    private fun frameIndex(frame: StackTraceElement, stack: Array<StackTraceElement>): Int {
         for (index in 0 until distinctFrames) {
             if (classNames[index] == frame.className && methodNames[index] == frame.methodName) {
                 return index
@@ -346,55 +333,73 @@ internal class MainThreadStallEvidence(
         }
         val index = distinctFrames
         distinctFrames++
-        classNames[index] = frame.className
-        methodNames[index] = frame.methodName
-        stackHints[index] = formatStackHint(frame)
+        classNames[index] = frame.className.take(MAX_FRAME_CHARS)
+        methodNames[index] = frame.methodName.take(MAX_FRAME_CHARS)
+        stackHints[index] = formatBoundedStack(stack)
         return index
     }
 
-    private fun selectFrame(stack: Array<StackTraceElement>): StackTraceElement? {
-        for (frame in stack) {
-            if (isApplicationFrame(frame.className)) return frame
+    private fun formatBoundedStack(stack: Array<StackTraceElement>): String {
+        val marker = if (maxStackBytes >= TRUNCATED.length) TRUNCATED else "!"
+        val output = StringBuilder(maxStackBytes)
+        var written = 0
+        var bytes = 0
+        for (index in 0 until minOf(stack.size, MAX_STACK_FRAMES)) {
+            val frame = stack[index]
+            val location = when {
+                frame.isNativeMethod -> "Native Method"
+                frame.fileName != null -> frame.fileName
+                else -> "Unknown Source"
+            }
+            // Check before interpolation: hostile/oversized class metadata cannot grow this payload.
+            val chars = frame.className.length.toLong() + frame.methodName.length + location.length + 24L
+            if (chars > MAX_FRAME_CHARS) break
+            val lineBytes = if (!frame.isNativeMethod && frame.fileName != null && frame.lineNumber >= 0) {
+                1 + decimalLength(frame.lineNumber)
+            } else 0
+            val frameBytes = utf8Size(frame.className) + utf8Size(frame.methodName) + utf8Size(location) +
+                7 + lineBytes + if (written > 0) 1 else 0
+            if (bytes + frameBytes > maxStackBytes - marker.length) break
+            bytes += frameBytes
+            if (written > 0) output.append('\n')
+            output.append("\tat ").append(frame.className).append('.').append(frame.methodName).append('(')
+            output.append(location)
+            if (!frame.isNativeMethod && frame.fileName != null && frame.lineNumber >= 0) {
+                output.append(':').append(frame.lineNumber)
+            }
+            output.append(')')
+            written++
         }
-        return stack.firstOrNull()
+        if (written < stack.size) output.append(marker)
+        return output.toString()
     }
 
-    private fun isApplicationFrame(className: String): Boolean {
-        for (prefix in INFRASTRUCTURE_PREFIXES) {
-            if (className.startsWith(prefix)) return false
+    // Surrogate code units are conservatively charged three bytes each (a pair needs four).
+    private fun utf8Size(value: String): Int {
+        var bytes = 0
+        for (character in value) bytes += when {
+            character.code < 0x80 -> 1
+            character.code < 0x800 -> 2
+            else -> 3
         }
-        return true
+        return bytes
     }
 
-    private fun formatStackHint(frame: StackTraceElement): String {
-        val location = when {
-            frame.isNativeMethod -> "Native Method"
-            frame.fileName != null && frame.lineNumber >= 0 -> "${frame.fileName}:${frame.lineNumber}"
-            frame.fileName != null -> frame.fileName
-            else -> "Unknown Source"
+    private fun decimalLength(value: Int): Int {
+        var remaining = value
+        var digits = 1
+        while (remaining >= 10) {
+            remaining /= 10
+            digits++
         }
-        return "${frame.className}.${frame.methodName}($location)"
+        return digits
     }
 
     private companion object {
         private const val UNKNOWN_STACK = "unknown"
-        private val INFRASTRUCTURE_PREFIXES = arrayOf(
-            "android.",
-            "androidx.",
-            "com.android.",
-            "com.google.android.",
-            "com.google.common.",
-            "com.google.firebase.",
-            "dalvik.",
-            "io.jankhunter.",
-            "java.",
-            "javax.",
-            "jdk.",
-            "kotlin.",
-            "kotlinx.",
-            "leakcanary.",
-            "libcore.",
-            "sun.",
-        )
+        private const val MAX_STACK_FRAMES = 32
+        private const val MAX_STACK_CHARS = 4096
+        private const val MAX_FRAME_CHARS = 512
+        private const val TRUNCATED = "\n[Jank Hunter: stack truncated]"
     }
 }

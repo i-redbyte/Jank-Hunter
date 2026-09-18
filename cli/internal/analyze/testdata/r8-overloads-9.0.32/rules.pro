@@ -1,0 +1,2 @@
+-keep,allowobfuscation class fixture.Overloads { *; }
+-keepattributes SourceFile,LineNumberTable

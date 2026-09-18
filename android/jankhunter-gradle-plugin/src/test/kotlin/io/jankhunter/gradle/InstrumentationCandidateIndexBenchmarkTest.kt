@@ -21,7 +21,7 @@ class InstrumentationCandidateIndexBenchmarkTest {
             checksum = lookupPair(checksum)
         }
 
-        val threadId = Thread.currentThread().threadId()
+        val threadId = Thread.currentThread().id
         val allocatedBefore = allocatedBytes(threadId)
         val elapsedNs = measureNanoTime {
             repeat(iterations) {

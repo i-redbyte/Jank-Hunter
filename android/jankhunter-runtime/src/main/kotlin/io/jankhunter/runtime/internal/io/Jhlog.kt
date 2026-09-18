@@ -16,7 +16,7 @@ internal object Jhlog {
     const val FORMAT_MINOR = 1
     const val FORMAT_PATCH = 0
     const val FORMAT_VERSION = "5.1.0"
-    const val HEADER_SCHEMA = 2L
+    const val HEADER_SCHEMA = 3L
     const val MAX_FILE_HEADER_BYTES = 4096
     const val TARGET_RAW_CHUNK_BYTES = 65536
     const val MAX_RAW_CHUNK_BYTES = 262144
@@ -28,7 +28,7 @@ internal object Jhlog {
     const val PROCESS_SCOPE_FINGERPRINT_BYTES = 32
     const val SEGMENT_DIGEST_BYTES = 32
     const val PROCESS_ROSTER_FINGERPRINT_BYTES = 32
-    const val REQUIRED_FEATURES = 0x7fbfffffL
+    const val REQUIRED_FEATURES = 0xffbfffffL
     const val OPTIONAL_FEATURES = 0x1fL
     const val RAW_OPTIONAL_FEATURES = 0x3eL
     const val FEATURE_CHUNK_CRC_COMMIT = 1L shl 0
@@ -61,6 +61,7 @@ internal object Jhlog {
     const val FEATURE_HTTP_FIRST_BYTE = 1L shl 28
     const val FEATURE_UID_TRAFFIC = 1L shl 29
     const val FEATURE_HTTP_COLLECTION_STATE = 1L shl 30
+    const val FEATURE_SYMBOL_ORIGIN = 1L shl 31
     const val OPTIONAL_FEATURE_GZIP_CHUNKS = 1L shl 0
     const val OPTIONAL_FEATURE_DATABASE_TRANSACTION_DELTA = 1L shl 1
     const val OPTIONAL_FEATURE_COLUMNAR_DATABASE_PAGES = 1L shl 2
@@ -719,6 +720,7 @@ internal data class BinaryLogFileHeader(
     val expectedProcessFingerprint: ByteArray = ByteArray(32),
     val processRosterDeclarationComplete: Boolean = true,
     val requiredFeatures: Long = Jhlog.REQUIRED_FEATURES,
+    val buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
 ) {
     companion object {
         fun randomId(): ByteArray = ByteArray(16).also { bytes -> ThreadLocalRandom.current().nextBytes(bytes) }

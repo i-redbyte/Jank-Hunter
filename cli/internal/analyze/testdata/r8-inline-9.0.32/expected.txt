@@ -1,0 +1,4 @@
+Exception in thread "main" java.lang.IllegalStateException: fixture
+	at probe.Screen.bind(Screen.java:5)
+	at probe.Screen.render(Screen.java:3)
+	at probe.Entry.main(Entry.java:3)

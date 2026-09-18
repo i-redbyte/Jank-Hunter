@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import androidx.core.content.pm.PackageInfoCompat
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.RuntimeBuildIdentityResolver
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.Jhlog
 import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
@@ -29,6 +30,7 @@ internal class RuntimeSessionController(
     private val elapsedRealtimeMs: RuntimeLongSource,
 ) {
     private val crashDrainInProgress = AtomicBoolean()
+    private val buildIdentityResolver = RuntimeBuildIdentityResolver()
 
     fun start(
         appContext: Context,
@@ -68,6 +70,9 @@ internal class RuntimeSessionController(
             redactedProcessName,
             expectedProcesses = expectedProcesses.ifEmpty { setOf(redactedProcessName) },
             rosterDeclarationComplete = rosterDeclarationComplete,
+            buildIdentity = buildIdentityResolver.resolve {
+                appContext.assets.open(RuntimeBuildIdentityResolver.ASSET_PATH)
+            },
             onTerminalStop = { stoppedWriter, reason, failure ->
                 onWriterTerminalStop(stoppedWriter, reason, failure, attempt, processName, directory)
             },

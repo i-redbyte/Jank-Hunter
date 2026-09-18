@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 import android.os.Debug
 import androidx.test.platform.app.InstrumentationRegistry
 import io.jankhunter.runtime.internal.io.BinaryEncodingSink
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import io.jankhunter.runtime.internal.io.BinaryPayload
 import io.jankhunter.runtime.internal.io.BinaryRecordContext
 import io.jankhunter.runtime.internal.io.SessionBinaryRecordEncoder
@@ -105,6 +106,8 @@ class HttpCollectionStateArtBenchmarkTest {
         var bytes = 0L
         private val payload = BinaryPayload()
         override fun payload(): BinaryPayload = payload.clear()
+        override fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long = symbolId(kind, value)
+
         override fun optionalSymbolId(kind: Int, value: String?): Long = 0L
         override fun defineStableSymbol(id: Long, name: String?): Long = id
         override fun producerContext(owner: String?): BinaryRecordContext? = null

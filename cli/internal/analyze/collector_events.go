@@ -125,8 +125,8 @@ func (c *collector) matchesFilters(route string, context SignalContextStats, cla
 func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	if event.Dictionary != nil {
 		if event.Dictionary.Kind == jhlog.DictStableSymbol && event.Dictionary.Value != "" {
-			if _, exists := c.stableSymbols.embedded[event.Dictionary.ID]; !exists {
-				c.stableSymbols.embedded[event.Dictionary.ID] = event.Dictionary.Value
+			if _, exists := c.stableSymbols.embedded[embeddedSymbolKey{event.Dictionary.ID, event.Dictionary.Origin}]; !exists {
+				c.stableSymbols.embedded[embeddedSymbolKey{event.Dictionary.ID, event.Dictionary.Origin}] = event.Dictionary.Value
 			}
 		}
 		if event.Dictionary.Value == "__jh_dictionary_overflow__" {
@@ -699,14 +699,21 @@ func (c *collector) markCohort() {
 }
 
 func (c *collector) resolveOwnerRef(dict map[uint64]string, ref jhlog.SymbolRef) string {
-	return c.deobfuscate(c.resolveSymbol(dict, ref))
+	value := c.resolveSymbol(dict, ref)
+	if c.nameMap != nil && value != "" && ref.Origin == jhlog.SymbolOriginUnknown {
+		c.summary.MappingIdentity.UnknownOriginReferences++
+	}
+	if ref.Origin == jhlog.SymbolOriginRuntimeClass {
+		return c.deobfuscate(value)
+	}
+	return value
 }
 
 func (c *collector) resolveSymbol(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	if !ref.Stable {
 		return jhlog.ResolveSymbol(dict, ref)
 	}
-	if embedded := c.stableSymbols.embedded[ref.ID]; embedded != "" {
+	if embedded := c.stableSymbols.embedded[embeddedSymbolKey{ref.ID, ref.Origin}]; embedded != "" {
 		return embedded
 	}
 	canonical := jhlog.ResolveSymbol(dict, ref)
@@ -858,7 +865,7 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 		}
 	}
 	for _, leak := range c.heap.Leaks {
-		className := attrValue(c.deobfuscate(leak.ClassName))
+		className := attrValue(leak.ClassName)
 		if _, exists := knownClasses[className]; className == "unknown" || exists {
 			continue
 		}
@@ -866,7 +873,7 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 		if count == 0 {
 			count = 1
 		}
-		holder := c.deobfuscate(firstKnown(leak.Holder, leak.HolderField))
+		holder := firstKnown(leak.Holder, leak.HolderField)
 		if !c.matchesFilters("", SignalContextStats{}, []string{className}, holder) {
 			continue
 		}

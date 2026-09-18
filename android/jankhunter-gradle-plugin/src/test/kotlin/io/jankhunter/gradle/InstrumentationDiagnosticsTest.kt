@@ -41,7 +41,8 @@ class InstrumentationDiagnosticsTest {
         )
 
         val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
-        assertTrue(text.contains("\"format\":1"))
+        assertTrue(text.contains("\"format\":2"))
+        assertTrue(text.contains("\"pass\":\"main\""))
         assertTrue(text.contains("\"class\":\"example.Diagnostics\""))
         assertTrue(text.contains("\"methods\":1"))
         assertTrue(text.contains("\"annotatedMethods\":1"))

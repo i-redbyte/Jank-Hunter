@@ -6,6 +6,10 @@ plugins {
 android {
     namespace = "io.jankhunter.runtime"
 
+    defaultConfig {
+        consumerProguardFiles("consumer-rules.pro")
+    }
+
     sourceSets.getByName("test").kotlin.directories.add("src/sharedTest/kotlin")
     sourceSets.getByName("androidTest").kotlin.directories.add("src/sharedTest/kotlin")
 
@@ -20,6 +24,7 @@ dependencies {
 
     androidTestImplementation(libs.bundles.androidx.test)
     testImplementation(libs.junit)
+    testImplementation(libs.androidx.work.runtime)
 }
 
 apply(from = rootProject.file("gradle/runtime-benchmarks.gradle.kts"))
