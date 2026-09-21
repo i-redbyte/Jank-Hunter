@@ -107,8 +107,27 @@ internal object EffectiveArtTiConfigResolver {
             overflowPolicy = dsl.transport.overflowPolicy.orNull ?: preset.overflowPolicy,
         )
         validate(candidate)
-        return candidate.copy(configHash = hash(candidate))
+        return candidate.copy(configHash = hashConfig(candidate))
     }
+
+    internal fun validateScaled(config: EffectiveArtTiConfig) = validate(config)
+
+    internal fun hash(config: EffectiveArtTiConfig): Long = hashConfig(config)
+
+    internal fun explicitOverrides(dsl: JankHunterExtension.ArtTi): ArtTiExplicitOverrides {
+        return ArtTiExplicitOverrides(
+            transportCapacity = dsl.transport.capacity.isPresent,
+            maxTrackedThreads = dsl.threads.maxTrackedThreads.isPresent,
+            maxOpenContentions = dsl.monitorContention.maxOpenIntervals.isPresent,
+            maxStackDefinitions = dsl.stackSampling.maxStackDefinitions.isPresent,
+            maxMethodDefinitions = dsl.stackSampling.maxMethodDefinitions.isPresent,
+            drainBatchSize = dsl.transport.drainBatchSize.isPresent,
+            maxSamplesPerMinute = dsl.stackSampling.maxSamplesPerMinute.isPresent,
+            minTriggerIntervalMs = dsl.stackSampling.minTriggerIntervalMs.isPresent,
+        )
+    }
+
+    internal const val MAX_DRAIN_BATCH = 2_048
 
     private fun preset(mode: ArtTiMode): EffectiveArtTiConfig {
         return when (mode) {
@@ -237,7 +256,7 @@ internal object EffectiveArtTiConfigResolver {
         }
     }
 
-    private fun hash(config: EffectiveArtTiConfig): Long {
+    private fun hashConfig(config: EffectiveArtTiConfig): Long {
         val canonical = listOf(
             "schema=1",
             "mode=${config.mode.name}",

@@ -135,7 +135,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 return
             }
             phase = ControlPhase.CONFIG
-            val runtimeConfig = ArtTiRuntimeConfigParser.fromManifest(context).getOrElse {
+            val runtimeConfig = ArtTiRuntimeConfigParser.fromContext(context).getOrElse {
                 lifecycle.set(Lifecycle.FAILED)
                 report(Reason.CONFIG_INVALID, warning = true)
                 return

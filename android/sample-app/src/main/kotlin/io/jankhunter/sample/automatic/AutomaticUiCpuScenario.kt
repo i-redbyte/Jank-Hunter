@@ -64,11 +64,15 @@ internal class AutomaticUiCpuScenario(
     }
 
     private fun runJvmtiEvidence() {
-        JankHunterTelemetry.traceOperation("sample.auto.jvmti.monitor_contention") {
-            val result = graphScenario.collectJvmtiEvidence(JVMTI_CONTENTION_MS)
-            JankHunterTelemetry.counter("sample.auto.jvmti.contention.completed.count", 1)
-            JankHunterTelemetry.gauge("sample.auto.jvmti.contention.wait_ms", result.mainThreadWaitMs)
-            JankHunterTelemetry.gauge("sample.auto.jvmti.allocation_bytes", result.allocatedBytes)
+        JankHunterTelemetry.setScreen(FEED_SCREEN)
+        JankHunterTelemetry.withOwner(FEED_OWNER) {
+            JankHunterTelemetry.traceOperation("FeedImages.load") {
+                val result = graphScenario.collectJvmtiEvidence(JVMTI_CONTENTION_MS)
+                JankHunterTelemetry.counter("sample.auto.jvmti.contention.completed.count", 1)
+                JankHunterTelemetry.gauge("sample.auto.jvmti.contention.wait_ms", result.mainThreadWaitMs)
+                JankHunterTelemetry.gauge("sample.auto.jvmti.allocation_bytes", result.allocatedBytes)
+                JankHunterTelemetry.gauge("sample.auto.jvmti.decode_width_px", result.decodedImageWidth.toLong())
+            }
         }
     }
 
@@ -84,5 +88,7 @@ internal class AutomaticUiCpuScenario(
         const val QUEUE_TASK_MS = 90L
         const val STAGE_DURATION_MS = 4_200L
         const val FLUSH_ADVANCE_MS = 250L
+        const val FEED_SCREEN = "Feed"
+        const val FEED_OWNER = "FeedImages"
     }
 }

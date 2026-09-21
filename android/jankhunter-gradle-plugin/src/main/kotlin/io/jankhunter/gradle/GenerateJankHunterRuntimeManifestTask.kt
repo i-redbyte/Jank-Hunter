@@ -101,10 +101,19 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val artTiEntrypoint: Property<String>
 
     @get:Input
-    abstract val artTiNativeOptions: Property<String>
+    abstract val artTiConfigBlob: Property<String>
 
     @get:Input
-    abstract val artTiTriggerPolicy: Property<String>
+    abstract val artTiExplicitOverridesBlob: Property<String>
+
+    @get:Input
+    abstract val artTiScaleToApplicationSize: Property<Boolean>
+
+    @get:Input
+    abstract val artTiStorageLimitMiB: Property<Int>
+
+    @get:Input
+    abstract val artTiGradleModuleCount: Property<Int>
 
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
@@ -125,8 +134,22 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
         logGrowthAnalyticsEnabled.convention(true)
         deleteObsoleteJhlogFormats.convention(false)
         artTiEntrypoint.convention("")
-        artTiNativeOptions.convention("")
-        artTiTriggerPolicy.convention("")
+        artTiConfigBlob.convention("")
+        artTiExplicitOverridesBlob.convention("")
+        artTiScaleToApplicationSize.convention(true)
+        artTiStorageLimitMiB.convention(50)
+        artTiGradleModuleCount.convention(1)
+    }
+
+    private fun resolvedArtTiMetadata(): Pair<String, String> {
+        return ArtTiResolvedMetadata.resolve(
+            configBlob = artTiConfigBlob.get(),
+            overridesBlob = artTiExplicitOverridesBlob.get(),
+            diagnosticsFiles = emptyList(),
+            storageLimitMiB = artTiStorageLimitMiB.get(),
+            scaleToApplicationSize = artTiScaleToApplicationSize.get(),
+            gradleModuleCount = artTiGradleModuleCount.get(),
+        )
     }
 
     @TaskAction
@@ -144,6 +167,7 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
         } else {
             ""
         }
+        val (artTiNativeOptions, artTiTriggerPolicy) = resolvedArtTiMetadata()
         val artTiMetadata = if (artTiEntrypoint.get().isNotEmpty()) {
             """
                     <meta-data
@@ -151,10 +175,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                         android:value="${artTiEntrypoint.get()}" />
                     <meta-data
                         android:name="io.jankhunter.artti.native_options"
-                        android:value="${artTiNativeOptions.get()}" />
+                        android:value="$artTiNativeOptions" />
                     <meta-data
                         android:name="io.jankhunter.artti.trigger_policy"
-                        android:value="${artTiTriggerPolicy.get()}" />
+                        android:value="$artTiTriggerPolicy" />
             """.trimIndent()
         } else {
             ""

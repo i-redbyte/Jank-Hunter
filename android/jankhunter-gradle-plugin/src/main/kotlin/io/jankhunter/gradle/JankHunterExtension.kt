@@ -202,6 +202,8 @@ open class JankHunterExtension @Inject constructor(private val objects: ObjectFa
 
     open class ArtTi @Inject constructor(objects: ObjectFactory) {
         val mode: Property<ArtTiMode> = objects.property(ArtTiMode::class.java).convention(ArtTiMode.OFF)
+        val scaleToApplicationSize: Property<Boolean> =
+            objects.property(Boolean::class.java).convention(true)
         val enabledBuildTypes: SetProperty<String> =
             objects.setProperty(String::class.java).convention(setOf("debug"))
         val garbageCollection: GarbageCollection = objects.newInstance(GarbageCollection::class.java)

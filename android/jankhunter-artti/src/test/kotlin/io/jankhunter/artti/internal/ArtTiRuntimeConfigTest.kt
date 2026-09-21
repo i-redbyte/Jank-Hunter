@@ -22,6 +22,14 @@ class ArtTiRuntimeConfigTest {
     }
 
     @Test
+    fun parsesScaledConfigAssetLines() {
+        val asset = "$NATIVE_OPTIONS\n$TRIGGER_POLICY\n"
+        val lines = asset.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val config = ArtTiRuntimeConfigParser.parse(lines[0], lines[1]).getOrThrow()
+        assertEquals(4096, config.native.transportCapacity)
+    }
+
+    @Test
     fun rejectsMissingDuplicateAndMismatchedPolicy() {
         assertTrue(ArtTiRuntimeConfigParser.parse(null, TRIGGER_POLICY).isFailure)
         assertTrue(ArtTiRuntimeConfigParser.parse("$NATIVE_OPTIONS;cap=1", TRIGGER_POLICY).isFailure)

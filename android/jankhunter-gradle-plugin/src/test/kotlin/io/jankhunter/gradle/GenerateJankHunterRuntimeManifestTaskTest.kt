@@ -83,8 +83,13 @@ class GenerateJankHunterRuntimeManifestTaskTest {
             availableRuntimeFeatures = "JANK_STATS",
         )
         task.artTiEntrypoint.set("io.jankhunter.artti.internal.ArtTiIntegration")
-        task.artTiNativeOptions.set("v=1;profile=2;transport=4096;cap=0x3f")
-        task.artTiTriggerPolicy.set("v=1;main=1;long=1;minms=250;maxpm=120;drainms=50")
+        val artTiDsl = task.project.objects.newInstance(JankHunterExtension.ArtTi::class.java).apply {
+            mode.set(ArtTiMode.CAUSAL)
+        }
+        val base = EffectiveArtTiConfigResolver.resolve(artTiDsl)
+        task.artTiConfigBlob.set(ArtTiConfigCodec.encode(base))
+        task.artTiExplicitOverridesBlob.set(ArtTiConfigCodec.encodeOverrides(ArtTiExplicitOverrides()))
+        task.artTiScaleToApplicationSize.set(false)
 
         task.writeManifest()
 

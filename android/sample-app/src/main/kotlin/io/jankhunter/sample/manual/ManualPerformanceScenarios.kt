@@ -52,16 +52,18 @@ internal class ManualPerformanceScenarios(
     }
 
     fun recordJvmtiEvidence() {
-        JankHunterTelemetry.traceOperation("sample.manual.jvmti.monitor_contention") {
-            var result: JvmtiEvidenceResult? = null
-            JankHunterTelemetry.withOwner(JvmtiEvidenceScenario::class.java.name) {
+        JankHunterTelemetry.setScreen(FEED_SCREEN)
+        JankHunterTelemetry.withOwner(FEED_OWNER) {
+            JankHunterTelemetry.traceOperation("FeedImages.load") {
+                var result: JvmtiEvidenceResult? = null
                 result = jvmtiEvidence.blockMainThread(JVMTI_CONTENTION_MS)
-            }
-            checkNotNull(result).also { evidence ->
-                JankHunterTelemetry.counter("sample.manual.jvmti.contention.completed.count", 1)
-                JankHunterTelemetry.gauge("sample.manual.jvmti.contention.wait_ms", evidence.mainThreadWaitMs)
-                JankHunterTelemetry.gauge("sample.manual.jvmti.allocation_bytes", evidence.allocatedBytes)
-                status(text(R.string.status_jvmti_evidence_recorded, evidence.mainThreadWaitMs))
+                checkNotNull(result).also { evidence ->
+                    JankHunterTelemetry.counter("sample.manual.jvmti.contention.completed.count", 1)
+                    JankHunterTelemetry.gauge("sample.manual.jvmti.contention.wait_ms", evidence.mainThreadWaitMs)
+                    JankHunterTelemetry.gauge("sample.manual.jvmti.allocation_bytes", evidence.allocatedBytes)
+                    JankHunterTelemetry.gauge("sample.manual.jvmti.decode_width_px", evidence.decodedImageWidth.toLong())
+                    status(text(R.string.status_jvmti_evidence_recorded, evidence.mainThreadWaitMs))
+                }
             }
         }
         JankHunter.flush()
@@ -169,5 +171,7 @@ internal class ManualPerformanceScenarios(
 
     private companion object {
         const val JVMTI_CONTENTION_MS = 420L
+        const val FEED_SCREEN = "Feed"
+        const val FEED_OWNER = "FeedImages"
     }
 }

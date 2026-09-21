@@ -142,12 +142,22 @@ class JankHunterPlugin : Plugin<Project> {
                     it.artTiEntrypoint.set(
                         if (artTiEnabledForVariant) ART_TI_INTEGRATION_CLASS else "",
                     )
-                    it.artTiNativeOptions.set(
-                        if (artTiEnabledForVariant) effectiveArtTi.nativeAgentOptions() else "",
-                    )
-                    it.artTiTriggerPolicy.set(
-                        if (artTiEnabledForVariant) effectiveArtTi.triggerPolicy() else "",
-                    )
+                    if (artTiEnabledForVariant) {
+                        it.artTiConfigBlob.set(ArtTiConfigCodec.encode(effectiveArtTi))
+                        it.artTiExplicitOverridesBlob.set(
+                            ArtTiConfigCodec.encodeOverrides(
+                                EffectiveArtTiConfigResolver.explicitOverrides(extension.artTi),
+                            ),
+                        )
+                        it.artTiScaleToApplicationSize.set(extension.artTi.scaleToApplicationSize)
+                        it.artTiStorageLimitMiB.set(maxSessionLogSizeMiB)
+                        it.artTiGradleModuleCount.set(
+                            project.rootProject.subprojects.size.coerceAtLeast(1),
+                        )
+                    } else {
+                        it.artTiConfigBlob.set("")
+                        it.artTiExplicitOverridesBlob.set("")
+                    }
                     it.outputFile.set(
                         project.layout.buildDirectory.file(
                             "generated/jankhunterRuntimeManifest/${variant.name}/AndroidManifest.xml",
@@ -441,6 +451,52 @@ class JankHunterPlugin : Plugin<Project> {
                         directory.asFileTree.matching { pattern -> pattern.include("**/*.jsonl") }
                     })
                 }
+            }
+            if (artTiEnabledForVariant) {
+                val artTiScaledConfig = project.tasks.register(
+                    "generate${variant.name.capitalized()}JankHunterArtTiScaledConfig",
+                    GenerateJankHunterArtTiScaledConfigTask::class.java,
+                ) { task ->
+                    task.artTiConfigBlob.set(ArtTiConfigCodec.encode(effectiveArtTi))
+                    task.artTiExplicitOverridesBlob.set(
+                        ArtTiConfigCodec.encodeOverrides(
+                            EffectiveArtTiConfigResolver.explicitOverrides(extension.artTi),
+                        ),
+                    )
+                    task.artTiScaleToApplicationSize.set(extension.artTi.scaleToApplicationSize)
+                    task.artTiStorageLimitMiB.set(maxSessionLogSizeMiB)
+                    task.artTiGradleModuleCount.set(
+                        project.rootProject.subprojects.size.coerceAtLeast(1),
+                    )
+                    task.diagnosticsFiles.from(diagnosticsDirectory.map { directory ->
+                        directory.asFileTree.matching { pattern ->
+                            pattern.include("**/*.jsonl")
+                        }
+                    })
+                    task.assetsDirectory.set(
+                        project.layout.buildDirectory.dir(
+                            "generated/jankhunter/${variant.name}/artti-scaled-assets",
+                        ),
+                    )
+                }
+                if (instrumentation.lifecycleLeaks) {
+                    val lifecycleTaskName = "instrument${variant.name.capitalized()}JankHunterLifecycle"
+                    artTiScaledConfig.configure { task ->
+                        task.diagnosticsFiles.from(
+                            project.tasks.named(lifecycleTaskName, InstrumentJankHunterLifecycleTask::class.java)
+                                .flatMap { it.diagnosticsDirectory }
+                                .map { directory ->
+                                    directory.asFileTree.matching { pattern ->
+                                        pattern.include("**/*.jsonl")
+                                    }
+                                },
+                        )
+                    }
+                }
+                variant.sources.assets?.addGeneratedSourceDirectory(
+                    artTiScaledConfig,
+                    GenerateJankHunterArtTiScaledConfigTask::assetsDirectory,
+                )
             }
             variant.instrumentation.setAsmFramesComputationMode(
                 FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,

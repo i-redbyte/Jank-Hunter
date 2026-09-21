@@ -20,6 +20,24 @@ internal data class ArtTiRuntimeConfig(
 internal object ArtTiRuntimeConfigParser {
     const val META_NATIVE_OPTIONS = "io.jankhunter.artti.native_options"
     const val META_TRIGGER_POLICY = "io.jankhunter.artti.trigger_policy"
+    const val SCALED_CONFIG_ASSET = "jankhunter/artti-runtime-config.txt"
+
+    fun fromContext(context: Context): Result<ArtTiRuntimeConfig> {
+        val assetConfig = readScaledConfigAsset(context)
+        if (assetConfig != null) {
+            return parse(assetConfig.first, assetConfig.second)
+        }
+        return fromManifest(context)
+    }
+
+    internal fun readScaledConfigAsset(context: Context): Pair<String, String>? {
+        val text = runCatching {
+            context.assets.open(SCALED_CONFIG_ASSET).bufferedReader().use { it.readText() }
+        }.getOrNull() ?: return null
+        val lines = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        if (lines.size < 2) return null
+        return lines[0] to lines[1]
+    }
 
     fun fromManifest(context: Context): Result<ArtTiRuntimeConfig> = runCatching {
         @Suppress("DEPRECATION")
