@@ -47,20 +47,16 @@ std::int32_t ArtJvmtiAdapter::CaptureStackForToken(
     return -static_cast<std::int32_t>(StatusCode::kUnsupported);
   }
 
-  std::int32_t result = -static_cast<std::int32_t>(StatusCode::kNotFound);
-  const auto limit = std::min<std::uint32_t>(static_cast<std::uint32_t>(count),
-                                             config_.max_tracked_threads);
   for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(count);
        ++index) {
     jthread thread = threads[index];
     JniLocalRef<jthread> thread_ref(jni, thread);
-    if (index < limit && result < 0 &&
-        TokenFor(thread).value() == thread_token) {
-      result =
-          CaptureStackLocked(thread, trigger, context_token, related_sequence);
+    if (TokenFor(thread).value() != thread_token) {
+      continue;
     }
+    return CaptureStackLocked(thread, trigger, context_token, related_sequence);
   }
-  return result;
+  return -static_cast<std::int32_t>(StatusCode::kNotFound);
 }
 
 std::int32_t

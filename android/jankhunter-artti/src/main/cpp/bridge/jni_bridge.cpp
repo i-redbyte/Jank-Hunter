@@ -77,8 +77,9 @@ Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeDrain(
 extern "C" JNIEXPORT jint JNICALL
 Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeStop(JNIEnv*, jobject) noexcept {
   const auto adapter_status = jankhunter::artti::art::ArtJvmtiAdapter::Instance().Stop(500U);
+  const auto bridge_status = BridgeRuntime::Instance().Stop();
   if (!adapter_status.ok()) return Code(adapter_status);
-  return Code(BridgeRuntime::Instance().Stop());
+  return Code(bridge_status);
 }
 
 extern "C" JNIEXPORT jlong JNICALL

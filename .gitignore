@@ -41,3 +41,4 @@ android/local.properties
 reports/
 tmp/
 benchmarks/results/
+android/jankhunter-artti/src/main/cpp/build-host/

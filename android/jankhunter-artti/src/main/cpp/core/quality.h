@@ -69,6 +69,23 @@ class QualityCounters final {
     return high_watermark_.load(std::memory_order_relaxed);
   }
 
+  [[nodiscard]] std::uint64_t SumNativeLossExceptQueue() const noexcept {
+    std::uint64_t total = 0U;
+    for (std::size_t index = static_cast<std::size_t>(QualityCounter::kRejectedAfterClose);
+         index < static_cast<std::size_t>(QualityCounter::kCount);
+         ++index) {
+      const auto counter = static_cast<QualityCounter>(index);
+      if (counter == QualityCounter::kJvmtiError ||
+          counter == QualityCounter::kCallbackAfterStop) {
+        continue;
+      }
+      const auto value = Get(counter);
+      const auto room = std::numeric_limits<std::uint64_t>::max() - total;
+      total = value > room ? std::numeric_limits<std::uint64_t>::max() : total + value;
+    }
+    return total;
+  }
+
  private:
   std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(QualityCounter::kCount)> values_{};
   std::atomic<std::uint64_t> high_watermark_{0U};

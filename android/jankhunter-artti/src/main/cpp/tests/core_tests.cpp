@@ -171,6 +171,17 @@ void SaturatingQualityCounters() {
   JH_CHECK(quality.high_watermark() == 9U);
 }
 
+void QualitySnapshotNativeLossAggregate() {
+  QualityCounters quality;
+  quality.Add(QualityCounter::kPublished, 100U);
+  quality.Add(QualityCounter::kQueueFull, 4U);
+  quality.Add(QualityCounter::kRejectedAfterClose, 2U);
+  quality.Add(QualityCounter::kStackCaptureFailure, 3U);
+  quality.Add(QualityCounter::kJvmtiError, 9U);
+  quality.Add(QualityCounter::kCallbackAfterStop, 7U);
+  JH_CHECK(quality.SumNativeLossExceptQueue() == 5U);
+}
+
 void GcPairing() {
   GcIntervalTracker tracker;
   QualityCounters quality;
@@ -419,6 +430,7 @@ int main() {
   QueueWrapAndOverflow();
   QueueMultiProducerStress();
   SaturatingQualityCounters();
+  QualitySnapshotNativeLossAggregate();
   GcPairing();
   MonitorPairingAndCapacity();
   ThreadRegistryLifecycle();

@@ -169,7 +169,6 @@ Status ArtJvmtiAdapter::Stop(const std::uint32_t timeout_ms) noexcept {
   }
   const bool clean = active_callbacks_.load(std::memory_order_acquire) == 0U;
   PublishStatus(kStatusStopped, clean ? 0U : 1U);
-  if (!clean) return Status::Error(StatusCode::kContended);
   active_bits_.store(0U, std::memory_order_release);
   stack_fingerprints_.Reset();
   method_ids_.Reset();
@@ -177,7 +176,7 @@ Status ArtJvmtiAdapter::Stop(const std::uint32_t timeout_ms) noexcept {
   last_stack_capture_ns_ = 0U;
   stack_captures_in_window_ = 0U;
   attached_ = false;
-  return Status::Ok();
+  return clean ? Status::Ok() : Status::Error(StatusCode::kContended);
 }
 
 Status ArtJvmtiAdapter::ConfigureCapabilities() noexcept {
@@ -378,8 +377,6 @@ extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* vm, char* options, void* 
 }
 
 extern "C" JNIEXPORT void JNICALL Agent_OnUnload(JavaVM*) {
-  const auto status = jankhunter::artti::art::ArtJvmtiAdapter::Instance().Stop(500U);
-  if (status.ok()) {
-    static_cast<void>(jankhunter::artti::bridge::BridgeRuntime::Instance().Stop());
-  }
+  static_cast<void>(jankhunter::artti::art::ArtJvmtiAdapter::Instance().Stop(500U));
+  static_cast<void>(jankhunter::artti::bridge::BridgeRuntime::Instance().Stop());
 }
