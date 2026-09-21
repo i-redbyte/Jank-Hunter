@@ -54,7 +54,7 @@ func TestDatabaseColumnPageReusesCallerOwnedDecoder(t *testing.T) {
 }
 
 func TestDatabaseColumnPageRoundTripsWirePayloads(t *testing.T) {
-	aliases := map[uint64]uint64{0x51: 1}
+	aliases := stableAliasTable{{ID: 0x51}: 1}
 	state := eventPayloadEncodeState{}
 	rows := make([]microPageRow, 0, maxMicroPageRows)
 	originalBytes := 0
@@ -153,7 +153,7 @@ func appendDatabaseTestRow(
 	t *testing.T,
 	rows []microPageRow,
 	event Event,
-	aliases map[uint64]uint64,
+	aliases stableAliasTable,
 	state *eventPayloadEncodeState,
 ) []microPageRow {
 	t.Helper()

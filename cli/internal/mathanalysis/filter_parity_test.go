@@ -1,6 +1,8 @@
 package mathanalysis
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,16 +18,8 @@ func writeFilterParityFixture(t testing.TB, mapped, stable bool) (string, *analy
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "filters.jhlog")
-	file, writer, err := jhlog.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	write := func(event jhlog.Event) {
-		t.Helper()
-		if err := writer.WriteEvent(event); err != nil {
-			t.Fatal(err)
-		}
-	}
+	var err error
+	header := jhlog.DefaultSegmentHeader()
 	values := []string{"GET /feed", "example.FeedScreen", "example.FeedOwner", "example.FeedClass", "example.FeedHolder", "example.FeedInitiator", "GET /other", "example.OtherScreen", "example.OtherOwner", "example.OtherClass", "example.OtherHolder", "example.OtherInitiator", "websocket.feedowner.reconnect.count"}
 	var mapping *analyze.NameMapping
 	if mapped {
@@ -41,23 +35,41 @@ func writeFilterParityFixture(t testing.TB, mapped, stable bool) (string, *analy
 		if err := os.WriteFile(mapPath, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
+		digest := sha256.Sum256([]byte(text))
+		header.BuildIdentity = jhlog.BuildIdentity{State: jhlog.BuildIdentityMapped, MappingSHA256: hex.EncodeToString(digest[:])}
 		mapping, err = analyze.LoadNameMapping(mapPath)
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	file, writer, err := jhlog.CreateWithHeader(path, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(event jhlog.Event) {
+		t.Helper()
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originFor := func(id uint64) jhlog.SymbolOrigin {
+		if id <= 12 && (id-1)%6 != 0 {
+			return jhlog.SymbolOriginRuntimeClass
+		}
+		return jhlog.SymbolOriginSourceLabel
 	}
 	for i, value := range values {
 		kind := jhlog.DictGeneric
 		if stable {
 			kind = jhlog.DictStableSymbol
 		}
-		write(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: kind, ID: uint64(i + 1), Value: value}})
+		write(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: kind, ID: uint64(i + 1), Value: value, Origin: originFor(uint64(i + 1))}})
 	}
 	ref := func(id uint64) jhlog.SymbolRef {
 		if stable {
-			return jhlog.SymbolRef{Stable: true, ID: id}
+			return jhlog.SymbolRef{Stable: true, ID: id, Origin: originFor(id)}
 		}
-		return jhlog.LocalSymbol(id)
+		return jhlog.SymbolRef{ID: id, Origin: originFor(id)}
 	}
 	for variant := uint64(0); variant < 2; variant++ {
 		offset := variant * 6

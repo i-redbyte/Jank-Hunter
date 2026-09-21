@@ -95,6 +95,7 @@
  {{with httpCountCoverageExplanation .Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
  {{with networkLoopAttributionExplanation .NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
       {{with .Summary}}
+      {{template "mapping-identity" .MappingIdentity}}{{template "artifact-identity" .ArtifactIdentity}}
       {{template "http-collection-quality" .}}
       <p class="help-text">Раздел предназначен для проверки методики отчёта. Он не отменяет найденные проблемы: ограничения применяются только к выводам, которым нужен соответствующий источник.</p>
       {{with collectorCapabilities .}}
@@ -164,8 +165,8 @@
  {{with httpCountCoverageExplanation .Candidate.Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
  {{with networkLoopAttributionExplanation .Candidate.NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
       {{with .Comparison}}
-      <h3>Базовый прогон</h3>{{template "http-collection-quality" .Baseline}}
-      <h3>Проверяемый прогон</h3>{{template "http-collection-quality" .Candidate}}
+      <h3>Базовый прогон</h3>{{template "mapping-identity" .Baseline.MappingIdentity}}{{template "artifact-identity" .Baseline.ArtifactIdentity}}{{template "http-collection-quality" .Baseline}}
+      <h3>Проверяемый прогон</h3>{{template "mapping-identity" .Candidate.MappingIdentity}}{{template "artifact-identity" .Candidate.ArtifactIdentity}}{{template "http-collection-quality" .Candidate}}
       <p class="help-text">Раздел предназначен для проверки методики сравнения. Он не меняет найденные дельты: ограничения применяются только к показателям, которым нужен соответствующий источник.</p>
       {{with collectorCapabilities .Baseline}}<h3>Сборщики базы</h3>{{template "collector-capability-grid" .}}{{end}}
       {{with collectorCapabilities .Candidate}}<h3>Сборщики проверяемого прогона</h3>{{template "collector-capability-grid" .}}{{end}}
@@ -211,7 +212,20 @@
  {{if .LeakPattern}}<div><strong>Характер ссылок в дампе</strong><p>{{.LeakPattern}}</p></div>{{end}}
  {{if .ReferenceMatchers}}<div><strong>Правила совпадения ссылок</strong><p>{{range .ReferenceMatchers}}<code>{{.}}</code> {{end}}</p></div>{{end}}
  {{if .HolderField}}<div><strong>Проверка экземпляра в дампе</strong><p>Проследите ссылку {{.HolderField}} и проверьте, ожидаема ли её жизнь в момент снятия дампа.</p></div>{{end}}
- {{if .AlternativePaths}}<div><strong>Другие пути в дампе</strong>{{range .AlternativePaths}}<p>{{range .}}<span>{{.ClassName}}{{if .FieldName}}.{{.FieldName}}{{end}} → </span>{{end}}</p>{{end}}</div>{{end}}
+ {{if .AlternativePaths}}<div><strong>Другие пути в дампе</strong>{{range .AlternativePaths}}<p>{{range .}}<span>{{.ClassName}}{{if .FieldName}}.{{.FieldLabel}}{{end}} → </span>{{end}}</p>{{end}}</div>{{end}}
 </div>
 {{end}}
 {{end}}
+{{- define "mapping-identity" -}}
+{{- if .Applied -}}
+{{- if eq .Status "unverified" -}}<p class="warning mapping-identity"><strong>Соответствие mapping журналу не подтверждено.</strong> Mapping применён по явному разрешению к символам с известным runtime-происхождением; результат остаётся непроверенным. SHA-256: <code>{{.SHA256}}</code>.</p>
+{{- else -}}<p class="quality-notice mapping-identity">Mapping совпадает с identity сборки в журнале. SHA-256: <code>{{.SHA256}}</code>.</p>{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "artifact-identity" -}}
+{{- with . -}}
+{{- if eq .Status "mapping_bound" -}}<p class="quality-notice artifact-identity">Прочитанные ASM-артефакты совпадают с хешами manifest и привязаны к mapping журнала. Сам APK/AAB в этой проверке не хешировался.</p>
+{{- else -}}<p class="warning artifact-identity"><strong>Связь ASM-артефактов со сборкой не подтверждена.</strong> Совпадение namespace само по себе не определяет сборку.</p>{{- end -}}
+{{- end -}}
+{{- end -}}

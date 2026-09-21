@@ -417,8 +417,9 @@ internal class BinaryLogWriter private constructor(
         foreground: Boolean = true,
         incidentId: Long = 0L,
         state: Long = Jhlog.STALL_STATE_RECOVERED,
+        stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
-        sessionRecords.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state)
+        sessionRecords.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state, stackOrigin)
     }
 
     fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean = true) {
@@ -434,8 +435,9 @@ internal class BinaryLogWriter private constructor(
         count: Long,
         foreground: Boolean = true,
         evidence: Long,
+        classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
-        sessionRecords.retained(screen, owner, className, holder, ageMs, count, foreground, evidence)
+        sessionRecords.retained(screen, owner, className, holder, ageMs, count, foreground, evidence, classOrigin)
     }
 
     fun uiWindow(
@@ -573,6 +575,11 @@ internal class BinaryLogWriter private constructor(
     override fun symbolId(kind: Int, value: String?): Long {
         ensureWritable()
         return dictionaryRecords.symbolId(kind, value)
+    }
+
+    override fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long {
+        ensureWritable()
+        return dictionaryRecords.symbolId(kind, value, origin)
     }
 
     override fun optionalSymbolId(kind: Int, value: String?): Long {
@@ -986,6 +993,7 @@ internal class BinaryLogWriter private constructor(
             .uvarint(nonNegative(fileHeader.expectedProcessCount))
             .boundedBytes(fileHeader.expectedProcessFingerprint, Jhlog.PROCESS_ROSTER_FINGERPRINT_BYTES)
             .uvarint(if (fileHeader.processRosterDeclarationComplete) 1L else 0L)
+            .buildIdentity(fileHeader.buildIdentity.forNamespace(fileHeader.symbolNamespace))
             .copyBytes()
         container.writeFileHeader(payload)
     }

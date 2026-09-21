@@ -17,9 +17,16 @@ class LifecycleOnlyInstrumentationTest {
         val diagnostics = Files.createTempDirectory("jankhunter-lifecycle-diagnostics").toFile()
 
         val instrumented = instrument(fixture(), diagnostics.absolutePath)
+        val records = InstrumentationArtifactFiles.readJsonlLines(diagnostics)
+        assertTrue(records.single().contains("\"format\":2"))
+        assertTrue(records.single().contains("\"pass\":\"lifecycle\""))
         val calls = collectCalls(instrumented)
 
-        assertEquals(1, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(2, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(
+            "(Ljava/lang/Object;ILjava/lang/String;Ljava/lang/String;)V",
+            calls.first { it.method == "watchLifecycleObject" }.descriptor,
+        )
         assertFalse(calls.any { it.method == "recordMethodCall" })
         assertFalse(calls.any { it.method == "enterMethod" || it.method == "exitMethod" })
         assertEquals(1, countClassAnnotation(instrumented, LifecycleInstrumentationMarker.DESCRIPTOR))
@@ -35,14 +42,28 @@ class LifecycleOnlyInstrumentationTest {
         val once = instrument(fixture())
         val twice = instrument(once)
 
-        assertEquals(1, collectCalls(twice).count { it.method == "watchLifecycleObject" })
+        assertEquals(2, collectCalls(twice).count { it.method == "watchLifecycleObject" })
         assertEquals(1, countClassAnnotation(twice, LifecycleInstrumentationMarker.DESCRIPTOR))
+    }
+
+    @Test
+    fun directFragmentSubclassObservesInheritedCallbacks() {
+        val bytes = instrument(fixture(includeLifecycleMethod = false))
+        val calls = collectCalls(bytes)
+        assertEquals(2, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(1, collectCalls(bytes, "androidx/fragment/app/Fragment").count { it.method == "onDestroyView" })
+        assertEquals(1, collectCalls(bytes, "androidx/fragment/app/Fragment").count { it.method == "onDestroy" })
+        assertEquals(2, collectCalls(instrument(bytes)).count { it.method == "watchLifecycleObject" })
     }
 
     @Test
     fun classWithoutLifecycleHookGetsNoMarkerOrDiagnosticsShard() {
         val diagnostics = Files.createTempDirectory("jankhunter-no-lifecycle-diagnostics").toFile()
-        val instrumented = instrument(fixture(includeLifecycleMethod = false), diagnostics.absolutePath)
+        val instrumented = instrument(
+            fixture(includeLifecycleMethod = false, parent = "java/lang/Object"),
+            diagnostics.absolutePath,
+            classHierarchy = setOf(CLASS_NAME),
+        )
 
         assertEquals(0, countClassAnnotation(instrumented, LifecycleInstrumentationMarker.DESCRIPTOR))
         assertTrue(InstrumentationArtifactFiles.readJsonlLines(diagnostics).isEmpty())
@@ -105,14 +126,14 @@ class LifecycleOnlyInstrumentationTest {
         return writer.toByteArray()
     }
 
-    private fun fixture(includeLifecycleMethod: Boolean = true): ByteArray {
+    private fun fixture(includeLifecycleMethod: Boolean = true, parent: String = "androidx/fragment/app/Fragment"): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(
             Opcodes.V17,
             Opcodes.ACC_PUBLIC,
             CLASS_NAME,
             null,
-            "androidx/fragment/app/Fragment",
+            parent,
             null,
         )
         if (includeLifecycleMethod) {
@@ -133,7 +154,7 @@ class LifecycleOnlyInstrumentationTest {
         return writer.toByteArray()
     }
 
-    private fun collectCalls(bytes: ByteArray): List<Call> {
+    private fun collectCalls(bytes: ByteArray, targetOwner: String = "io/jankhunter/runtime/JankHunterHooks"): List<Call> {
         val calls = mutableListOf<Call>()
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
@@ -152,7 +173,7 @@ class LifecycleOnlyInstrumentationTest {
                             methodDescriptor: String,
                             isInterface: Boolean,
                         ) {
-                            if (owner == "io/jankhunter/runtime/JankHunterHooks") {
+                            if (owner == targetOwner) {
                                 calls += Call(methodName, methodDescriptor)
                             }
                         }

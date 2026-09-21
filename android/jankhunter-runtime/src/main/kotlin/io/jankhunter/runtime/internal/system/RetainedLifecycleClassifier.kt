@@ -5,128 +5,94 @@ import android.app.Dialog
 import android.app.Service
 import android.view.View
 import io.jankhunter.runtime.BoundedWeakIdentityCache
+import io.jankhunter.runtime.JankHunterBindingAccessor
+import io.jankhunter.runtime.JankHunterLifecycleAccessorV1
+import io.jankhunter.runtime.JankHunterLifecycleTargetSinkV1
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.util.Collections
-
-internal data class RetainedLifecycleTarget(
-    val instance: Any,
-    val description: String,
-    val ownerHint: String,
-)
 
 internal object RetainedLifecycleClassifier {
     private val classMetadata = BoundedWeakIdentityCache<Class<*>, LifecycleClassMetadata>(CLASS_CACHE_CAPACITY)
 
-    fun targets(instance: Any?, lifecycleEvent: String?, ownerHint: String?): List<RetainedLifecycleTarget> {
-        if (instance == null) return emptyList()
+    fun visitTargets(instance: Any?, lifecycleEvent: String?, ownerHint: String?, sink: JankHunterLifecycleTargetSinkV1) {
+        if (instance == null) return
+        if (instance is JankHunterLifecycleAccessorV1) {
+            visitTypedTargets(instance, instance.jankHunterLifecycleKindV1(), lifecycleEvent, ownerHint, sink)
+            return
+        }
         val event = normalizeEvent(lifecycleEvent)
         val metadata = metadata(instance.javaClass)
-        val className = metadata.className
-        val explicitOwner = ownerHint?.takeIf { it.isNotBlank() }
-        return when {
-            event == "onDestroyView" && metadata.fragmentLike -> {
-                fragmentViewTargets(instance, metadata, explicitOwner)
-            }
-            event == "onDestroy" && instance is Activity && !isChangingConfigurations(instance) -> {
-                activityDestroyTargets(instance, className, explicitOwner)
-            }
-            event == "onDestroy" && metadata.fragmentLike -> single(instance, className, explicitOwner, "fragment", event)
-            event == "onCleared" && metadata.viewModelLike -> single(instance, className, explicitOwner, "viewmodel", event)
-            event == "onDestroy" && instance is Service -> single(instance, className, explicitOwner, "service", event)
-            event == "onDestroy" && instance is Dialog -> dialogTargets(instance, className, explicitOwner, event)
-            else -> emptyList()
-        }
-    }
-
-    private fun isChangingConfigurations(activity: Activity): Boolean {
-        return runCatching { activity.isChangingConfigurations }.getOrDefault(false)
-    }
-
-    private fun single(
-        instance: Any,
-        className: String,
-        ownerHint: String?,
-        kind: String,
-        event: String,
-    ): List<RetainedLifecycleTarget> {
-        return listOf(target(instance, className, ownerHint, kind, event, className))
-    }
-
-    private fun activityDestroyTargets(activity: Activity, className: String, ownerHint: String?): List<RetainedLifecycleTarget> {
-        val out = mutableListOf(target(activity, className, ownerHint, "activity", "onDestroy", className))
-        decorView(activity)?.let { view ->
-            out += target(view, view.javaClass.name, ownerHint, "activity_decor_view", "onDestroy", "$className.decorView")
-        }
-        return out
-    }
-
-    private fun dialogTargets(dialog: Dialog, className: String, ownerHint: String?, event: String): List<RetainedLifecycleTarget> {
-        val out = mutableListOf(target(dialog, className, ownerHint, "dialog", event, className))
-        decorView(dialog)?.let { view ->
-            out += target(view, view.javaClass.name, ownerHint, "dialog_decor_view", event, "$className.decorView")
-        }
-        return out
-    }
-
-    private fun fragmentViewTargets(
-        fragment: Any,
-        metadata: LifecycleClassMetadata,
-        ownerHint: String?,
-    ): List<RetainedLifecycleTarget> {
-        val fragmentClassName = metadata.className
-        val out = ArrayList<RetainedLifecycleTarget>()
-        val seen = Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
-        currentFragmentView(fragment, metadata.viewGetter)?.let { view ->
-            if (seen.add(view)) {
-                out += target(
-                    view,
-                    view.javaClass.name,
-                    ownerHint,
-                    "fragment_view",
-                    "onDestroyView",
-                    "$fragmentClassName.view",
-                )
+        val owner = ownerHint?.takeIf { it.isNotBlank() }
+        when {
+            event == "onDestroyView" && metadata.fragmentLike -> fragmentViewTargets(instance, metadata, owner, sink)
+            event == "onDestroy" && instance is Activity && !isChangingConfigurations(instance) ->
+                activityDestroyTargets(instance, owner, sink)
+            event == "onDestroy" && metadata.fragmentLike -> emit(instance, owner, event, sink = sink)
+            event == "onCleared" && metadata.viewModelLike -> emit(instance, owner, event, sink = sink)
+            event == "onDestroy" && instance is Service -> emit(instance, owner, event, sink = sink)
+            event == "onDestroy" && instance is Dialog -> {
+                emit(instance, owner, event, sink = sink)
+                decorView(instance)?.let { emit(it, owner, event, "${metadata.className}.decorView", sink) }
             }
         }
+    }
+
+    fun visitTypedTargets(instance: Any?, targetKind: Int, lifecycleEvent: String?, ownerHint: String?, sink: JankHunterLifecycleTargetSinkV1) {
+        if (instance == null) return
+        val event = normalizeEvent(lifecycleEvent)
+        val owner = ownerHint?.takeIf { it.isNotBlank() }
+        val kind = (instance as? JankHunterLifecycleAccessorV1)?.jankHunterLifecycleKindV1() ?: targetKind
+        when {
+            kind == 1 && event == "onDestroy" && instance is Activity && !isChangingConfigurations(instance) ->
+                activityDestroyTargets(instance, owner, sink)
+            kind == 2 && event == "onDestroy" -> emit(instance, owner, event, sink = sink)
+            kind == 2 && event == "onDestroyView" && instance is JankHunterLifecycleAccessorV1 -> accessorTargets(instance, owner, sink)
+            kind == 2 && event == "onDestroyView" -> fragmentViewTargets(instance, metadata(instance.javaClass), owner, sink)
+            kind == 3 && event == "onCleared" -> emit(instance, owner, event, sink = sink)
+            kind == 4 && event == "onDestroy" && instance is Service -> emit(instance, owner, event, sink = sink)
+        }
+    }
+
+    private fun accessorTargets(instance: JankHunterLifecycleAccessorV1, owner: String?, destination: JankHunterLifecycleTargetSinkV1) {
+        // Deduplication and admission belong to the bounded weak watcher, not a strong temporary set.
+        val sink = JankHunterLifecycleTargetSinkV1 { value, hint ->
+            if (value != null && value !== instance) emit(value, hint, "onDestroyView", sink = destination)
+        }
+        instance.jankHunterVisitLifecycleTargetsV1(sink, owner)
+        RuntimeHookGuard.run { (instance as? JankHunterBindingAccessor)?.visitJankHunterBindings(sink, owner) }
+    }
+
+    private fun isChangingConfigurations(activity: Activity): Boolean = runCatching { activity.isChangingConfigurations }.getOrDefault(false)
+
+    private fun activityDestroyTargets(activity: Activity, owner: String?, sink: JankHunterLifecycleTargetSinkV1) {
+        emit(activity, owner, "onDestroy", sink = sink)
+        decorView(activity)?.let { emit(it, owner, "onDestroy", "${activity.javaClass.name}.decorView", sink) }
+    }
+
+    private fun fragmentViewTargets(fragment: Any, metadata: LifecycleClassMetadata, owner: String?, sink: JankHunterLifecycleTargetSinkV1) {
+        val name = metadata.className
+        currentFragmentView(fragment, metadata.viewGetter)?.let { emit(it, owner, "onDestroyView", "$name.view", sink) }
         for (field in metadata.candidateFields) {
-            val value = runCatching {
-                field.isAccessible = true
-                field.get(fragment)
-            }.getOrNull() ?: continue
-            if (value === fragment || !seen.add(value)) continue
-            val kind = when {
-                value is View -> "fragment_view"
-                isBindingLike(value) -> "fragment_binding"
-                else -> continue
+            var value = runCatching { field.isAccessible = true; field.get(fragment) }.getOrNull() ?: continue
+            if (value is Lazy<*>) {
+                if (!value.isInitialized()) continue
+                value = value.value ?: continue
             }
-            out += target(
-                value,
-                value.javaClass.name,
-                ownerHint,
-                kind,
-                "onDestroyView",
-                "$fragmentClassName.${field.name}",
-            )
+            if (value === fragment) continue
+            val binding = metadata.bindingRootGetter?.declaringClass?.isInstance(value) == true
+            if (value !is View && !binding) continue
+            emit(value, owner, "onDestroyView", "$name.${field.name}", sink)
+            if (binding) {
+                val root = runCatching { metadata.bindingRootGetter.invoke(value) as? View }.getOrNull()
+                if (root != null) emit(root, owner, "onDestroyView", "$name.${field.name}.root", sink)
+            }
         }
-        return out
     }
 
-    private fun target(
-        instance: Any,
-        description: String,
-        ownerHint: String?,
-        kind: String,
-        event: String,
-        source: String,
-    ): RetainedLifecycleTarget {
-        val cleanSource = source.takeIf { it.isNotBlank() } ?: description
-        return RetainedLifecycleTarget(
-            instance = instance,
-            description = description,
-            ownerHint = ownerHint ?: "lifecycle.$event.$cleanSource",
-        )
+    private fun emit(instance: Any, owner: String?, event: String, source: String = instance.javaClass.name, sink: JankHunterLifecycleTargetSinkV1) {
+        sink.accept(instance, owner ?: "lifecycle.$event.${source.takeIf { it.isNotBlank() } ?: instance.javaClass.name}")
     }
 
     private fun currentFragmentView(fragment: Any, getter: Method?): View? {
@@ -135,23 +101,13 @@ internal object RetainedLifecycleClassifier {
         }.getOrNull()
     }
 
-    private fun lifecycleCandidateFields(type: Class<*>): Array<Field> {
+    private fun lifecycleCandidateFields(type: Class<*>, frameworkRoot: Class<*>): Array<Field> {
         val out = ArrayList<Field>()
         var current: Class<*>? = type
-        while (current != null && !current.name.startsWith("android.") && current.name != "java.lang.Object") {
+        while (current != null && current !== frameworkRoot && current !== Any::class.java) {
             for (field in current.declaredFields) {
                 if (Modifier.isStatic(field.modifiers)) continue
-                val name = field.name.lowercase()
-                val fieldType = field.type.name.lowercase()
-                if (
-                    "binding" in name ||
-                    name == "itemview" ||
-                    name == "view" ||
-                    name.endsWith("view") ||
-                    "binding" in fieldType ||
-                    field.type == View::class.java ||
-                    View::class.java.isAssignableFrom(field.type)
-                ) {
+                if (!field.type.isPrimitive && !field.type.isArray) {
                     out += field
                 }
             }
@@ -168,40 +124,38 @@ internal object RetainedLifecycleClassifier {
         return runCatching { dialog.window?.decorView }.getOrNull()
     }
 
-    private fun isBindingLike(instance: Any): Boolean {
-        val name = instance.javaClass.name
-        return name.endsWith("Binding") || name.contains(".databinding.") || name.contains("ViewBinding")
-    }
-
     private fun metadata(type: Class<*>): LifecycleClassMetadata {
         return classMetadata.getOrPut(type) {
-            var fragmentLike = type.name.contains("Fragment")
-            var viewModelLike = type.name.contains("ViewModel")
-            var current: Class<*>? = type
-            while (current != null) {
-                when (current.name) {
-                    "android.app.Fragment",
-                    "androidx.fragment.app.Fragment",
-                    "android.support.v4.app.Fragment",
-                    -> fragmentLike = true
-                    "androidx.lifecycle.ViewModel",
-                    "android.arch.lifecycle.ViewModel",
-                    -> viewModelLike = true
-                }
-                current = current.superclass
-            }
+            // Consumer rules preserve these optional framework types and reflected methods.
+            // Application fields remain best-effort on this partial legacy path.
+            val fragmentType = listOfNotNull(
+                optionalClass { Class.forName("android.app.Fragment", false, type.classLoader) },
+                optionalClass { Class.forName("androidx.fragment.app.Fragment", false, type.classLoader) },
+                optionalClass { Class.forName("android.support.v4.app.Fragment", false, type.classLoader) },
+            ).firstOrNull { it.isAssignableFrom(type) }
+            val viewModelLike = optionalClass {
+                Class.forName("androidx.lifecycle.ViewModel", false, type.classLoader)
+            }?.isAssignableFrom(type) == true || optionalClass {
+                Class.forName("android.arch.lifecycle.ViewModel", false, type.classLoader)
+            }?.isAssignableFrom(type) == true
+            val bindingType = optionalClass { Class.forName("androidx.viewbinding.ViewBinding", false, type.classLoader) }
             LifecycleClassMetadata(
                 className = type.name,
-                fragmentLike = fragmentLike,
+                fragmentLike = fragmentType != null,
                 viewModelLike = viewModelLike,
-                viewGetter = if (fragmentLike) {
-                    type.methods.firstOrNull { it.name == "getView" && it.parameterTypes.isEmpty() }
-                } else {
-                    null
-                },
-                candidateFields = if (fragmentLike) lifecycleCandidateFields(type) else emptyArray(),
+                viewGetter = runCatching { fragmentType?.getMethod("getView") }.getOrNull(),
+                bindingRootGetter = runCatching { bindingType?.getMethod("getRoot") }.getOrNull(),
+                candidateFields = if (fragmentType != null) lifecycleCandidateFields(type, fragmentType) else emptyArray(),
             )
         }
+    }
+
+    private inline fun optionalClass(resolve: () -> Class<*>): Class<*>? = try {
+        resolve()
+    } catch (_: ClassNotFoundException) {
+        null
+    } catch (_: LinkageError) {
+        null
     }
 
     private fun normalizeEvent(value: String?): String {
@@ -213,6 +167,7 @@ internal object RetainedLifecycleClassifier {
         val fragmentLike: Boolean,
         val viewModelLike: Boolean,
         val viewGetter: Method?,
+        val bindingRootGetter: Method?,
         val candidateFields: Array<Field>,
     )
 

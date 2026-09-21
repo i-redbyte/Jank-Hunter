@@ -41,7 +41,7 @@
     <div class="panel-head">
       <div>
         <h2>Сводка ASM</h2>
-        <div class="panel-kicker">Здесь видно, какие ASM-хуки добавлены в байткод и какие аннотации передают контекст в отчёт. Этот раздел проверяет настройку сборки, а не скорость приложения.</div>
+        <div class="panel-kicker">Здесь видно, какие ASM-хуки добавлены в байткод и какие аннотации передают контекст в отчёт. Счётчики методов, фильтров и аннотаций относятся к основному проходу; lifecycle-проход показан отдельно в деталях класса. Этот раздел проверяет настройку сборки, а не скорость приложения.</div>
       </div>
       <span class="pill">instrumentation-diagnostics.jsonl</span>
     </div>
@@ -125,7 +125,15 @@
             <tr><th>{{tip "Класс" "Класс, который проверяли правила ASM."}}</th><th>{{tip "Методы" "Сколько методов класса проверено при сборке."}}</th><th>{{tip "Фильтр методов" "Сколько методов прошли фильтр при сборке и сколько были исключены. Причины исключения показаны под счётчиками."}}</th><th>{{tip "ASM-хуки" "Сколько мест сбора данных добавлено в классе."}}</th><th>{{tip "Аннотации" "Сколько методов получили распознанный контекст Jank Hunter."}}</th><th>{{tip "Игнорировано" "Методы, исключённые через @JankHunterIgnore или правило класса."}}</th><th>{{tip "Пропущено" "Методы, которые нельзя или не нужно безопасно менять. Причина указана в строке."}}</th><th>{{tip "Основные ASM-хуки" "Самые частые виды ASM-хуков в классе. Количество относится к байткоду сборки."}}</th></tr>
             {{range .Diagnostics.Classes}}
             <tr>
-              <td><code>{{.ClassName}}</code></td>
+              <td><code>{{.ClassName}}</code>{{if .Passes}}<details><summary>Проходы ASM</summary>{{range .Passes}}
+                <div><strong>{{.Pass}}</strong> · методы: {{.Methods}} · хуки: {{.HookCount}} · аннотации: {{.AnnotatedMethods}} · игнорировано: {{.IgnoredMethods}}</div>
+                <div>Фильтр: включено {{.MethodFilterIncluded}}, исключено {{.MethodFilterExcluded}}</div>
+                {{range .MethodFilterReasons}}<div><code>{{.Reason}}</code>: {{.Count}}</div>{{end}}
+                {{range .SkippedMethods}}<div>Пропущено {{.Reason}}: {{.Count}}</div>{{end}}
+                {{range .Annotations}}<div>Контекст: {{.Owner}} {{.Screen}} {{.Operation}} {{.OperationKind}} · бюджет {{.OperationBudgetMS}} ms · {{.Count}}</div>{{end}}
+                {{range .Hooks}}<div><code>{{.Intent}}</code> · <code>{{.Method}}</code> · {{.Count}}</div>{{end}}
+                {{range .Decisions}}<div>{{.Kind}} · {{.Module}} · {{.Family}} · {{.Reason}} · {{.Method}} · {{.Detail}} · {{.Count}}</div>{{end}}
+              {{end}}</details>{{end}}</td>
               <td>{{.Methods}}</td>
               <td><div>прошли: {{.MethodFilterIncluded}}</div><div>исключены: {{.MethodFilterExcluded}}</div>{{range .MethodFilterReasons}}<div class="muted"><code>{{.Reason}}</code>: {{.Count}}</div>{{end}}</td>
               <td>{{.HookCount}}</td>

@@ -140,7 +140,7 @@ internal class DictionaryIds(
         const val DEFAULT_MAX_REGULAR_ENTRIES = 8192
         const val DEFAULT_MAX_VALUE_BYTES = 1024
         const val OVERFLOW_VALUE = "__jh_dictionary_overflow__"
-        private const val FAST_KIND_COUNT = 32
+        private const val FAST_KIND_COUNT = 64
         private const val UTF8_WIDTH_CHAR_SHIFT = 3
         private const val UTF8_WIDTH_BYTE_MASK = (1 shl UTF8_WIDTH_CHAR_SHIFT) - 1
         private const val UNKNOWN_VALUE = "unknown"

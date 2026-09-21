@@ -90,11 +90,11 @@ internal class SessionBinaryRecordEncoder(
 
     fun stall(
         screen: String?, owner: String?, stackHint: String?, durationMs: Long, foreground: Boolean,
-        incidentId: Long, state: Long,
+        incidentId: Long, state: Long, stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
         validateStallLifecycle(incidentId, state)
         val payload = sink.payload()
-            .symbolRef(sink.symbolId(BinaryLogWriter.DICT_STACK, stackHint))
+            .symbolRef(sink.symbolId(BinaryLogWriter.DICT_STACK, stackHint, stackOrigin))
             .uvarint(nonNegative(durationMs))
             .uvarint(nonNegative(incidentId))
             .uvarint(state)
@@ -123,9 +123,10 @@ internal class SessionBinaryRecordEncoder(
         count: Long,
         foreground: Boolean,
         evidence: Long,
+        classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
         val payload = sink.payload()
-            .symbolRef(sink.symbolId(BinaryLogWriter.DICT_CLASS, className))
+            .symbolRef(sink.symbolId(BinaryLogWriter.DICT_CLASS, className, classOrigin))
             .symbolRef(sink.symbolId(BinaryLogWriter.DICT_OWNER, holder))
             .uvarint(nonNegative(ageMs))
             .uvarint(nonNegative(count))

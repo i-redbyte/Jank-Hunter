@@ -5,9 +5,11 @@ import kotlin.metadata.ClassKind
 import kotlin.metadata.KmClass
 import kotlin.metadata.KmDeclarationContainer
 import kotlin.metadata.MemberKind
+import kotlin.metadata.isDelegated
 import kotlin.metadata.isNotDefault
 import kotlin.metadata.kind
 import kotlin.metadata.jvm.KotlinClassMetadata
+import kotlin.metadata.jvm.fieldSignature
 import kotlin.metadata.jvm.getterSignature
 import kotlin.metadata.jvm.setterSignature
 import kotlin.metadata.jvm.signature
@@ -21,6 +23,7 @@ internal class KotlinGeneratedMethodIndex private constructor(
     private val declaredMethods: Set<String>,
     private val metadataKnown: Boolean,
     private val syntheticClass: Boolean,
+    val delegatedProperties: Map<String, String?> = emptyMap(),
 ) {
     fun origin(methodName: String, descriptor: String): KotlinMethodOrigin {
         if (!metadataKnown) return KotlinMethodOrigin.UNKNOWN
@@ -76,6 +79,7 @@ internal class KotlinGeneratedMethodIndex private constructor(
         private fun fromContainer(container: KmDeclarationContainer): KotlinGeneratedMethodIndex {
             val methods = HashMap<String, String>()
             val declared = HashSet<String>()
+            val delegates = LinkedHashMap<String, String?>()
             container.functions.forEach { function ->
                 function.signature?.let { signature ->
                     val key = methodKey(signature.name, signature.descriptor)
@@ -87,6 +91,7 @@ internal class KotlinGeneratedMethodIndex private constructor(
                 }
             }
             container.properties.forEach { property ->
+                if (property.isDelegated) delegates[property.name] = property.fieldSignature?.descriptor
                 val generatedProperty = property.kind != MemberKind.DECLARATION
                 if (generatedProperty || !property.getter.isNotDefault) {
                     property.getterSignature?.let { signature ->
@@ -115,6 +120,7 @@ internal class KotlinGeneratedMethodIndex private constructor(
                 }
             }
             return KotlinGeneratedMethodIndex(
+                delegatedProperties = delegates,
                 generatedMethods = methods,
                 declaredMethods = declared,
                 metadataKnown = true,
@@ -135,6 +141,7 @@ internal class KotlinGeneratedMethodIndex private constructor(
             }
             if (declaredConstructors.isEmpty() && generatedMethods === base.generatedMethods) return base
             return KotlinGeneratedMethodIndex(
+                delegatedProperties = base.delegatedProperties,
                 generatedMethods = generatedMethods,
                 declaredMethods = base.declaredMethods + declaredConstructors,
                 metadataKnown = base.metadataKnown,

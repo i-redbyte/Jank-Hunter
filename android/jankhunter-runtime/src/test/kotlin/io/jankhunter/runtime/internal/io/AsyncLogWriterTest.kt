@@ -2397,6 +2397,8 @@ class AsyncLogWriterTest {
     fun exactAdmissionPreservesMillionEventConcurrentBurstAcrossRotations() {
         val root = Files.createTempDirectory("jankhunter-exact-million-burst").toFile()
         val physicalLimit = 512L * 1024L
+        val namespace = ByteArray(16) { 0x12 }
+        val identity = RuntimeBuildIdentity.Mapped("ab".repeat(32), "12".repeat(16))
         val producerCount = 16
         val eventsPerProducer = 62_500
         val expectedEvents = producerCount.toLong() * eventsPerProducer
@@ -2406,12 +2408,14 @@ class AsyncLogWriterTest {
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
+                    .symbolNamespace(namespace)
                     .exactEventCollectionEnabled(true)
                     .maxQueueSize(64)
                     .backgroundAdmissionWaitMs(30_000L)
                     .flushIntervalMs(60_000L)
                     .build(),
                 "main",
+                buildIdentity = identity,
             )
             val start = CountDownLatch(1)
             val done = CountDownLatch(producerCount)
@@ -2439,6 +2443,12 @@ class AsyncLogWriterTest {
                 val files = sortedSessionLogFiles(storage.directory)
                 assertTrue("million-event burst did not exercise rotation", files.size > 1)
                 assertLosslessSegmentChain(files, physicalLimit)
+                files.forEach { file ->
+                    val header = fileSegmentHeader(file)
+                    assertEquals(2L, header.buildIdentityState)
+                    assertArrayEquals(ByteArray(32) { 0xab.toByte() }, header.mappingDigest)
+                    assertEquals(0L, header.buildIdentityReason)
+                }
                 assertEquals(
                     expectedEvents,
                     files.sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size.toLong() },
@@ -2550,7 +2560,7 @@ class AsyncLogWriterTest {
             }
 
             val dictionaryKinds = recordPayloads(file, Jhlog.TYPE_DICTIONARY).mapNotNull { payload ->
-                readUvarint(payload.bytes, payload.offset)?.value
+                readUvarint(payload.bytes, payload.offset)?.value?.ushr(2)
             }
             assertFalse("runtime caller/callee created DICT_OWNER", dictionaryKinds.contains(1L))
             assertTrue("runtime caller/callee did not create embedded stable definitions", dictionaryKinds.contains(12L))
@@ -3088,14 +3098,14 @@ class AsyncLogWriterTest {
             var cursor = payload.offset
             val kind = readUvarint(payload.bytes, cursor) ?: return@forEach
             cursor = kind.nextOffset
-            if (kind.value == 12L) {
+            if (kind.value ushr 2 == 12L) {
                 cursor += Long.SIZE_BYTES
             } else {
                 cursor = readUvarint(payload.bytes, cursor)?.nextOffset ?: return@forEach
             }
             val layout = readUvarint(payload.bytes, cursor) ?: return@forEach
             cursor = layout.nextOffset
-            val kindIndex = kind.value.toInt()
+            val kindIndex = (kind.value ushr 2).toInt()
             if (kindIndex !in previous.indices) return@forEach
             val value = if (layout.value and 1L != 0L) {
                 val decoded = ByteArrayOutputStream()
@@ -3257,7 +3267,14 @@ class AsyncLogWriterTest {
         require(expectedFingerprintEnd <= headerEnd) { "truncated expected process fingerprint in ${file.name}" }
         val expectedFingerprint = bytes.copyOfRange(cursor, expectedFingerprintEnd)
         cursor = expectedFingerprintEnd
-        val rosterComplete = requireNotNull(readUvarint(bytes, cursor)).value
+        val rosterComplete = requireNotNull(readUvarint(bytes, cursor)).also { cursor = it.nextOffset }.value
+        val identityState = requireNotNull(readUvarint(bytes, cursor)).also { cursor = it.nextOffset }.value
+        val mappingLength = requireNotNull(readUvarint(bytes, cursor)).also { cursor = it.nextOffset }.value.toInt()
+        require(mappingLength in 0..32 && cursor + mappingLength <= headerEnd)
+        val mappingDigest = bytes.copyOfRange(cursor, cursor + mappingLength)
+        cursor += mappingLength
+        val identityReason = requireNotNull(readUvarint(bytes, cursor)).also { cursor = it.nextOffset }.value
+        require(cursor == headerEnd) { "Unexpected header bytes in ${file.name}" }
         return SegmentHeaderWire(
             runId,
             processInstanceId,
@@ -3268,6 +3285,9 @@ class AsyncLogWriterTest {
             expectedCount.value,
             expectedFingerprint,
             rosterComplete == 1L,
+            identityState,
+            mappingDigest,
+            identityReason,
         )
     }
 
@@ -3573,6 +3593,9 @@ class AsyncLogWriterTest {
         val expectedProcessCount: Long,
         val expectedProcessFingerprint: ByteArray,
         val rosterDeclarationComplete: Boolean,
+        val buildIdentityState: Long,
+        val mappingDigest: ByteArray,
+        val buildIdentityReason: Long,
     )
 
     private fun processFingerprint(processes: Set<String>): ByteArray {

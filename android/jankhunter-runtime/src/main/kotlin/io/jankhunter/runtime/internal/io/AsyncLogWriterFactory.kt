@@ -19,6 +19,7 @@ internal class AsyncLogWriterFactory(
         expectedProcesses: Set<String> = setOf(processName),
         rosterDeclarationComplete: Boolean = true,
         onTerminalStop: AsyncWriterTerminalObserver = AsyncWriterTerminalObserver.NONE,
+        buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
     ): AsyncLogWriter {
         val sessionStartMs = currentTimeMs.getAsLong().coerceAtLeast(0L)
         val localDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(sessionStartMs))
@@ -38,6 +39,7 @@ internal class AsyncLogWriterFactory(
                 prepareSession(directory, config, processName, expectedProcesses, rosterDeclarationComplete)
             },
             onTerminalStop = onTerminalStop,
+            buildIdentity = buildIdentity,
         )
     }
 

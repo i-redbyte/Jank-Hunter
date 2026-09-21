@@ -32,7 +32,7 @@
       <div class="hero-meta">
         <div class="chip">Проблемы <strong>{{len (problemCards .Summary)}}</strong></div>
         <div class="chip">Критичный / высокий приоритет <strong>{{.Summary.ProblemSummary.Critical}} / {{.Summary.ProblemSummary.High}}</strong></div>
-        <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
+        {{if .Summary.MappingIdentity.Applied}}<div class="chip">Mapping <strong>{{if eq .Summary.MappingIdentity.Status "verified"}}подтверждён{{else}}непроверен{{end}}</strong></div>{{end}}<div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
       {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">Подробный анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Связи с кодом</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">Технические данные ASM</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">Каталог DI</a>{{end}}</div>{{end}}
       </div>
@@ -880,7 +880,7 @@
         <table>
           <tr><th>{{tip "Источник / класс" "Owner из аннотации, ASM-данных, withOwner или ownerHint."}}</th><th>{{tip "Тип" "Вид события этого owner: пауза, HTTP, логирование и другие."}}</th><th>{{tip "Количество" "Число событий этого типа у источника."}}</th><th>{{tip "Итого" "Сумма длительностей событий. Пересекающиеся работы могут учитываться одновременно, поэтому это не время работы CPU для класса."}}</th><th>{{tip "Максимум" "Самая длинная длительность одного события."}}</th><th>{{tip "Подсказка стека" "Первый доступный кадр кода приложения. Это место для проверки, а не полный stack trace."}}</th></tr>
           {{range .Summary.Owners}}
-          <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .StackHint "stack"}}</code></td></tr>
+          <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td>{{with .StackRetrace}}<div>{{.StatusLabel}}</div>{{end}}<pre style="white-space: pre-wrap; margin: 0"><code>{{if eq .StackHint "!"}}Стек обрезан лимитом записи; кадры недоступны.{{else}}{{contextHint .StackHint "stack"}}{{end}}</code></pre>{{with .StackRetrace}}<details><summary>Исходная запись</summary><pre>{{.Raw}}</pre></details>{{end}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Связь событий с кодом недоступна.</td></tr>{{end}}
         </table>
       </div>

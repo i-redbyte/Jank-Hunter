@@ -76,7 +76,7 @@ func TestColumnarRuntimeEdgeTupleEncodingDoesNotAllocate(t *testing.T) {
 	}
 	var destination bytes.Buffer
 	destination.Grow(4 * 1024)
-	encoder := eventPayloadEncoder{writer: &destination, stableAliases: map[uint64]uint64{11: 1, 17: 2}}
+	encoder := eventPayloadEncoder{writer: &destination, stableAliases: stableAliasTable{{ID: 11}: 1, {ID: 17}: 2}}
 	event := Event{Type: EventRuntimeCall, RuntimeCall: &RuntimeCallEvent{}, runtimeCalls: rows}
 	if err := encoder.encodeRuntimeCall(event); err != nil {
 		t.Fatal(err)

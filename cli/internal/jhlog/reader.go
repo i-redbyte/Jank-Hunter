@@ -119,9 +119,10 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 		legacyGaugeSum:            header.RequiredFeatures&FeatureGaugeWideSum == 0,
 		legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
 		legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+		symbolOrigins:             header.RequiredFeatures&FeatureSymbolOrigin != 0,
 		legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0,
 		stableAliases:             map[uint64]uint64{},
-		stableIDs:                 map[uint64]uint64{},
+		stableIDs:                 stableAliasTable{},
 		databaseDescriptors:       map[uint64]databaseDescriptorKey{},
 		runtimeEdges:              make([]runtimeEdgeKey, 0, 256),
 		qualityCounters:           map[uint64]uint64{},
@@ -320,13 +321,15 @@ type recordDecodeState struct {
 }
 
 type segmentDecodeState struct {
+	symbolOrigins             bool
+	origins                   symbolOriginTable
 	legacyStall               bool
 	legacyGaugeSum            bool
 	legacyHTTPFirstByte       bool
 	legacyUIDTraffic          bool
 	legacyHTTPCollectionState bool
 	stableAliases             map[uint64]uint64
-	stableIDs                 map[uint64]uint64
+	stableIDs                 stableAliasTable
 	databaseDescriptors       map[uint64]databaseDescriptorKey
 	runtimeEdges              []runtimeEdgeKey
 	qualitySequence           uint64
@@ -641,7 +644,7 @@ func decodeRecord(
 			event.Attribution = state.lastContext
 			event.Attribution.Present = true
 		} else {
-			context, err := readAttribution(&reader, symbolNamespace, segmentState.stableAliases)
+			context, err := readAttribution(&reader, symbolNamespace, segmentState.stableAliases, &segmentState.origins)
 			if err != nil {
 				return Event{}, state, err
 			}
@@ -691,7 +694,7 @@ func decodeSegmentState(optional []*segmentDecodeState) *segmentDecodeState {
 	}
 	return &segmentDecodeState{
 		stableAliases:       map[uint64]uint64{},
-		stableIDs:           map[uint64]uint64{},
+		stableIDs:           stableAliasTable{},
 		databaseDescriptors: map[uint64]databaseDescriptorKey{},
 		runtimeEdges:        make([]runtimeEdgeKey, 0, 256),
 		qualityCounters:     map[uint64]uint64{},
@@ -790,6 +793,7 @@ func readAttribution(
 	reader *recordReader,
 	symbolNamespace string,
 	stableAliases map[uint64]uint64,
+	origins ...*symbolOriginTable,
 ) (AttributionContext, error) {
 	mask, err := reader.readUvarint()
 	if err != nil {
@@ -810,7 +814,7 @@ func readAttribution(
 		if mask&item.bit == 0 {
 			continue
 		}
-		ref, err := readSymbolRef(reader, symbolNamespace, stableAliases)
+		ref, err := readSymbolRef(reader, symbolNamespace, stableAliases, origins...)
 		if err != nil {
 			return AttributionContext{}, fmt.Errorf("context symbol: %w", err)
 		}
@@ -833,6 +837,7 @@ func readSymbolRef(
 	reader *recordReader,
 	symbolNamespace string,
 	stableAliases map[uint64]uint64,
+	origins ...*symbolOriginTable,
 ) (SymbolRef, error) {
 	token, err := reader.readUvarint()
 	if err != nil {
@@ -848,14 +853,22 @@ func readSymbolRef(
 		}
 		return SymbolRef{ID: binary.LittleEndian.Uint64(raw[:]), Namespace: symbolNamespace, Stable: true}, nil
 	case token&1 == 0:
-		return LocalSymbol(token >> 1), nil
+		ref := LocalSymbol(token >> 1)
+		if len(origins) > 0 && origins[0] != nil {
+			ref.Origin = origins[0].local[ref.ID]
+		}
+		return ref, nil
 	default:
 		alias := token >> 1
 		stableID, ok := stableAliases[alias]
 		if !ok {
 			return SymbolRef{}, fmt.Errorf("undefined stable symbol alias %d", alias)
 		}
-		return SymbolRef{ID: stableID, Namespace: symbolNamespace, Stable: true}, nil
+		ref := SymbolRef{ID: stableID, Namespace: symbolNamespace, Stable: true}
+		if len(origins) > 0 && origins[0] != nil {
+			ref.Origin = origins[0].stableAliases[alias]
+		}
+		return ref, nil
 	}
 }
 

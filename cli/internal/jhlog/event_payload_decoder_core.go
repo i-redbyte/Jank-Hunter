@@ -21,6 +21,11 @@ func decodeCorePayload(
 		if err != nil {
 			return err
 		}
+		origin := SymbolOriginUnknown
+		if segmentState.symbolOrigins {
+			origin = SymbolOrigin(kindValue & 3)
+			kindValue >>= 2
+		}
 		kind := DictKind(kindValue)
 		if kind > DictAttributeValue {
 			return fmt.Errorf("unsupported dictionary kind %d", kind)
@@ -34,7 +39,7 @@ func decodeCorePayload(
 				return fmt.Errorf("stable dictionary ID: %w", err)
 			}
 			id = binary.LittleEndian.Uint64(rawID[:])
-			if existing, ok := segmentState.stableIDs[id]; ok {
+			if existing, ok := segmentState.stableIDs[stableSymbolKey{id, origin}]; ok {
 				return fmt.Errorf("stable symbol %d is already defined as alias %d", id, existing)
 			}
 		} else {
@@ -82,11 +87,12 @@ func decodeCorePayload(
 			}
 		}
 		segmentState.dictionaryPrevious[kind] = data
-		entry := &DictionaryEntry{Kind: kind, ID: id, Alias: alias, Data: data}
+		segmentState.origins.define(id, alias, origin)
+		entry := &DictionaryEntry{Origin: origin, Kind: kind, ID: id, Alias: alias, Data: data}
 		entry.Value = string(data)
 		if kind == DictStableSymbol {
 			segmentState.stableAliases[alias] = id
-			segmentState.stableIDs[id] = alias
+			segmentState.stableIDs[stableSymbolKey{id, origin}] = alias
 		}
 		event.Dictionary = entry
 	case EventSession:

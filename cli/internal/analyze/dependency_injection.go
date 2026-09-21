@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,13 +12,14 @@ import (
 const DependencyInjectionDisclaimer = "Связь DI найдена при сборке. Это не ссылка удержания, не вызов во время работы и не доказательство утечки. Данные DI не влияют на приоритет и тяжесть проблем."
 
 type DependencyInjectionCatalog struct {
-	Available  bool
-	Source     string
-	Variant    string
-	Classes    []DependencyInjectionClass
-	Edges      []DependencyInjectionEdge
-	Frameworks []DependencyInjectionFrameworkSummary
-	Warnings   []string
+	sourceIdentity artifactSourceIdentity
+	Available      bool
+	Source         string
+	Variant        string
+	Classes        []DependencyInjectionClass
+	Edges          []DependencyInjectionEdge
+	Frameworks     []DependencyInjectionFrameworkSummary
+	Warnings       []string
 }
 
 type DependencyInjectionClass struct {
@@ -94,12 +97,14 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
+	digest := sha256.New()
 	input, err := openBoundedTextInput(
 		path,
 		"DI catalog",
 		dependencyInjectionMaxFileBytes,
 		64*1024,
 		dependencyInjectionMaxLineBytes,
+		digest,
 	)
 	if err != nil {
 		return nil, err
@@ -218,6 +223,7 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 			"Koin: каталог покрывает аннотации и связи, созданные KSP; произвольные объявления времени выполнения намеренно не интерпретируются.",
 		)
 	}
+	catalog.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
 	return catalog, nil
 }
 

@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -38,10 +39,30 @@ var runtimeQualityCounterWarnings = []qualityCounterWarning{
 }
 
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
-	collector := newCollector(title, len(paths), options)
 	inputs, err := OrderedSessionInputs(paths)
 	if err != nil {
 		return Summary{}, err
+	}
+	identity, err := ValidateMappingInputs(inputs, options.ObfuscationMap, options.AllowUnverifiedMapping)
+	if err != nil {
+		return Summary{}, err
+	}
+	artifactIdentity, err := options.validateArtifactIdentities(inputs)
+	if err != nil {
+		return Summary{}, err
+	}
+	prepared, err := options.ObfuscationMap.prepareHeapRetrace(context.Background(), options.HeapEvidence)
+	if err != nil {
+		return Summary{}, err
+	}
+	options.ObfuscationMap = prepared
+	collector := newCollector(title, len(paths), options)
+	collector.summary.MappingIdentity = identity
+	if artifactIdentity.Status != "not_requested" {
+		collector.summary.ArtifactIdentity = &artifactIdentity
+	}
+	if identity.Status == MappingUnverified {
+		collector.summary.Warnings = append(collector.summary.Warnings, "Mapping применён по явному разрешению, но его соответствие части журналов не проверено. Восстановленные имена остаются непроверенными.")
 	}
 	collector.prepareAcquisitionGroups(inputs)
 	for index, input := range inputs {
@@ -63,6 +84,12 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		if err != nil {
 			return Summary{}, err
 		}
+		if result.Header.Schema != input.Header.Schema || result.Header.BuildIdentity != input.Header.BuildIdentity || !bytes.Equal(result.Header.SymbolNamespace, input.Header.SymbolNamespace) {
+			return Summary{}, fmt.Errorf("log identity changed while reading %q", input.Path)
+		}
+		if _, err := ValidateMappingInputs([]SessionInput{{Path: input.Path, Header: result.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping); err != nil {
+			return Summary{}, err
+		}
 		if err := validateArtifactNamespace(
 			options.ArtifactSymbolNamespace,
 			result.Header,
@@ -81,6 +108,9 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		return Summary{}, err
 	}
 	if err := collector.validateSegmentIdentityConsistency(); err != nil {
+		return Summary{}, err
+	}
+	if err := collector.retraceStackHints(); err != nil {
 		return Summary{}, err
 	}
 	return collector.finish(), nil
@@ -131,8 +161,8 @@ func sameSession(left, right jhlog.SegmentHeader) bool {
 	return !left.SessionID.IsZero() && left.SessionID == right.SessionID
 }
 
-// ReadArtifactMetadataNamespace validates the compact build identity used to match optional
-// diagnostics and class-graph artifacts to their self-contained logs.
+// ReadArtifactMetadataNamespace validates symbol compatibility, not build identity.
+// Exact build binding additionally requires the post-packaging manifest and mapping digest.
 func ReadArtifactMetadataNamespace(path string) ([]byte, error) {
 	data, err := readBoundedFile(path, "artifact metadata", maxArtifactMetadataBytes)
 	if err != nil {
@@ -603,7 +633,7 @@ type collectorSessionState struct {
 }
 
 type stableSymbolResolver struct {
-	embedded   map[uint64]string
+	embedded   map[embeddedSymbolKey]string
 	unresolved map[string]struct{}
 }
 
@@ -615,8 +645,8 @@ func newCollector(title string, logCount int, options Options) *collector {
 		collectorInputState: collectorInputState{
 			filter:              normalizeFilter(options.Filter),
 			nameMap:             options.ObfuscationMap,
-			classGraph:          DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
-			lambdaCaptures:      DeobfuscateLambdaCaptureCatalog(options.LambdaCaptures, options.ObfuscationMap),
+			classGraph:          options.ClassGraph,
+			lambdaCaptures:      options.LambdaCaptures,
 			diagnostics:         options.InstrumentationDiagnostics,
 			dependencyInjection: options.DependencyInjectionCatalog,
 			heap:                DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
@@ -681,7 +711,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 			currentAttrOwner:   "unknown",
 			currentCohortDirty: true,
 			stableSymbols: stableSymbolResolver{
-				embedded:   map[uint64]string{},
+				embedded:   map[embeddedSymbolKey]string{},
 				unresolved: map[string]struct{}{},
 			},
 		},
@@ -1016,6 +1046,8 @@ func validateChainIdentity(expected, actual jhlog.SegmentHeader, source string) 
 		return fmt.Errorf("session %s changes process_roster_declaration_complete in %q", session, source)
 	case expected.ProcessName != actual.ProcessName:
 		return fmt.Errorf("session %s changes process_name in %q", session, source)
+	case expected.BuildIdentity != actual.BuildIdentity || expected.Schema != actual.Schema:
+		return fmt.Errorf("session %s changes build identity in %q", session, source)
 	case !bytes.Equal(expected.SymbolNamespace, actual.SymbolNamespace):
 		return fmt.Errorf("session %s changes symbol_namespace in %q", session, source)
 	default:
@@ -1052,4 +1084,9 @@ func (c *collector) applyAttribution(dict map[uint64]string, context jhlog.Attri
 	c.currentAttrScreen = attrValue(c.resolveOwnerRef(dict, context.Screen))
 	c.currentAttrOwner = attrValue(c.resolveOwnerRef(dict, context.Owner))
 	c.currentOperationID = context.OperationID
+}
+
+type embeddedSymbolKey struct {
+	ID     uint64
+	Origin jhlog.SymbolOrigin
 }

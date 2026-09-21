@@ -3,6 +3,11 @@ package io.jankhunter.gradle
 import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.ApplicationVariant
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.variant.ScopedArtifacts
+import com.android.build.gradle.internal.publishing.AndroidArtifacts
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -69,6 +74,19 @@ class JankHunterPlugin : Plugin<Project> {
             val sessionLogSizeLimitEnabled = storage is JankHunterStorage.Limited
             val maxSessionLogSizeMiB = (storage as? JankHunterStorage.Limited)?.maxSessionMiB ?: 50
             val symbolNamespace = JankHunterSymbolNamespace.current()
+            val buildIdentity = if (variant is ApplicationVariant) {
+                val task = project.tasks.register(
+                    "generate${variant.name.capitalized()}JankHunterBuildIdentity",
+                    GenerateJankHunterBuildIdentityTask::class.java,
+                ) { task ->
+                    task.minified.set(variant.isMinifyEnabled)
+                    task.symbolNamespace.set(symbolNamespace)
+                    if (variant.isMinifyEnabled) task.mappingFile.set(variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE))
+                    task.assetsDirectory.set(project.layout.buildDirectory.dir("generated/jankhunter/${variant.name}/identity-assets"))
+                }
+                variant.sources.assets?.addGeneratedSourceDirectory(task, GenerateJankHunterBuildIdentityTask::assetsDirectory)
+                task
+            } else null
             val effectiveInstrumentationScope = instrumentationScope(applicationProject)
             val shouldGenerateRuntimeManifest = applicationProject
             if (shouldGenerateRuntimeManifest) {
@@ -247,6 +265,38 @@ class JankHunterPlugin : Plugin<Project> {
                 })
                 it.outputFile.set(dependencyInjectionCatalogOutput)
             }
+            if (variant is ApplicationVariant && buildIdentity != null) {
+                for (kind in listOf("apk", "aab")) {
+                    val manifest = project.tasks.register(
+                        "generate${variant.name.capitalized()}JankHunter${kind.capitalized()}BuildManifest",
+                        GenerateJankHunterBuildManifestTask::class.java,
+                    ) { task ->
+                        task.variantName.set(variant.name)
+                        task.packageKind.set(kind)
+                        task.symbolNamespace.set(symbolNamespace)
+                        task.identityAsset.set(buildIdentity.flatMap { it.assetsDirectory.file(GenerateJankHunterBuildIdentityTask.ASSET_PATH) })
+                        if (variant.isMinifyEnabled) task.mappingFile.set(variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE))
+                        task.artifacts.from(
+                            artifactMetadata.flatMap { it.outputFile },
+                            mergeArtifacts.flatMap { it.classGraphOutputFile },
+                            mergeArtifacts.flatMap { it.lambdaCaptureOutputFile },
+                            mergeArtifacts.flatMap { it.diagnosticsOutputFile },
+                            mergeArtifacts.flatMap { it.androidComponentCatalogOutputFile },
+                            mergeDependencyInjectionCatalog.flatMap { it.outputFile },
+                        )
+                        task.outputFile.set(project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/build-manifest-$kind.json"))
+                    }
+                    // Follow the actual artifact producer, including direct package tasks and
+                    // downstream transforms, without depending on AGP's internal task names.
+                    if (kind == "apk") {
+                        variant.artifacts.use(manifest)
+                            .wiredWith(GenerateJankHunterBuildManifestTask::apkDirectory).toListenTo(SingleArtifact.APK)
+                    } else {
+                        variant.artifacts.use(manifest)
+                            .wiredWith(GenerateJankHunterBuildManifestTask::bundleFile).toListenTo(SingleArtifact.BUNDLE)
+                    }
+                }
+            }
             if (applicationProject) {
                 JankHunterDependencyValidator.validateDeclaredRuntime(
                     project,
@@ -271,13 +321,32 @@ class JankHunterPlugin : Plugin<Project> {
             }
 
             if (instrumentation.okhttp && okHttpHelperAvailable) {
-                variant.instrumentation.transformClassesWith(
-                    OkHttpTransportClassVisitorFactory::class.java,
-                    effectiveInstrumentationScope,
-                ) { params ->
-                    params.excludePackages.set(effectiveExcludePackages)
-                    params.supportClasspath.from(variant.compileClasspath)
+                val capability = project.tasks.register(
+                    "resolve${variant.name.capitalized()}JankHunterTransportCapability",
+                    ResolveJankHunterTransportCapabilityTask::class.java,
+                ) { task ->
+                    task.supportClasspath.from(variant.compileConfiguration.incoming.artifactView {
+                        it.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
+                    }.files)
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/jankhunter/${variant.name}/transport-capability.txt",
+                    ))
                 }
+                val transport = project.tasks.register(
+                    "instrument${variant.name.capitalized()}JankHunterTransport",
+                    InstrumentJankHunterTransportTask::class.java,
+                ) {
+                    it.capabilityFile.set(capability.flatMap { task -> task.outputFile })
+                    it.excludePackages.set(effectiveExcludePackages)
+                }
+                variant.artifacts.forScope(
+                    if (applicationProject) ScopedArtifacts.Scope.ALL else ScopedArtifacts.Scope.PROJECT,
+                ).use(transport).toTransform(
+                    ScopedArtifact.CLASSES,
+                    InstrumentJankHunterTransportTask::inputJars,
+                    InstrumentJankHunterTransportTask::inputDirectories,
+                    InstrumentJankHunterTransportTask::outputFile,
+                )
             }
 
             variant.instrumentation.transformClassesWith(
@@ -323,19 +392,36 @@ class JankHunterPlugin : Plugin<Project> {
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(effectiveExcludePackages)
             }
-            variant.instrumentation.transformClassesWith(
-                JankHunterLifecycleClassVisitorFactory::class.java,
-                effectiveInstrumentationScope,
-            ) { params ->
-                params.enabled.set(instrumentation.lifecycleLeaks)
-                params.instrumentationDiagnosticsDirectory.set(
-                    diagnosticsDirectory.map { directory ->
-                        directory.dir("lifecycle").asFile.absolutePath
-                    },
+            if (instrumentation.lifecycleLeaks) {
+                val lifecycle = project.tasks.register(
+                    "instrument${variant.name.capitalized()}JankHunterLifecycle",
+                    InstrumentJankHunterLifecycleTask::class.java,
+                ) { task ->
+                    task.supportClasspath.from(androidComponents.sdkComponents.bootClasspath)
+                    task.supportClasspath.from(variant.compileConfiguration.incoming.artifactView {
+                        it.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
+                    }.files)
+                    task.includeWholeApplication.set(instrumentation.includeWholeApplication)
+                    task.validateRuntimeAbi.set(applicationProject)
+                    task.includePackages.set(effectiveIncludePackages)
+                    task.excludePackages.set(effectiveExcludePackages)
+                    task.diagnosticsDirectory.set(project.layout.buildDirectory.dir(
+                        "intermediates/jankhunter/${variant.name}/lifecycle-diagnostics",
+                    ))
+                }
+                variant.artifacts.forScope(
+                    if (applicationProject) ScopedArtifacts.Scope.ALL else ScopedArtifacts.Scope.PROJECT,
+                ).use(lifecycle).toTransform(
+                    ScopedArtifact.CLASSES,
+                    InstrumentJankHunterLifecycleTask::inputJars,
+                    InstrumentJankHunterLifecycleTask::inputDirectories,
+                    InstrumentJankHunterLifecycleTask::outputFile,
                 )
-                params.includeWholeApplication.set(instrumentation.includeWholeApplication)
-                params.includePackages.set(effectiveIncludePackages)
-                params.excludePackages.set(effectiveExcludePackages)
+                mergeArtifacts.configure {
+                    it.diagnosticsFiles.from(lifecycle.flatMap { task -> task.diagnosticsDirectory }.map { directory ->
+                        directory.asFileTree.matching { pattern -> pattern.include("**/*.jsonl") }
+                    })
+                }
             }
             variant.instrumentation.setAsmFramesComputationMode(
                 FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,

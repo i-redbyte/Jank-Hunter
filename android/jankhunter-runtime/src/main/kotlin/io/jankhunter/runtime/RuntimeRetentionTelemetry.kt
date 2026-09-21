@@ -2,9 +2,11 @@ package io.jankhunter.runtime
 
 import android.app.Activity
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.RetainedLifecycleClassifier
+import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 
 internal class RuntimeRetentionTelemetry(
     private val state: RuntimeState,
@@ -33,6 +35,7 @@ internal class RuntimeRetentionTelemetry(
             ageMs: Long,
             count: Long,
             evidence: RetentionEvidence,
+            classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
         ) {
             val target = writer?.takeIf { it.isAcceptingEvents() } ?: return
             val captured = context ?: fallbackContext
@@ -40,7 +43,7 @@ internal class RuntimeRetentionTelemetry(
             target.updateProducerContext(captured.screen, retainedHolder, captured.operationId)
             target.retained(
                 captured.screen, retainedHolder, className, retainedHolder, ageMs, count,
-                foreground = state.writer === target && access.isUiVisible(), evidence = evidence,
+                foreground = state.writer === target && access.isUiVisible(), evidence = evidence, classOrigin = classOrigin,
             )
         }
 
@@ -57,23 +60,59 @@ internal class RuntimeRetentionTelemetry(
         val watcher = state.objectRetentionWatcher ?: return
         val retainedBy = firstContextValue(ownerHint, access.currentOwnerOrNull())
         val context = access.captureContext(ownerOverride = retainedBy)
+        watchObject(watcher, instance, description, retainedBy, context)
+    }
+
+    private fun watchObject(
+        watcher: ObjectRetentionWatcher,
+        instance: Any,
+        description: String?,
+        retainedBy: String?,
+        context: JankHunterContext,
+        classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
+    ) {
         recordCounter("jankhunter.object_watcher.watch.count", 1)
         if (retainedBy != null) {
             recordCounter("owner.${metricOwner(retainedBy)}.object_watcher.watch.count", 1)
         }
-        watcher.watch(instance, description, retainedBy, context)
+        watcher.watch(instance, description, retainedBy, context, classOrigin)
     }
 
     fun watchActivity(activity: Activity?, ownerHint: String?) {
-        watchObject(activity, activity?.javaClass?.name, firstContextValue(ownerHint, activity?.javaClass?.name))
+        watchObject(activity, null, firstContextValue(ownerHint, activity?.javaClass?.name))
     }
 
     fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
+        watchLifecycleTargets(instance) { sink ->
+            RetainedLifecycleClassifier.visitTargets(instance, lifecycleEvent, ownerHint, sink)
+        }
+    }
+
+    fun watchLifecycleObject(instance: Any?, targetKind: Int, lifecycleEvent: String?, ownerHint: String?) {
+        watchLifecycleTargets(instance) { sink ->
+            RetainedLifecycleClassifier.visitTypedTargets(instance, targetKind, lifecycleEvent, ownerHint, sink)
+        }
+    }
+
+    private inline fun watchLifecycleTargets(instance: Any?, capture: (JankHunterLifecycleTargetSinkV1) -> Unit) {
         RuntimeHookGuard.run {
-            val targets = RetainedLifecycleClassifier.targets(instance, lifecycleEvent, ownerHint)
-            for (target in targets) {
-                watchObject(target.instance, target.description, target.ownerHint)
+            val watcher = state.objectRetentionWatcher ?: return@run
+            val generation = state.lifecycleGeneration
+            val context = access.captureContext()
+            // The old ABI remains callable, but reflection cannot guarantee binding/lifecycle
+            // coverage under R8. Generated accessors also upgrade old three-argument call sites.
+            // Record before capture: an empty result must not hide this coverage limitation.
+            if (instance != null && instance !is JankHunterLifecycleAccessorV1) {
+                recordCounter("jankhunter.lifecycle.coverage.legacy_partial.count", 1)
             }
+            capture(JankHunterLifecycleTargetSinkV1 { target, owner ->
+                // Every emitted target stays with this callback's watcher and generation.
+                // Targets admitted before reconfigure remain in the old session; later ones are ignored.
+                if (target != null && state.objectRetentionWatcher === watcher && state.lifecycleGeneration == generation) {
+                    val captured = if (context.owner == owner) context else context.copy(owner = owner)
+                    watchObject(watcher, target, target.javaClass.name, owner, captured, SymbolOrigin.RUNTIME_CLASS)
+                }
+            })
         }
     }
 

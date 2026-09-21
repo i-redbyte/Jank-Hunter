@@ -114,13 +114,13 @@ func writeRuntimeEdgeDefinitionMask(writer io.Writer, calls []runtimeCallRow) er
 	return writeAll(writer, mask[:(len(calls)+7)/8])
 }
 
-func canColumnarizeRuntimeEdgeTuples(calls []runtimeCallRow, stableAliases map[uint64]uint64) bool {
+func canColumnarizeRuntimeEdgeTuples(calls []runtimeCallRow, stableAliases stableAliasTable) bool {
 	for index := range calls {
 		if calls[index].edgeID != 0 && !calls[index].edgeDefinition {
 			continue
 		}
 		if calls[index].screen.Stable || !calls[index].caller.Stable || !calls[index].callee.Stable ||
-			stableAliases[calls[index].caller.ID] == 0 || stableAliases[calls[index].callee.ID] == 0 {
+			stableAliases[calls[index].caller.stableKey()] == 0 || stableAliases[calls[index].callee.stableKey()] == 0 {
 			return false
 		}
 	}
@@ -145,7 +145,7 @@ func (encoder eventPayloadEncoder) writeRuntimeEdgeTupleColumns(calls []runtimeC
 	tupleCount = 0
 	for index := range calls {
 		if edgeIDs[index] == 0 || calls[index].edgeDefinition {
-			values[tupleCount] = encoder.stableAliases[calls[index].caller.ID]
+			values[tupleCount] = encoder.stableAliases[calls[index].caller.stableKey()]
 			tupleCount++
 		}
 	}
@@ -165,7 +165,7 @@ func (encoder eventPayloadEncoder) writeRuntimeEdgeTupleColumns(calls []runtimeC
 	tupleCount = 0
 	for index := range calls {
 		if edgeIDs[index] == 0 || calls[index].edgeDefinition {
-			values[tupleCount] = encoder.stableAliases[calls[index].callee.ID]
+			values[tupleCount] = encoder.stableAliases[calls[index].callee.stableKey()]
 			tupleCount++
 		}
 	}

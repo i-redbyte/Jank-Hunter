@@ -158,6 +158,7 @@ func readRuntimeEdgeTupleColumns(
 	for index, tuple := 0, 0; index < len(calls); index++ {
 		if calls[index].edgeID == 0 || calls[index].edgeDefinition {
 			calls[index].screen = LocalSymbol(values[tuple])
+			calls[index].screen.Origin = segmentState.origins.local[values[tuple]]
 			tuple++
 		}
 	}
@@ -209,5 +210,5 @@ func runtimeStableAlias(
 	if alias == 0 || !ok {
 		return SymbolRef{}, fmt.Errorf("runtime edge %s has undefined stable alias %d", field, alias)
 	}
-	return SymbolRef{ID: stableID, Namespace: symbolNamespace, Stable: true}, nil
+	return SymbolRef{ID: stableID, Namespace: symbolNamespace, Stable: true, Origin: segmentState.origins.stableAliases[alias]}, nil
 }

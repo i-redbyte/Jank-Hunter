@@ -30,7 +30,7 @@ class MainThreadWatchdogTest {
     }
 
     @Test
-    fun stallEvidenceSkipsMaterialFrameAndKeepsApplicationCaller() {
+    fun stallEvidenceKeepsMaterialAndApplicationCallerWithoutGuessingProvenance() {
         val evidence = MainThreadStallEvidence(maxSamples = 4)
 
         evidence.addSample(
@@ -46,11 +46,10 @@ class MainThreadWatchdogTest {
             ),
         )
 
-        assertEquals("ru.mail.im.chat.ChatFragment", evidence.owner)
-        assertEquals(
-            "ru.mail.im.chat.ChatFragment.onCreateView(ChatFragment.kt:121)",
-            evidence.stackHint,
-        )
+        assertTrue(evidence.stackHint.contains("com.google.android.material.appbar.AppBarLayout.<init>"))
+        assertTrue(evidence.stackHint.contains("android.view.LayoutInflater.createView"))
+        assertTrue(evidence.stackHint.contains("ru.mail.im.chat.ChatFragment.onCreateView"))
+
     }
 
     @Test

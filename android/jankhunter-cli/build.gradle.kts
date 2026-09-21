@@ -1,23 +1,18 @@
+import io.jankhunter.buildlogic.JankHunterCliArchiveTask
 import org.gradle.api.tasks.bundling.Compression
-import org.gradle.api.tasks.bundling.Tar
 
 plugins {
     id("io.jankhunter.cli-package")
 }
 
 val cliMakefile = rootProject.layout.projectDirectory.file("../cli/Makefile")
-val defaultCliVersion = providers.fileContents(cliMakefile).asText.map { contents ->
-    Regex("""(?m)^VERSION\s*\?=\s*(\S+)\s*$""")
-        .find(contents)
-        ?.groupValues
-        ?.get(1)
-        ?: error("VERSION is not set in ${cliMakefile.asFile}")
-}
-val cliVersion = providers.gradleProperty("jankHunterCliVersion").orElse(defaultCliVersion)
+val cliVersion = providers.gradleProperty("jankHunterCliVersion")
+    .orElse(providers.gradleProperty("jankHunterVersion"))
 version = cliVersion.get()
 
 val cliSourceDirectory = rootProject.layout.projectDirectory.dir("../cli")
 val cliBinary = layout.buildDirectory.file("cli/darwin-arm64/jankhunter")
+val retraceBundle = layout.buildDirectory.dir("cli/darwin-arm64/jankhunter-retrace")
 
 val buildDarwinArm64Cli by tasks.registering(Exec::class) {
     group = "build"
@@ -30,23 +25,27 @@ val buildDarwinArm64Cli by tasks.registering(Exec::class) {
         "BUILD_ARCH=arm64",
         "VERSION=${cliVersion.get()}",
         "BIN_DIR=${cliBinary.get().asFile.parentFile.absolutePath}",
+        "RETRACE_DIR=${retraceBundle.get().asFile.absolutePath}",
         "OUT=${cliBinary.get().asFile.absolutePath}",
     )
     inputs.files(
         cliSourceDirectory.file("go.mod"),
         cliMakefile,
+        rootProject.layout.projectDirectory.file("../scripts/build-retrace-bundle.sh"),
         cliSourceDirectory.asFileTree.matching {
-            include("**/*.go", "**/*.css", "**/*.js", "**/*.tmpl")
+            include("**/*.go", "**/*.css", "**/*.js", "**/*.tmpl", "retrace/**/*.java", "go.sum")
         },
     )
     inputs.property("cliVersion", cliVersion)
     outputs.file(cliBinary)
+    outputs.dir(retraceBundle)
 }
 
-val packageDarwinArm64Cli by tasks.registering(Tar::class) {
+val packageDarwinArm64Cli by tasks.registering(JankHunterCliArchiveTask::class) {
     group = "distribution"
-    description = "Packages the macOS Apple Silicon CLI binary."
+    description = "Packages the macOS Apple Silicon CLI and its offline Retrace bundle."
     dependsOn(buildDarwinArm64Cli)
+    retraceDirectory.set(retraceBundle)
     archiveBaseName.set("jankhunter-cli")
     archiveVersion.set(cliVersion)
     archiveClassifier.set("darwin-arm64")
@@ -59,6 +58,12 @@ val packageDarwinArm64Cli by tasks.registering(Tar::class) {
         rename { "jankhunter" }
         filePermissions {
             unix("755")
+        }
+    }
+    from(retraceDirectory) {
+        into("jankhunter-retrace")
+        filePermissions {
+            unix("644")
         }
     }
 }

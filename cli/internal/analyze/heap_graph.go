@@ -338,10 +338,11 @@ func (p *hprofParser) referencePath(parent *heapParentIndex, target uint64) []He
 		}
 		edge := p.parentEdge(step)
 		reversed = append(reversed, HeapPathElement{
-			ClassName: className,
-			FieldName: edge.label,
-			ObjectID:  fmt.Sprintf("0x%x", current),
-			Kind:      edge.kind,
+			ClassName:      className,
+			FieldName:      edge.label,
+			DeclaringClass: edge.owner,
+			ObjectID:       fmt.Sprintf("0x%x", current),
+			Kind:           edge.kind,
 		})
 		current = step.from
 	}
@@ -484,10 +485,11 @@ func pathsIntersect(left, right []uint64) bool {
 
 func (p *hprofParser) pathElement(id uint64, edge heapEdge) HeapPathElement {
 	return HeapPathElement{
-		ClassName: p.nodeClassName(id),
-		FieldName: edge.label,
-		ObjectID:  fmt.Sprintf("0x%x", id),
-		Kind:      edge.kind,
+		ClassName:      p.nodeClassName(id),
+		FieldName:      edge.label,
+		DeclaringClass: edge.owner,
+		ObjectID:       fmt.Sprintf("0x%x", id),
+		Kind:           edge.kind,
 	}
 }
 

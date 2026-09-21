@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
@@ -19,11 +21,12 @@ const (
 )
 
 type AndroidComponentCatalog struct {
-	Available  bool
-	Source     string
-	Components []AndroidComponentCatalogEntry
-	byID       map[uint64]int
-	aidl       map[androidAIDLTransactionKey]string
+	sourceIdentity artifactSourceIdentity
+	Available      bool
+	Source         string
+	Components     []AndroidComponentCatalogEntry
+	byID           map[uint64]int
+	aidl           map[androidAIDLTransactionKey]string
 }
 
 type AndroidComponentCatalogEntry struct {
@@ -72,12 +75,14 @@ func LoadAndroidComponentCatalog(path string) (*AndroidComponentCatalog, error) 
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
+	digest := sha256.New()
 	input, err := openBoundedTextInput(
 		path,
 		"Android component catalog",
 		androidComponentCatalogMaxFileBytes,
 		64*1024,
 		androidComponentCatalogMaxLineBytes,
+		digest,
 	)
 	if err != nil {
 		return nil, err
@@ -143,6 +148,7 @@ func LoadAndroidComponentCatalog(path string) (*AndroidComponentCatalog, error) 
 	for index := range catalog.Components {
 		catalog.byID[catalog.Components[index].ComponentID] = index
 	}
+	catalog.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
 	return catalog, nil
 }
 

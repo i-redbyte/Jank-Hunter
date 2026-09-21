@@ -14,6 +14,7 @@ androidx-test-runner = "1.6.2"
 androidx-work = "2.11.2"
 asm = "9.7.1"
 detekt = "2.0.0-alpha.6"
+h2-mvstore = "2.3.232"
 junit = "4.13.2"
 kotlin = "2.3.20"
 ksp = "2.3.10"
@@ -45,6 +46,7 @@ asm-util = { module = "org.ow2.asm:asm-util", version.ref = "asm" }
 detekt-rules-ktlint-wrapper = { module = "dev.detekt:detekt-rules-ktlint-wrapper", version.ref = "detekt" }
 detekt-gradle-plugin = { module = "dev.detekt:detekt-gradle-plugin", version.ref = "detekt" }
 junit = { module = "junit:junit", version.ref = "junit" }
+h2-mvstore = { module = "com.h2database:h2-mvstore", version.ref = "h2-mvstore" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-compose-gradle-plugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
 kotlin-metadata-jvm = { module = "org.jetbrains.kotlin:kotlin-metadata-jvm", version.ref = "kotlin" }

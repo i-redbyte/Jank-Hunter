@@ -1,0 +1,2 @@
+-keep class probe.Entry { public static void main(java.lang.String[]); }
+-keepattributes SourceFile,LineNumberTable

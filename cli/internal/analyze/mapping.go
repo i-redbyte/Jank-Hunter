@@ -1,8 +1,14 @@
 package analyze
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"sync"
+
+	"github.com/i-redbyte/jank-hunter/cli/internal/retrace"
 )
 
 const (
@@ -11,8 +17,32 @@ const (
 )
 
 type NameMapping struct {
-	classes map[string]string
-	fields  map[mappingFieldKey]string
+	validation   *mappingValidation
+	digest       string
+	fieldResults map[fieldRetraceKey]retrace.FieldResult
+	path         string
+	classes      map[string]string
+	fields       map[mappingFieldKey]string
+}
+
+// Shared by immutable mapping views, including heap views; never copy sync.Once itself.
+type mappingValidation struct {
+	once sync.Once
+	err  error
+}
+
+func (m *NameMapping) validateSemantics() error {
+	if m.validation == nil {
+		return nil // Internal in-memory mappings have no external mapping file.
+	}
+	m.validation.once.Do(func() {
+		backend, err := retrace.Discover()
+		if err == nil {
+			_, err = backend.Run(context.Background(), m.path, m.digest, nil)
+		}
+		m.validation.err = err
+	})
+	return m.validation.err
 }
 
 type mappingFieldKey struct {
@@ -30,13 +60,14 @@ func LoadNameMapping(path string) (*NameMapping, error) {
 	if path == "" {
 		return nil, nil
 	}
-	input, err := openBoundedTextInput(path, "R8 mapping", nameMappingMaxFileBytes, 1024, nameMappingMaxLineBytes)
+	hash := sha256.New()
+	input, err := openBoundedTextInput(path, "R8 mapping", nameMappingMaxFileBytes, 1024, nameMappingMaxLineBytes, hash)
 	if err != nil {
 		return nil, err
 	}
 	defer input.Close()
 
-	mapping := &NameMapping{classes: map[string]string{}}
+	mapping := &NameMapping{path: path, classes: map[string]string{}, validation: &mappingValidation{}}
 	scanner := input.Scanner
 	lineNumber := 0
 	currentObfuscatedClass := ""
@@ -94,6 +125,7 @@ func LoadNameMapping(path string) (*NameMapping, error) {
 	if len(mapping.classes) == 0 {
 		return nil, fmt.Errorf("%s: mapping не содержит class mapping строк вида 'original.Name -> a.b:'", path)
 	}
+	mapping.digest = hex.EncodeToString(hash.Sum(nil))
 	return mapping, nil
 }
 
@@ -268,33 +300,6 @@ func mappingBoundary(value string, index int) bool {
 	return next == '.' || next == '$' || next == '#' || next == ' ' || next == '\t' || next == '(' || next == '[' || next == ':'
 }
 
-func DeobfuscateClassGraph(graph *ClassGraph, mapping *NameMapping) *ClassGraph {
-	if graph == nil || mapping == nil {
-		return graph
-	}
-	out := &ClassGraph{
-		Format:  graph.Format,
-		Classes: map[string]ClassGraphClass{},
-		Edges:   make([]ClassGraphEdge, 0, len(graph.Edges)),
-	}
-	for key, class := range graph.Classes {
-		name := mapping.Deobfuscate(firstNonEmpty(class.Name, key))
-		out.Classes[name] = ClassGraphClass{Name: name}
-	}
-	for _, edge := range graph.Edges {
-		edge.From = mapping.Deobfuscate(edge.From)
-		edge.To = mapping.Deobfuscate(edge.To)
-		out.Edges = append(out.Edges, edge)
-		if _, ok := out.Classes[edge.From]; !ok && edge.From != "" {
-			out.Classes[edge.From] = ClassGraphClass{Name: edge.From}
-		}
-		if _, ok := out.Classes[edge.To]; !ok && edge.To != "" {
-			out.Classes[edge.To] = ClassGraphClass{Name: edge.To}
-		}
-	}
-	return out
-}
-
 func DeobfuscateHeapEvidence(heap *HeapEvidence, mapping *NameMapping) *HeapEvidence {
 	if heap == nil || mapping == nil {
 		return heap
@@ -311,6 +316,9 @@ func DeobfuscateHeapEvidence(heap *HeapEvidence, mapping *NameMapping) *HeapEvid
 		leak.Holder = mapping.Deobfuscate(leak.Holder)
 		leak.HolderField = mapping.deobfuscateQualifiedField(leak.HolderField)
 		leak.ReferencePath = deobfuscateHeapPath(leak.ReferencePath, mapping)
+		if mapping.fieldResults != nil && len(leak.ReferencePath) > 0 {
+			leak.HolderField = heapHolderField(leak.ReferencePath, leak.ClassName)
+		}
 		if len(leak.AlternativePaths) > 0 {
 			alternativePaths := make([][]HeapPathElement, len(leak.AlternativePaths))
 			for i, path := range leak.AlternativePaths {
@@ -367,7 +375,18 @@ func deobfuscateHeapPath(path []HeapPathElement, mapping *NameMapping) []HeapPat
 			out[i] = item
 			continue
 		}
-		item.FieldName = mapping.deobfuscateField(fieldOwner, item.FieldName)
+		if mapping.fieldResults != nil {
+			mapping.retraceHeapField(&item)
+		} else {
+			owner := item.DeclaringClass
+			if owner == "" {
+				owner = fieldOwner
+			}
+			item.FieldName = mapping.deobfuscateField(owner, item.FieldName)
+		}
+		if item.FieldRetrace == nil || item.FieldRetrace.Status != "resolved" {
+			item.DeclaringClass = mapping.Deobfuscate(item.DeclaringClass)
+		}
 		fieldOwner = strings.TrimPrefix(item.ClassName, "GC root: ")
 		item.ClassName = mapping.Deobfuscate(item.ClassName)
 		out[i] = item

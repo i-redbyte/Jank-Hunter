@@ -1,5 +1,6 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import java.lang.ref.Reference
@@ -16,6 +17,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ObjectRetentionWatcherTest {
+    @Test
+    fun identicalClassStringsDoNotMergeDifferentOrigins() {
+        var now = 0L
+        val reports = mutableListOf<Pair<SymbolOrigin, Long>>()
+        val watcher = ObjectRetentionWatcher(RETAINED_DELAY_MS, clock = { now },
+            reporter = { _, _, _, _, count, _, origin -> reports += origin to count })
+        val first = Any()
+        val second = Any()
+        enableManualWatch(watcher)
+        try {
+            watcher.watch(first, "a", "owner", null)
+            watcher.watch(second, "a", "owner", null, SymbolOrigin.RUNTIME_CLASS)
+            now = RETAINED_DELAY_MS
+            watcher.checkRetained()
+            assertEquals(listOf(SymbolOrigin.UNKNOWN to 1L, SymbolOrigin.RUNTIME_CLASS to 1L), reports)
+        } finally {
+            watcher.stop()
+            Reference.reachabilityFence(first)
+            Reference.reachabilityFence(second)
+        }
+    }
+
     @Test
     fun watchedObjectsUseWeakIdentityIndexWithoutQueueCompaction() {
         val fieldTypes = ObjectRetentionWatcher::class.java.declaredFields.map { it.type }
@@ -77,7 +100,7 @@ class ObjectRetentionWatcherTest {
             forceGcBeforeReport = true,
             clock = { now },
             requestGc = { gcRequests++ },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -120,7 +143,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -163,7 +186,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
             heapDumpMinRetainedAgeMs = HEAP_DUMP_AGE_MS,
@@ -218,7 +241,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -259,7 +282,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -298,7 +321,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -353,7 +376,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
             maxWatchedReferences = 1,
@@ -386,7 +409,7 @@ class ObjectRetentionWatcherTest {
             forceGcBeforeReport = true,
             clock = { now },
             requestGc = { gcRequests++ },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
             exactAdmission = true,

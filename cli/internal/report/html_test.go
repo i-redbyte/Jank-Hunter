@@ -439,7 +439,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
 	assertCurrentReportStyle(t, diagnosticsPath)
-	assertHTMLContains(t, diagnosticsPath, "Диагностика ASM-хуков", "Сводка ASM", "Добавленные ASM-хуки", "Почему ASM-хук добавлен или пропущен", "Области аннотаций", "Прошли фильтр", "Исключены фильтром", "Почему методы исключены фильтром", "excluded:synthetic", "okhttp3.bridge.v3", "FeedOwner", "invalid class metadata", "Иерархия broken.Parent разрешена частично", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
+	assertHTMLContains(t, diagnosticsPath, "Диагностика ASM-хуков", "Проходы ASM", "lifecycle-owner", "Сводка ASM", "Добавленные ASM-хуки", "Почему ASM-хук добавлен или пропущен", "Области аннотаций", "Прошли фильтр", "Исключены фильтром", "Почему методы исключены фильтром", "excluded:synthetic", "okhttp3.bridge.v3", "FeedOwner", "invalid class metadata", "Иерархия broken.Parent разрешена частично", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
 
 	dependencyInjectionPath := filepath.Join(dir, "inspect-di.html")
 	if err := WriteDependencyInjectionWithOptions(
@@ -2138,6 +2138,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		},
 		Classes: []analyze.InstrumentationClassDiagnostic{
 			{
+				Passes:               []analyze.InstrumentationClassDiagnostic{{Pass: "lifecycle", Methods: 3, HookCount: 1, Annotations: []analyze.InstrumentationAnnotationSummary{{Owner: "lifecycle-owner", Count: 1}}}},
 				ClassName:            "com.app.FeedRepository",
 				Methods:              3,
 				AnnotatedMethods:     1,

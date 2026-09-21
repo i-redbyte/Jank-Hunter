@@ -347,6 +347,7 @@ type heapNode struct {
 }
 
 type heapEdge struct {
+	owner string
 	to    uint64
 	label string
 	kind  string
@@ -354,6 +355,7 @@ type heapEdge struct {
 
 type storedHeapEdge struct {
 	to      uint64
+	ownerID uint32
 	labelID uint32
 	next    uint32
 	kind    uint8

@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
@@ -31,7 +33,8 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 	if path == "" {
 		return nil, nil
 	}
-	input, err := openBoundedTextInput(path, "class graph", classGraphMaxFileBytes, 64*1024, classGraphMaxLineBytes)
+	digest := sha256.New()
+	input, err := openBoundedTextInput(path, "class graph", classGraphMaxFileBytes, 64*1024, classGraphMaxLineBytes, digest)
 	if err != nil {
 		return nil, err
 	}
@@ -106,9 +109,11 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 		return nil, err
 	}
 	if fullGraph != nil {
+		fullGraph.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
 		return fullGraph, nil
 	}
 	normalizeClassGraph(graph)
+	graph.sourceIdentity = artifactSourceIdentity{path: path, digest: hex.EncodeToString(digest.Sum(nil))}
 	return graph, nil
 }
 

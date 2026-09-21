@@ -70,7 +70,7 @@ func (page *microPageBuilder) reset() {
 
 func encodeMicroPageRecord(
 	rows []microPageRow,
-	stableAliases map[uint64]uint64,
+	stableAliases stableAliasTable,
 	entropyEnabled bool,
 ) ([]byte, error) {
 	if len(rows) == 0 || len(rows) > maxMicroPageRows {
@@ -463,7 +463,7 @@ func decodeMicroPage(
 		}
 		if hasContext {
 			if contextChanged {
-				pageContext, err = readAttribution(&contextReader, symbolNamespace, segmentState.stableAliases)
+				pageContext, err = readAttribution(&contextReader, symbolNamespace, segmentState.stableAliases, &segmentState.origins)
 				if err != nil {
 					return nil, state, fmt.Errorf("micro-page row %d context: %w", index, err)
 				}

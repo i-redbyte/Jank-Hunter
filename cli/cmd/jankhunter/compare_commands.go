@@ -24,6 +24,22 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	baselineMapping, remaining, err := takeStringFlag(remaining, "baseline-mapping", "")
+	if err != nil {
+		return err
+	}
+	candidateMapping, remaining, err := takeStringFlag(remaining, "candidate-mapping", "")
+	if err != nil {
+		return err
+	}
+	baselineArtifacts, remaining, err := takeStringFlag(remaining, "baseline-artifacts-dir", "")
+	if err != nil {
+		return err
+	}
+	candidateArtifacts, remaining, err := takeStringFlag(remaining, "candidate-artifacts-dir", "")
+	if err != nil {
+		return err
+	}
 	baselineHeap, remaining, err := takeHeapInputFlags(remaining, "baseline-heap-dump", "baseline-heap-evidence")
 	if err != nil {
 		return err
@@ -89,18 +105,36 @@ func runCompare(args []string) error {
 	if err := rejectComparisonHeapInputOverlap(baselineHeap, baselinePaths, candidateHeap, candidatePaths); err != nil {
 		return err
 	}
-	options, err := builder.buildForLogs(append(append([]string{}, baselinePaths...), candidatePaths...))
+	baselineBuilder, candidateBuilder := builder, builder
+	if baselineMapping != "" {
+		baselineBuilder.mappingPath = baselineMapping
+	}
+	if candidateMapping != "" {
+		candidateBuilder.mappingPath = candidateMapping
+	}
+	if baselineArtifacts != "" {
+		baselineBuilder.artifactsDir = baselineArtifacts
+	}
+	if candidateArtifacts != "" {
+		candidateBuilder.artifactsDir = candidateArtifacts
+	}
+	baselineOptions, err := baselineBuilder.buildForLogs(baselinePaths)
 	if err != nil {
 		return err
 	}
-	baselineOptions, err := baselineHeap.apply("baseline", baselinePaths, options)
+	candidateOptions, err := candidateBuilder.buildForLogs(candidatePaths)
 	if err != nil {
 		return err
 	}
-	candidateOptions, err := candidateHeap.apply("candidate", candidatePaths, options)
+	baselineOptions, err = baselineHeap.apply("baseline", baselinePaths, baselineOptions)
 	if err != nil {
 		return err
 	}
+	candidateOptions, err = candidateHeap.apply("candidate", candidatePaths, candidateOptions)
+	if err != nil {
+		return err
+	}
+	options := candidateOptions
 	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
 	if err != nil {
 		return err

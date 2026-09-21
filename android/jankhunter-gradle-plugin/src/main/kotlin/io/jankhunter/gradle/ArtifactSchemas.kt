@@ -4,7 +4,7 @@ internal object ArtifactSchemas {
     const val ARTIFACT_METADATA_FORMAT = 1
     const val CLASS_GRAPH_FORMAT = 1
     const val LAMBDA_CAPTURE_FORMAT = 1
-    const val INSTRUMENTATION_DIAGNOSTICS_FORMAT = 1
+    const val INSTRUMENTATION_DIAGNOSTICS_FORMAT = 2
     const val DEPENDENCY_INJECTION_CATALOG_FORMAT = 1
     const val ANDROID_COMPONENT_CATALOG_FORMAT = 1
 

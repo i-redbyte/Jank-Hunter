@@ -17,7 +17,7 @@ type boundedTextInput struct {
 	max     int64
 }
 
-func openBoundedTextInput(path, label string, maxBytes int64, initialBuffer, maxLineBytes int) (*boundedTextInput, error) {
+func openBoundedTextInput(path, label string, maxBytes int64, initialBuffer, maxLineBytes int, observers ...io.Writer) (*boundedTextInput, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -32,7 +32,11 @@ func openBoundedTextInput(path, label string, maxBytes int64, initialBuffer, max
 		return nil, boundedTextFileSizeError(path, label, maxBytes)
 	}
 	limited := &io.LimitedReader{R: file, N: maxBytes + 1}
-	scanner := bufio.NewScanner(limited)
+	var source io.Reader = limited
+	for _, observer := range observers {
+		source = io.TeeReader(source, observer)
+	}
+	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, initialBuffer), maxLineBytes)
 	return &boundedTextInput{file: file, limited: limited, Scanner: scanner, path: path, label: label, max: maxBytes}, nil
 }
