@@ -30,6 +30,7 @@ class SampleEndToEndLogTest {
         val config = JankHunterManifestConfig.read(context)
             .toBuilder()
             .flushIntervalMs(250)
+            .backgroundAdmissionWaitMs(25L)
             .logDirectory(logDir)
             .retainedHeapDumpDirectory(logDir)
             .build()

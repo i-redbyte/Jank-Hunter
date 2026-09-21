@@ -101,6 +101,10 @@ if(JH_BUILD_HOST_TESTS AND NOT ANDROID)
     target_link_libraries(jh_artti_core_tests PRIVATE jh_artti_core Threads::Threads)
     target_compile_features(jh_artti_core_tests PRIVATE cxx_std_20)
 
+    add_executable(jh_artti_bridge_tests tests/bridge_runtime_tests.cpp bridge/bridge_runtime.cpp)
+    target_link_libraries(jh_artti_bridge_tests PRIVATE jh_artti_core Threads::Threads)
+    target_compile_features(jh_artti_bridge_tests PRIVATE cxx_std_20)
+
     add_executable(jh_artti_core_bench benchmarks/core_bench.cpp)
     target_link_libraries(jh_artti_core_bench PRIVATE jh_artti_core Threads::Threads)
     target_compile_features(jh_artti_core_bench PRIVATE cxx_std_20)
@@ -115,4 +119,5 @@ if(JH_BUILD_HOST_TESTS AND NOT ANDROID)
 
     enable_testing()
     add_test(NAME jh_artti_core_tests COMMAND jh_artti_core_tests)
+    add_test(NAME jh_artti_bridge_tests COMMAND jh_artti_bridge_tests)
 endif()

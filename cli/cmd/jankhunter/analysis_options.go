@@ -76,6 +76,10 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	}, remaining, nil
 }
 
+func (b analysisOptionsBuilder) build() (analyze.Options, error) {
+	return b.buildWithArtifactNamespaces(nil)
+}
+
 func (b analysisOptionsBuilder) buildForLogs(paths []string) (analyze.Options, error) {
 	if err := rejectOutputInputOverlap(b.outputPath, paths); err != nil {
 		return analyze.Options{}, err

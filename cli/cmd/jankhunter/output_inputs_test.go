@@ -112,8 +112,8 @@ func TestOutputProtectsAuxiliaryInputsAndExcludedSessions(t *testing.T) {
 			case "excluded-session":
 				out = sessionSelectionPath(dir, "2026-07-13", 1, 8, 0)
 				log = sessionSelectionPath(dir, "2026-07-13", 2, 9, 0)
-				writeSessionSelectionLog(t, out, "main", 1, 1, 0)
-				writeSessionSelectionLog(t, log, "main", 2, 2, 0)
+				writeSessionSelectionLog(t, out, "main", 1, 1)
+				writeSessionSelectionLog(t, log, "main", 2, 2)
 				var err error
 				content, err = os.ReadFile(out)
 				if err != nil {

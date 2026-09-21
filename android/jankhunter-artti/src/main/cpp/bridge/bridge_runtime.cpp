@@ -24,10 +24,21 @@ Status BridgeRuntime::Initialize(const ArtTiNativeConfigV1& wire_config) noexcep
   if (!config.Validate().ok()) return Status::Error(StatusCode::kInvalidArgument);
 
   std::lock_guard lock(control_mutex_);
-  if (engine_ != nullptr && engine_->state() == EngineState::kActive) {
-    return engine_->config().config_hash == config.config_hash
-        ? Status::Ok()
-        : Status::Error(StatusCode::kInvalidState);
+  if (engine_ != nullptr) {
+    const auto state = engine_->state();
+    if (state == EngineState::kActive) {
+      return engine_->config().config_hash == config.config_hash
+          ? Status::Ok()
+          : Status::Error(StatusCode::kInvalidState);
+    }
+    if (state == EngineState::kStopping) {
+      return Status::Error(StatusCode::kInvalidState);
+    }
+    callback_engine_.store(nullptr, std::memory_order_release);
+    engine_.reset();
+    scratch_.reset();
+    scratch_capacity_ = 0U;
+    quality_drain_tick_ = 0U;
   }
   auto engine = std::unique_ptr<NativeEngine>(
       new (std::nothrow) NativeEngine(config, ClockSource::Steady()));
@@ -91,6 +102,9 @@ Status BridgeRuntime::Stop() noexcept {
   engine_->MarkStopped();
   static_cast<void>(engine_->PublishQualitySnapshot(true));
   quality_drain_tick_ = 0U;
+  engine_.reset();
+  scratch_.reset();
+  scratch_capacity_ = 0U;
   return status;
 }
 

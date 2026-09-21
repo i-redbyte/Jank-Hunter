@@ -571,7 +571,7 @@ internal class AsyncLogWriter internal constructor(
 
     fun agentBatch(batch: JankHunterAgentEventBatch): Boolean {
         if (batch.size <= 0) return true
-        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK, batch.size.toLong()) {
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.CRITICAL, batch.size.toLong()) {
             producer.agentBatchEventPool.acquire(producer.context.capture(), batch)
         }
     }
@@ -584,14 +584,14 @@ internal class AsyncLogWriter internal constructor(
         step: String?,
     ): Boolean {
         if (contextToken == 0L) return false
-        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK) {
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.CRITICAL) {
             PendingAgentContextEvent(producer.context.capture(), contextToken, screen, owner, flow, step)
         }
     }
 
     fun agentMethodDefinition(methodId: Long, symbol: String): Boolean {
         if (methodId == 0L || symbol.isBlank()) return false
-        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK) {
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.CRITICAL) {
             PendingAgentMethodDefinitionEvent(producer.context.capture(), methodId, symbol)
         }
     }
