@@ -112,7 +112,7 @@ cleanup_ci_gradle_wrapper () {
     esac
 }
 
-if [ "${GITLAB_CI:-}" = true ]; then
+if [ "${GITLAB_CI:-}" = true ] && [ -n "${JANK_HUNTER_GRADLE_DISTRIBUTION_URL:-}" ]; then
     wrapper_properties="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
     source_distribution_path=$(sed -n 's/^distributionUrl=//p' "$wrapper_properties" | sed -n '1p')
     distribution_file=${source_distribution_path##*/}
@@ -121,7 +121,7 @@ if [ "${GITLAB_CI:-}" = true ]; then
       *) die "Unexpected Gradle distribution file: $distribution_file" ;;
     esac
 
-    distribution_url=${JANK_HUNTER_GRADLE_DISTRIBUTION_URL:-https://nexus.vkteam.ru/repository/raw-gradle-dist-remote/$distribution_file}
+    distribution_url=$JANK_HUNTER_GRADLE_DISTRIBUTION_URL
     case $distribution_url in
       https://* | file://*) ;;
       *) die "JANK_HUNTER_GRADLE_DISTRIBUTION_URL must use https:// or file://" ;;

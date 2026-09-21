@@ -32,7 +32,7 @@ dependencies {
         } else {
             intellijIdea(providers.gradleProperty("platformVersion").get())
         }
-        testFramework(TestFrameworkType.Bundled)
+        testFramework(TestFrameworkType.Platform)
         pluginVerifier("1.408")
     }
 }

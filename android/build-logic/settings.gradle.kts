@@ -1,27 +1,6 @@
-pluginManagement {
-    repositories {
-        maven {
-            url = uri("https://registry.vktech.team/repository/maven-gradle-plugins-remote-internal-proxy/")
-        }
-        maven {
-            url = uri("https://nexus.vkteam.ru/repository/maven-gradle-plugins-remote/")
-        }
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
+apply(from = "../gradle/jankhunter-repository-settings.gradle")
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        maven {
-            url = uri("https://registry.vktech.team/repository/maven-internal-proxy/")
-        }
-        mavenCentral()
-        gradlePluginPortal()
-    }
     versionCatalogs {
         create("libs") {
             from(files("../gradle/libs.versions.toml"))
