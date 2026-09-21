@@ -28,7 +28,7 @@ func compareAgent(baseline, candidate AgentSummary) AgentComparison {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("Активные возможности JVM TI различаются: 0x%x → 0x%x.", baseline.Capabilities.Active, candidate.Capabilities.Active))
 	}
 	if len(baseline.DataGaps) > 0 || len(candidate.DataGaps) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Качество данных JVM TI различается: ограничений в базе %d, у кандидата %d; выводы требуют ручной проверки.", len(baseline.DataGaps), len(candidate.DataGaps)))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Качество данных JVM TI различается: ограничений в базовом прогоне %d, во втором %d; выводы требуют ручной проверки.", len(baseline.DataGaps), len(candidate.DataGaps)))
 	}
 	baseStacks := agentMethodSuspects(baseline.Stacks)
 	candidateStacks := agentMethodSuspects(candidate.Stacks)

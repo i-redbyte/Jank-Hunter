@@ -6,7 +6,7 @@ import (
 )
 
 func TestReportStylesheetContainsCurrentTheme(t *testing.T) {
-	stylesheet := reportStylesheet(true)
+	stylesheet := reportStylesheet(true, true)
 	for _, marker := range []string{
 		"--forest: #006400",
 		"--attention: #FF4500",

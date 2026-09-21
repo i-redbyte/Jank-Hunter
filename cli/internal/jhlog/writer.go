@@ -17,7 +17,7 @@ import (
 const (
 	maxDatabaseDescriptors          = 4_096
 	maxRuntimeEdges                 = 65_536
-	dictKindCount                   = int(DictAttributeValue) + 1
+	dictKindCount                   = int(dictKindLast) + 1
 	controlDeltaFull         uint64 = 0
 	controlDeltaPrefixSuffix uint64 = 1
 )
@@ -233,7 +233,7 @@ func (w *Writer) WriteEvent(event Event) error {
 	var hasPendingDictionary bool
 	var hasPendingDictionaryTokens bool
 	if event.Type == EventDictionary && event.Dictionary != nil {
-		if event.Dictionary.Kind > DictAttributeValue {
+		if event.Dictionary.Kind > dictKindLast {
 			return fmt.Errorf("unsupported dictionary kind %d", event.Dictionary.Kind)
 		}
 		entry, data, err := prepareDictionaryFront(*event.Dictionary, w.dictionaryPrevious[event.Dictionary.Kind])
@@ -729,7 +729,7 @@ func prepareDictionaryFront(entry DictionaryEntry, previous []byte) (DictionaryE
 }
 
 func dictionaryData(entry DictionaryEntry) ([]byte, error) {
-	if entry.Kind > DictAttributeValue {
+	if entry.Kind > dictKindLast {
 		return nil, fmt.Errorf("unsupported dictionary kind %d", entry.Kind)
 	}
 	if entry.Encoding != 0 {

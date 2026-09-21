@@ -235,6 +235,8 @@ type AttributionContext struct {
 	Present     bool      `json:"present,omitempty"`
 	Screen      SymbolRef `json:"screen,omitempty"`
 	Owner       SymbolRef `json:"owner,omitempty"`
+	Flow        SymbolRef `json:"flow,omitempty"`
+	Step        SymbolRef `json:"step,omitempty"`
 	OperationID uint64    `json:"operation_id,omitempty"`
 }
 
@@ -266,7 +268,11 @@ const (
 	DictAttributeValue
 	// DictMethod stores bounded ART TI / JVM TI method display names keyed by a segment-local symbol ID.
 	DictMethod
+	DictFlow
+	DictStep
 )
+
+const dictKindLast = DictStep
 
 type NetworkKind uint64
 

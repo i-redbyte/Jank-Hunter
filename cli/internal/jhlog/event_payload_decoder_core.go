@@ -27,7 +27,7 @@ func decodeCorePayload(
 			kindValue >>= 2
 		}
 		kind := DictKind(kindValue)
-		if kind > DictAttributeValue {
+		if kind > dictKindLast {
 			return fmt.Errorf("unsupported dictionary kind %d", kind)
 		}
 		var id uint64

@@ -10,10 +10,13 @@ var (
 	compactModernCSS = compactStylesheet(modernCSS)
 )
 
-func reportStylesheet(includeMath bool) string {
-	length := len(compactBaseCSS) + len(compactModernCSS)
+func reportStylesheet(includeMath, includeModern bool) string {
+	length := len(compactBaseCSS)
 	if includeMath {
 		length += len(compactMathCSS)
+	}
+	if includeModern {
+		length += len(compactModernCSS)
 	}
 	var builder strings.Builder
 	builder.Grow(length)
@@ -21,7 +24,9 @@ func reportStylesheet(includeMath bool) string {
 	if includeMath {
 		builder.WriteString(compactMathCSS)
 	}
-	builder.WriteString(compactModernCSS)
+	if includeModern {
+		builder.WriteString(compactModernCSS)
+	}
 	return builder.String()
 }
 

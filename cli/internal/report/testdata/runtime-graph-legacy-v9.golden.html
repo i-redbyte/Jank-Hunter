@@ -13,7 +13,7 @@
     <div class="report-hero-title">
       <div class="eyebrow">Jank Hunter · Проблемы приложения</div>
       <h1>В записанном сценарии явных проблем не обнаружено.</h1>
-      <div class="subhead">art-ti-evidence-v9 · создан 08.08.2026, 00:00:00</div>
+      <div class="subhead">runtime-graph-legacy-v9 · создан 08.08.2026, 00:00:00</div>
     </div>
     <div class="report-hero-lower">
       <div class="report-hero-context">
@@ -48,7 +48,7 @@
       <div class="hero-meta">
         <div class="chip">Проблемы <strong>0</strong></div>
         <div class="chip">Критичный / высокий приоритет <strong>0 / 0</strong></div>
-        <div class="chip">Длительность <strong>1.2 сек</strong></div>
+        <div class="chip">Длительность <strong>29 мс</strong></div>
       </div>
 
       </div>
@@ -63,12 +63,12 @@
 
 
 
-  <a href="#ui">Плавность</a>
+
 
 
   <a href="#signal-contexts">Связанные сигналы</a>
   <a href="#code-problems">Реестр кода</a>
-  <a href="#owners">Источники</a>
+
 
   <a href="#memory">Память</a>
 
@@ -134,9 +134,9 @@
     </div>
     <div class="grid">
 
-      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Доля кадров, которые не уложились в целевое время. Чем выше процент, тем чаще пользователь замечает задержки.">Подтормаживания UI</span></div><div class="value">58.33%</div><div class="hint">7 из 12 кадров</div></div>
 
-      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку.">Максимальная пауза</span></div><div class="value">200 мс</div><div class="hint">1 пауза</div></div>
+
+
 
 
     </div>
@@ -145,12 +145,6 @@
       <div class="guide-card"><strong>Как искать причину</strong>Сопоставьте время подтормаживания UI, паузы главного потока, сетевого запроса и роста памяти.</div>
       <div class="guide-card"><strong>Как подтвердить</strong>Повторите тот же сценарий с профилировщиком. Сравните метрики до и после исправления.</div>
     </div>
-    <h3>Индикаторы здоровья</h3>
-    <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="--value:58.33;--cap:round; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>58.3%</strong><span>кадры</span></div></div></div><div class="gauge-label">Подтормаживания интерфейса</div></div>
-
-
-    </div>
 
 
     <h3>Граф влияния кода</h3>
@@ -158,20 +152,20 @@
     <div class="grid influence-grid">
 
       <div class="metric influence-tile" data-tip="Callee · вызов при выполнении">
-        <div class="label">средний риск</div>
-        <div class="value">6.3</div>
+        <div class="label">низкий риск</div>
+        <div class="value">3.8</div>
         <div class="influence-tile-body" tabindex="0">
           <div class="hint"><code>Callee</code></div>
           <div class="hint influence-tile-reasons">вызов при выполнении</div>
         </div>
       </div>
 
-      <div class="metric influence-tile" data-tip="Caller · вызов при выполнении, паузы главного потока">
+      <div class="metric influence-tile" data-tip="Caller · вызов при выполнении">
         <div class="label">низкий риск</div>
-        <div class="value">4.6</div>
+        <div class="value">0.6</div>
         <div class="influence-tile-body" tabindex="0">
           <div class="hint"><code>Caller</code></div>
-          <div class="hint influence-tile-reasons">вызов при выполнении, паузы главного потока</div>
+          <div class="hint influence-tile-reasons">вызов при выполнении</div>
         </div>
       </div>
 
@@ -188,10 +182,10 @@
     <p class="help-text">Ранжированный список классов и методов, где сошлись риск зависания приложения, сеть, память, интерфейс, избыток сообщений журнала, удержания объектов и граф влияния. Оценка - это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода: чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
     <div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Каждое семейство событий оценивается один раз через основной сигнал: проблемное окно, удержание, запись журнала или вызов во время выполнения. Производные источник/операция/граф представляют контекст и повторно оценку не увеличивают.</p></div></div>
 
-    <div class="registry-insights"><span class="registry-insights-label">Категории</span><button type="button" class="registry-chip sev-medium" data-registry-category="Выполнение">Выполнение <strong>2</strong></button><button type="button" class="registry-chip sev-medium" data-registry-category="Главный поток">Главный поток <strong>1</strong></button><button type="button" class="registry-chip sev-medium" data-registry-category="Риск ANR">Риск ANR <strong>1</strong></button></div>
+    <div class="registry-insights"><span class="registry-insights-label">Категории</span><button type="button" class="registry-chip sev-ok" data-registry-category="Выполнение">Выполнение <strong>2</strong></button></div>
 
 
-    <div class="registry-insights"><span class="registry-insights-label">Риск</span><button type="button" class="registry-chip sev-medium" data-registry-severity="medium">средний риск <strong>2</strong></button></div>
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span><button type="button" class="registry-chip sev-ok" data-registry-severity="ok">низкий риск <strong>2</strong></button></div>
 
     <div class="code-registry" data-code-registry data-code-problem-mode="inspect">
       <div class="registry-toolbar">
@@ -221,25 +215,25 @@
         <tbody>
 
 
-          <tr data-code-problem-row data-score="6.0" data-severity="medium" data-class="Caller.run" data-categories="Выполнение|Главный поток|Риск ANR">
-            <td><span class="problem-score sev-medium">6.0</span><div class="muted">средний риск</div><div class="muted">есть сигналы во время выполнения</div></td>
-            <td><div class="problem-location"><code>Caller</code><div class="method"><code>run</code></div></div></td>
-            <td><div class="problem-tags"><span class="problem-chip">Выполнение</span><span class="problem-chip">Главный поток</span><span class="problem-chip">Риск ANR</span></div><div class="muted">Инициатор вызова, Пауза главного потока</div></td>
+          <tr data-code-problem-row data-score="3.5" data-severity="ok" data-class="Callee.load" data-categories="Выполнение">
+            <td><span class="problem-score sev-ok">3.5</span><div class="muted">низкий риск</div><div class="muted">есть сигналы во время выполнения</div></td>
+            <td><div class="problem-location"><code>Callee</code><div class="method"><code>load</code></div></div></td>
+            <td><div class="problem-tags"><span class="problem-chip">Выполнение</span></div><div class="muted">Выполняемый метод</div></td>
             <td>
-              <details class="code-problem-details" data-code-problem-evidence-key="6:Callerrun">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: проблем=1, вызовов=2, макс=200 мс.</em></span><small>2 сигнала · 2 сценария</small></summary>
+              <details class="code-problem-details" data-code-problem-evidence-key="6:Calleeload">
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: вызовов=2, макс=20 мс.</em></span><small>1 сигнал · 1 сценарий</small></summary>
                 <div class="code-problem-detail-body" data-code-problem-evidence-body data-impact-label="Влияние" data-signals-label="Сигналы"><div class="code-problem-detail-block span-all"><strong>Полные доказательства</strong><p>Откройте строку, чтобы развернуть все сигналы и сценарии без усечения.</p></div></div>
               </details>
             </td>
           </tr>
 
-          <tr data-code-problem-row data-score="5.6" data-severity="medium" data-class="Callee.load" data-categories="Выполнение">
-            <td><span class="problem-score sev-medium">5.6</span><div class="muted">средний риск</div><div class="muted">есть сигналы во время выполнения</div></td>
-            <td><div class="problem-location"><code>Callee</code><div class="method"><code>load</code></div></div></td>
-            <td><div class="problem-tags"><span class="problem-chip">Выполнение</span></div><div class="muted">Выполняемый метод</div></td>
+          <tr data-code-problem-row data-score="1.6" data-severity="ok" data-class="Caller.run" data-categories="Выполнение">
+            <td><span class="problem-score sev-ok">1.6</span><div class="muted">низкий риск</div><div class="muted">есть сигналы во время выполнения</div></td>
+            <td><div class="problem-location"><code>Caller</code><div class="method"><code>run</code></div></div></td>
+            <td><div class="problem-tags"><span class="problem-chip">Выполнение</span></div><div class="muted">Инициатор вызова</div></td>
             <td>
-              <details class="code-problem-details" data-code-problem-evidence-key="6:Calleeload">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: вызовов=2, макс=20 мс.</em></span><small>1 сигнал · 2 сценария</small></summary>
+              <details class="code-problem-details" data-code-problem-evidence-key="6:Callerrun">
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: вызовов=2, макс=20 мс.</em></span><small>1 сигнал · 1 сценарий</small></summary>
                 <div class="code-problem-detail-body" data-code-problem-evidence-body data-impact-label="Влияние" data-signals-label="Сигналы"><div class="code-problem-detail-block span-all"><strong>Полные доказательства</strong><p>Откройте строку, чтобы развернуть все сигналы и сценарии без усечения.</p></div></div>
               </details>
             </td>
@@ -248,7 +242,7 @@
 
         </tbody>
       </table>
-      <script type="application/octet-stream" data-code-problem-evidence-archive data-encoding="gzip-base64url">H4sIAAAAAAAE_-xYy27bVhPe_09xcNb8BVtBuqDgRRGgu3bRLgvDUKWDhIgkBhSdtAgM6IIkbRVYbbrpopf0DWhZjGhd6Ff45hX6JMV3qAvlSLaCpg0KeGfzXObMzDfffKOnuu5XjXa112g-MpVQO_pR4H9VM_Wmdr98qiu1crN51CjXjXb1vXKtZgLt6LoJH_hV7erguKEd7T9pmEC78_VCYD82K35gtPuRo5vmsQm88Bvt6rqpesd17fBg6NXNkXnsVU2jYrQbBsfG0ZVyaO77gWdoXuOV9HCJFBPMEGOGBLF2NH7CBBEGmEkPF4o7pIMUY669RiJtjNXHn32uD9e80fiZV8hzJIh4QFoKA-lhhBQDRDz9OyLpYoRI4XxhBCnOkaqVGUS8uendb5RrfOdTPQ_QzseXjjIo17mTi53_UDuLqN4p3HV0xT9uhNrdd3Toh-XaEVNW3NtzdL389eqfqgnLXk27Gr9hjBQzV-07StpIcSY96SDBhctPmCLCWNpI7F8TeQm6HiuMMEMkLxYZcFVxb09hKu2CPnFWzt8Y3Xlyrc-bM7vF3WLO3WLe3Ttr3jo5Z39BLB1pIcEYibLOfo8YQySYSV9OpcPctxEzFAPpY8RtU55CiiEih35HuLRwijCzYIsVLnkpz15FZlJSFlQvljsRSwuxPOOF0svOjKRHrMmpfMfIqz-fv1pbQIypENXMkDyTlrUd806FgeKFiKVtfYvnJy18UwwK-uSQEAmMaRCX-t4DU3noH7OqPzGmStRWA69WO6r6Txq713fT3kgCWN23KlyNP5DgnBjBRHquugEIJWW3nmEipxjSNQbiYL-kpC1dTIk-aRF7B8UMZqU1bHLPYqVAKjEVv143jWo59Hy-0qaIFR1LS15Khzl-jtjW7wuMpXslbAoJTTPvhH5qo_tyvilLF7OyoIEcRkokBZtk8hNLJ7PWkT7eyI-YSFdOmbMIZ0ilI10l7euZhY_ZwYGhhSUR1mFhEpNkLcttiZPhndCxZrMSmCHCG0t8CS5oRtr2gd_abzEmiHFRyl47whn_s95gaAn4_C1fnE0P_SIMvEr4qV811gRLMJI2M5sFdI3NpW83dWmNLmT2zjAhmSORlk0jC_imsBEIK0K-kekPyVs79bYl9m0BOX8D947atT1sqZDipgrZv6ZEsiWG5rZGbJne1sg71Iizu5w5ZN_x6o_KlVC7WroZAZJTpM-OqmQD_77FBCRijCy_tmxboPyYkpp5mhKE7TwpqTxDSNcaWKk12zx5uSX0MUmKLCI9S3R98lsmEPEDfsVrEtCcby-lS-VI7TdGhGFGPyw6pBhRE1hTfAX3UWEqQur_ZN4lTSLFBfcsKL_HPRO2GHpxiZQ9iFpjRkN5kTnNPRvxbdnetraUQCQQ1tXWgIKSS2zhS-lFlLsLLLOHxpge7DtZ211qxIOis1RTB-s6_u1-aHRu1qv55aq-MuyZwvzrfNq7W3j_897VIS43OZBd5nLZ0gYl3JAHVjS3Gk9uPLc-lOW2WzLKRs8tA4r1ez6P3Q4o_-yAsgmUS5W244SSS-5GDG1RYP_FGYX0sSqHtZ9UNrq-TRtfG_YdxPF7DPl2zTtfoc8fUPLS_DuG_ND51_QTX_eBg_MO7Wz1-1yKq81LYSrtgj45PPnfXwEAAP__89FOtMgUAAA</script>
+      <script type="application/octet-stream" data-code-problem-evidence-archive data-encoding="gzip-base64url">H4sIAAAAAAAE_-xUzYrbVhTe9ykuZy3M1EO7kPEq0JcoxqjSJRXVzyDJScswYHnIhNZhDFl10U3fQHF8a8WWNK_wnVfok5Qju_6ZmJRhWgphFgIhnXPu-X7ud0lh7GmyyY_SC-1mZNFFEn8X6DAl-9tLcgMnTYeRE2qy6ZkTBFqTRaHOvo89simIHY8sil9GOiGbnrUFnWDzNXXjRJN93vnKolS_0Imf_UQ2xT-QRckoyvxQD_UL39ORq8nOkpG2yHUy_TxOfC3HE97yFHdosEYNgxolDA2OVjyq4RkMKp7ig0IFwxM0WEhD6j-PnEBmXtIWzOHs033W39vI1oflu1U-xnWI2Y1HUUZ216IszpxgKJSen1kUOj-2790zizydOX5ANuE32ZfHKLFCqdDgHf8CgwVK1DzjW54ozDmHUZxjzjMspWyHEoWlsESBO5Sco0CNmqcwCncyVHrvU1n2lDDEr3eVMDyG4VdCG083PUueYo6Cb_lnlPig_rx5e_RjxzjnaPgVj9uzjcxUmCsZCMM5Czaz7USDuTwduhpYlLqJ1pGIQ99o7YleXuIHwdCLX0YPcOFmDtmbKRbpnbcIv6PEe9QosOaprQ7VPCl-T7XF77DmWywEjoDvd3uKc75GhQoFj1Gj6Z-fKVSc98RyBVaco0QlNf3u5k9H_K7dOAx15DmZH8uOrSxCg-Exv-EJjOIbGHE7v8aKr-9RpVDK0eLoEhWaltE326KNRKIEGrxHI6ts3Y9Cjt_7_8jIJ6HTQETxwwvHzcgmvuYJz_AHDNZSz5OTix7dUp6J9CixbA06bvmr0aASDAKzbukrUcp2_zM5xz4RYy6wQiGG3plGpLK3bMu7PP2uJUS3mu-1vrJOpWZCB6mZjKL7oZl0Nh-3-fFl5-uPs-VfzMxfJUv5BiUKsRSPD6EVcgP3jtkn5j90PSIvW7xPefnf5eUJ_z0kLj-t_Gcclp8G_hSVj4vKwdUXfwUAAP__iAnVpYEKAAA</script>
     </div>
       </div>
     </details>
@@ -259,68 +253,7 @@
 
 
 
-  <section id="ui" class="panel">
-    <div class="panel-head">
-      <div><h2>Плавность UI и возможные причины</h2><div class="panel-kicker">Для каждого экрана показан путь проверки: симптом → возможная причина → данные → код → повторная проверка.</div></div>
-    </div>
-    <div class="analysis-intro ui-attribution-intro"><strong>Как читать:</strong> сначала показаны события, для которых подтверждён главный поток или долгая пауза. Длинные вызовы кода и сеть ниже означают совпадение в том же сценарии - их связь с конкретным медленным кадром нужно проверить.</div>
 
-
-    <div class="ui-problem-summary warning"><strong>Экраны, требующие внимания: 1.</strong> Они показаны первыми. Для каждого экрана выводятся до 12 самых сильных проблемных элементов и факторов; число остальных указано рядом с карточками.</div>
-    <div class="analysis-insight-grid ui-insight-grid">
-
-      <article class="analysis-insight-card ui-screen-insight sev-medium" data-tip="Карточка объединяет плавность экрана, работу главного потока, файловые операции, вызовы кода, сеть, память и журналирование. Уровень связи показывает, что зафиксировано напрямую, а что ещё нужно проверить.">
-        <div class="analysis-insight-head"><code>Feed</code><span>плохо, но мало данных</span></div>
-        <h3>Медленные кадры заметны, однако сценарий нужно повторить</h3>
-        <p>7 кадров из 12 кадров были медленными (58.3%). Кадров мало, поэтому повторите тот же сценарий перед окончательным выводом.</p>
-        <p class="ui-diagnosis"><strong>Итог анализа:</strong> Главный маршрут расследования: Главный поток не обрабатывал кадры. Ниже причины отделены от простых совпадений и отсортированы по силе доступных данных.</p>
-
-        <section class="ui-cause-analysis" aria-label="Возможные причины подтормаживаний">
-          <h4>Наиболее сильные проблемные элементы и факторы</h4>
-
-          <div class="ui-cause-grid">
-
-            <article class="ui-cause-card relation-direct">
-              <div class="ui-cause-head"><span>Уровень связи</span><strong>пауза подтверждена</strong></div>
-              <h5>Главный поток не обрабатывал кадры</h5>
-              <p class="ui-cause-evidence">Главный поток останавливался 1 раз; самая длинная пауза - 200 мс. Во время паузы стек указывал на unknown.</p>
-              <p><strong>Почему это показано:</strong> Это прямое подтверждение подвисания главного потока. Строка стека показывает место, где поток находился при снимке, но не заменяет полную трассу вызовов.</p>
-              <dl>
-                <div><dt>Где смотреть код</dt><dd>Проверьте: источник Caller.run.</dd></div>
-                <div><dt>Как проверить версию</dt><dd>Откройте указанный метод и его вызывающую цепочку: ищите синхронный I/O, ожидание блокировки, тяжёлое вычисление или большую работу измерения, размещения и отрисовки.</dd></div>
-              </dl>
-            </article>
-
-          </div>
-        </section>
-
-        <details class="ui-context-details"><summary>Что происходило рядом в этом экранном контексте</summary><p>В том же экранном контексте записаны: 1 пауза главного потока, самая длинная - 200 мс; 1 проблемный сигнал.</p></details>
-      </article>
-
-    </div>
-    <details class="fold">
-      <summary>Исходные показатели экранов</summary>
-      <div class="fold-body">
-
-        <div class="chart-list">
-
-          <div class="chart-row"><code>Feed</code><div class="chart-track warn"><i style="width:58.33%"></i></div><strong>58.33%</strong></div>
-
-        </div>
-        <h3>Подробная таблица экранов</h3>
-        <table>
-          <tr><th><span class="explain" tabindex="0" data-tip="Имя экрана из контекста выполнения или автоматической разметки кода.">Экран</span></th><th><span class="explain" tabindex="0" data-tip="Число интервалов наблюдения за интерфейсом на этом экране.">Окна</span></th><th><span class="explain" tabindex="0" data-tip="Общее число кадров в записанных интервалах.">Кадры</span></th><th><span class="explain" tabindex="0" data-tip="Кадры, превысившие целевое время текущей частоты экрана.">Медленные кадры</span></th><th><span class="explain" tabindex="0" data-tip="Процент медленных кадров. На коротком интервале учитывайте также общее число кадров.">Доля подтормаживаний</span></th><th><span class="explain" tabindex="0" data-tip="Среднее число кадров в секунду. Сравнивайте на устройствах с одинаковой частотой дисплея.">Средняя частота кадров</span></th><th><span class="explain" tabindex="0" data-tip="Самое низкое число кадров в секунду среди интервалов наблюдения.">Минимальная частота кадров</span></th><th><span class="explain" tabindex="0" data-tip="Техническое обозначение - p95: у 95% кадров длительность была не больше этого значения.">Задержка верхних 5% кадров</span></th><th><span class="explain" tabindex="0" data-tip="Техническое обозначение - p99: у 99% кадров длительность была не больше этого значения.">Задержка верхнего 1% кадров</span></th><th>Источник данных о кадрах</th><th>Целевое время кадра</th></tr>
-
-          <tr>
-            <td><code>Feed</code></td><td>1</td><td>12</td><td>7</td>
-            <td><div>58.33%</div><div class="bar"><i style="width:58.33%"></i></div></td>
-            <td>недостаточно кадров</td><td>-</td><td>12 мс</td><td>12 мс</td><td>Choreographer</td><td>16666.67 мс</td>
-          </tr>
-
-        </table>
-      </div>
-    </details>
-  </section>
 
 
 
@@ -338,84 +271,15 @@
       <div><h2>Связанные сигналы</h2><div class="panel-kicker">Объединённый анализ показывает, какие симптомы совпали во время одной операции на одном экране и с какого кода начать проверку.</div></div>
     </div>
 
-    <div class="analysis-intro">Каждая карточка объединяет события одной операции, экрана и источника. Чем больше разных сигналов совпало, тем выше карточка в списке.</div>
-    <div class="analysis-insight-grid operation-context-insight-grid">
 
-      <article class="analysis-insight-card operation-context-insight-card sev-critical" data-tip="Карточка объединяет сигналы, записанные для одной операции и экрана, и предлагает первый практический шаг проверки.">
-        <div class="analysis-insight-head"><span>критично</span><small>1 вид сигнала</small></div>
-        <h3>Feed</h3>
-        <p class="analysis-insight-context">экран Feed · источник Caller.run</p>
-        <p><strong>Что произошло:</strong> Медленными были 7 кадров из 12 кадров (58.3%).</p>
-        <p><strong>Что это значит:</strong> Для пользователя это может означать: подтормаживания UI и медленная реакция на действие.</p>
-        <p class="analysis-insight-action"><strong>С чего начать:</strong> Сначала профилируйте отрисовку экрана и работу в Caller.run во время медленных кадров.</p>
-      </article>
-
-      <article class="analysis-insight-card operation-context-insight-card sev-medium" data-tip="Карточка объединяет сигналы, записанные для одной операции и экрана, и предлагает первый практический шаг проверки.">
-        <div class="analysis-insight-head"><span>нужно проверить</span><small>2 вида сигнала</small></div>
-        <h3>Feed</h3>
-        <p class="analysis-insight-context">экран Feed · источник Caller.run</p>
-        <p><strong>Что произошло:</strong> Главный поток останавливался 1 раз; максимум - 200 мс. Для 1 зависаний статус завершения не указан в логе. Объединённых проблемных сигналов - 1.</p>
-        <p><strong>Что это значит:</strong> Для пользователя это может означать: подтормаживания UI и медленная реакция на действие.</p>
-        <p class="analysis-insight-action"><strong>С чего начать:</strong> Сначала откройте трассу главного потока в Caller.run и найдите синхронную работу вокруг самой длинной паузы.</p>
-      </article>
-
-    </div>
     <details class="fold">
       <summary>Исходные измерения и технические связи</summary>
       <div class="fold-body">
 
 
-        <table id="signal-context-table">
-          <tr><th>Экран</th><th>Операция</th><th><span class="explain" tabindex="0" data-tip="Класс или метод, активный при записи события. Это первое место для проверки кода.">Источник</span></th><th>Маршрут</th><th><span class="explain" tabindex="0" data-tip="Число сетевых событий именно в этом контексте.">Сетевые вызовы</span></th><th>Ошибки</th><th><span class="explain" tabindex="0" data-tip="Техническое обозначение - p95. При малой выборке это одна из худших задержек, поэтому смотрите также число вызовов.">Задержка верхних 5% вызовов</span></th><th><span class="explain" tabindex="0" data-tip="Медленные и все кадры в контексте.">Подтормаживания интерфейса</span></th><th>Паузы</th><th><span class="explain" tabindex="0" data-tip="Самая длинная зафиксированная пауза главного потока в контексте.">Макс. пауза</span></th><th>Избыток сообщений журнала</th><th><span class="explain" tabindex="0" data-tip="Число интервалов, в которых рядом записаны проблемные сигналы.">Проблемные интервалы</span></th><th><span class="explain" tabindex="0" data-tip="Максимальный объём физической памяти процесса в контексте.">Макс. PSS</span></th></tr>
-
-          <tr>
-            <td><code>Feed</code></td>
-            <td><code><span class="explain" tabindex="0" data-tip="Операция приходит из startOperation/traceOperation, @JankHunterOperation или автоматического измерения UI-действий. Если её нет, участок не размечен или его пакет исключён из обработки.">нет данных</span></code></td>
-            <td><code>Caller.run</code></td>
-            <td><code><span class="explain" tabindex="0" data-tip="Маршрут определяется по ASM-хукам OkHttp и HTTP. Если его нет, проверьте instrument.okhttp, includePackages и поддержку вашей версии OkHttp.">нет данных</span></code></td>
-            <td>0</td>
-            <td>0</td>
-            <td>нет HTTP-замера</td>
-            <td>нет замера интерфейса</td>
-            <td>1</td>
-            <td>200 мс</td>
-            <td>0</td>
-            <td>1</td>
-            <td>нет замера</td>
-          </tr>
-
-          <tr>
-            <td><code>Feed</code></td>
-            <td><code><span class="explain" tabindex="0" data-tip="Операция приходит из startOperation/traceOperation, @JankHunterOperation или автоматического измерения UI-действий. Если её нет, участок не размечен или его пакет исключён из обработки.">нет данных</span></code></td>
-            <td><code>Caller.run</code></td>
-            <td><code><span class="explain" tabindex="0" data-tip="Маршрут определяется по ASM-хукам OkHttp и HTTP. Если его нет, проверьте instrument.okhttp, includePackages и поддержку вашей версии OkHttp.">нет данных</span></code></td>
-            <td>0</td>
-            <td>0</td>
-            <td>нет HTTP-замера</td>
-            <td>7 / 12 · 58.33%</td>
-            <td>0</td>
-            <td>не зафиксировано</td>
-            <td>0</td>
-            <td>0</td>
-            <td>нет замера</td>
-          </tr>
-
-        </table>
 
 
 
-        <div class="split">
-
-          <div>
-            <h3><span class="explain" tabindex="0" data-tip="Интервалы, где Jank Hunter увидел один или несколько симптомов: медленный HTTP-запрос, паузу главного потока, подтормаживание UI, удержание объекта или лишние логи. Название причины - тип сигнала, а не доказанная причина.">Проблемные окна</span></h3>
-            <table>
-              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Операция</th><th>Источник</th></tr>
-
-              <tr><td>пауза главного потока</td><td>1</td><td>1</td><td>200 мс</td><td>200 мс</td><td><code>Feed</code></td><td><code><span class="explain" tabindex="0" data-tip="Операция приходит из startOperation/traceOperation, @JankHunterOperation или автоматического измерения UI-действий. Если её нет, участок не размечен или его пакет исключён из обработки.">нет данных</span></code></td><td><code>Caller.run</code></td></tr>
-
-            </table>
-          </div>
-        </div>
 
 
         <h3 id="runtime-calls"><span class="explain" tabindex="0" data-tip="Переходы между методами, записанные при выполнении приложения. Итоговая длительность включает обёрнутый вызов и не равна чистому времени процессора внутри метода.">Связи вызовов</span></h3>
@@ -424,9 +288,7 @@
         <table id="runtime-calls-table">
           <tr><th>Экран</th><th>Операция</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
 
-          <tr><td><code>Checkout</code></td><td><code>нет данных</code></td><td><code>Caller.run</code></td><td><code>Callee.load</code></td><td>1</td><td>20 мс</td><td>20 мс</td></tr>
-
-          <tr><td><code>Feed</code></td><td><code>нет данных</code></td><td><code>Caller.run</code></td><td><code>Callee.load</code></td><td>1</td><td>10 мс</td><td>10 мс</td></tr>
+          <tr><td><code>Feed</code></td><td><code>нет данных</code></td><td><code>Caller.run</code></td><td><code>Callee.load</code></td><td>2</td><td>30 мс</td><td>20 мс</td></tr>
 
         </table>
 
@@ -434,22 +296,7 @@
     </details>
   </section>
 
-  <section id="owners" class="panel">
-    <div class="panel-head">
-      <div><h2>Источники проблемных событий</h2><div class="panel-kicker">Классы, методы и подсказки стека, с которых удобнее начинать проверку самых длинных или частых событий.</div></div>
-    </div>
-    <details class="fold">
-      <summary>Детали источников</summary>
-      <div class="fold-body">
-        <table>
-          <tr><th><span class="explain" tabindex="0" data-tip="Owner из аннотации, ASM-данных, withOwner или ownerHint.">Источник / класс</span></th><th><span class="explain" tabindex="0" data-tip="Вид события этого owner: пауза, HTTP, логирование и другие.">Тип</span></th><th><span class="explain" tabindex="0" data-tip="Число событий этого типа у источника.">Количество</span></th><th><span class="explain" tabindex="0" data-tip="Сумма длительностей событий. Пересекающиеся работы могут учитываться одновременно, поэтому это не время работы CPU для класса.">Итого</span></th><th><span class="explain" tabindex="0" data-tip="Самая длинная длительность одного события.">Максимум</span></th><th><span class="explain" tabindex="0" data-tip="Первый доступный кадр кода приложения. Это место для проверки, а не полный stack trace.">Подсказка стека</span></th></tr>
 
-          <tr><td><code>Caller.run</code></td><td>пауза главного потока</td><td>1</td><td>200 мс</td><td>200 мс</td><td><pre style="white-space: pre-wrap; margin: 0"><code><span class="explain" tabindex="0" data-tip="Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра.">нет данных</span></code></pre></td></tr>
-
-        </table>
-      </div>
-    </details>
-  </section>
 
 
 
@@ -492,7 +339,7 @@
         </div>
         <h3>Разбивка по процессам</h3><table><thead><tr><th>Процесс</th><th>Сессии</th></tr></thead><tbody><tr><td><code>main</code></td><td>1</td></tr></tbody></table>
 
-        <h3>Сопоставимые группы запусков</h3><table><thead><tr><th>Группа</th><th>События</th></tr></thead><tbody><tr><td><code><span class="explain" tabindex="0" data-tip="Группа запуска определяется по устройству, версии приложения, сборке, процессу и сети. Неизвестная часть означает, что начальные данные не попали в журнал.">app=1.0 build=1 sdk=api-35 device=fixture process=main network=неизвестно root=no</span></code></td><td>4</td></tr></tbody></table>
+        <h3>Сопоставимые группы запусков</h3><table><thead><tr><th>Группа</th><th>События</th></tr></thead><tbody><tr><td><code><span class="explain" tabindex="0" data-tip="Группа запуска определяется по устройству, версии приложения, сборке, процессу и сети. Неизвестная часть означает, что начальные данные не попали в журнал.">app=1.0 build=1 sdk=api-35 device=fixture process=main network=неизвестно root=no</span></code></td><td>1</td></tr></tbody></table>
       </div>
     </details>
   </section>
@@ -512,12 +359,10 @@
 
       <div class="finding sev-medium"><strong>Малая выборка</strong><div class="muted">Прогон короткий. Вывод подходит для быстрой проверки, но не для решения о релизе.</div></div>
 
-      <div class="finding sev-medium"><strong>Высокая доля подтормаживаний интерфейса</strong><div class="muted">Медленные кадры интерфейса составляют 58.33% из 12 наблюдаемых кадров. Для короткого интервала наблюдения вывод считается предварительным.</div></div>
-
     </div>
     <h3>Рекомендации</h3>
     <ul class="recommendations">
-      <li>Соберите несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.</li><li>Смотрите разделы интерфейса и источников вместе: паузы главного потока часто объясняют худшие подтормаживания экранов.</li>
+      <li>Соберите несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.</li>
     </ul>
   </section>
 

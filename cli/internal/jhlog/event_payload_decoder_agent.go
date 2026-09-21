@@ -13,8 +13,10 @@ func decodeAgentPayload(
 	if err != nil {
 		return err
 	}
-	if prefix[1] != 1 {
-		return fmt.Errorf("unsupported agent event schema %d", prefix[1])
+	semanticType := AgentSemanticType(prefix[0])
+	schemaVersion := prefix[1]
+	if schemaVersion != 1 {
+		return fmt.Errorf("unsupported agent event schema %d", schemaVersion)
 	}
 	values, err := readPayloadValues(
 		reader,
@@ -33,8 +35,8 @@ func decodeAgentPayload(
 		return err
 	}
 	agent := &AgentEvent{
-		SemanticType:     AgentSemanticType(prefix[0]),
-		SchemaVersion:    prefix[1],
+		SemanticType:     semanticType,
+		SchemaVersion:    schemaVersion,
 		ProducerSequence: values[0],
 		ProducerID:       values[1],
 		ThreadToken:      values[2],
@@ -45,7 +47,7 @@ func decodeAgentPayload(
 		Payload2:         values[7],
 		Payload3:         values[8],
 	}
-	if agent.SemanticType == AgentMethodDefinition && reader.Len() > 0 {
+	if semanticType == AgentMethodDefinition && reader.Len() > 0 {
 		ref, readErr := readPayloadRef(reader, symbolNamespace, segmentState, "agent method")
 		if readErr != nil {
 			return readErr

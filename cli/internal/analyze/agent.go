@@ -22,7 +22,12 @@ const (
 type agentContext struct{ screen, flow, owner, step string }
 
 func agentContextFromSignal(context SignalContextStats) agentContext {
-	return agentContext{screen: context.Screen, flow: context.Operation, owner: context.Owner}
+	return agentContext{
+		screen: context.Screen,
+		flow:   firstNonEmpty(context.Flow, context.Operation),
+		step:   context.Step,
+		owner:  context.Owner,
+	}
 }
 
 func (context agentContext) label() string {

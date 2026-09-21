@@ -799,8 +799,8 @@ func readAttribution(
 	if err != nil {
 		return AttributionContext{}, fmt.Errorf("context presence mask: %w", err)
 	}
-	if mask&^uint64(0x7) != 0 {
-		return AttributionContext{}, fmt.Errorf("unsupported context presence bits 0x%x", mask&^uint64(0x7))
+	if mask&^uint64(0x1f) != 0 {
+		return AttributionContext{}, fmt.Errorf("unsupported context presence bits 0x%x", mask&^uint64(0x1f))
 	}
 	context := AttributionContext{Present: true}
 	targets := []struct {
@@ -809,6 +809,8 @@ func readAttribution(
 	}{
 		{1 << 0, &context.Screen},
 		{1 << 1, &context.Owner},
+		{1 << 3, &context.Flow},
+		{1 << 4, &context.Step},
 	}
 	for _, item := range targets {
 		if mask&item.bit == 0 {

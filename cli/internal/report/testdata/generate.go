@@ -107,22 +107,26 @@ func writeLog(path string, contextual, incomplete, agent bool) (result error) {
 	}
 	if err := writer.WriteEvent(jhlog.Event{
 		Type: jhlog.EventSession, TimeMS: 1,
-		Session: &jhlog.SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, ProcessID: 4, SDKInt: 35},
+		Session: &jhlog.SessionEvent{
+			AppVersionRef: jhlog.LocalSymbol(1),
+			BuildRef:      jhlog.LocalSymbol(2),
+			DeviceRef:     jhlog.LocalSymbol(3),
+			SDKInt:        35,
+			ProcessName:   "main",
+		},
 	}); err != nil {
 		return err
 	}
 	if contextual {
 		for _, event := range []jhlog.Event{
-			{Type: jhlog.EventRuntimeCall, TimeMS: 10, RuntimeCall: runtimeCall(10, 31, 1, 10, 10)},
-			{Type: jhlog.EventRuntimeCall, TimeMS: 20, RuntimeCall: runtimeCall(11, 32, 1, 20, 20)},
+			runtimeCallEvent(10, 31, 1, 10, 10, 21),
+			runtimeCallEvent(11, 32, 1, 20, 20, 21),
 		} {
 			if err := writer.WriteEvent(event); err != nil {
 				return err
 			}
 		}
-	} else if err := writer.WriteEvent(jhlog.Event{
-		Type: jhlog.EventRuntimeCall, TimeMS: 20, RuntimeCall: runtimeCall(10, 31, 2, 30, 20),
-	}); err != nil {
+	} else if err := writer.WriteEvent(runtimeCallEvent(10, 31, 2, 30, 20, 21)); err != nil {
 		return err
 	}
 	if agent {
@@ -141,7 +145,7 @@ func writeLog(path string, contextual, incomplete, agent bool) (result error) {
 			{Type: jhlog.EventAgent, TimeUS: 1_000_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentClockSync, SchemaVersion: 1, Payload0: 1_000_000_000, Payload1: 10_000}},
 			{Type: jhlog.EventAgent, TimeUS: 1_150_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentGCInterval, SchemaVersion: 1, ProducerSequence: 4, Payload0: 1_050_000_000, Payload1: 100_000_000}},
 			{Type: jhlog.EventStall, TimeMS: 1_200, Attribution: context, Stall: &jhlog.StallEvent{DurationMS: 200}},
-			{Type: jhlog.EventUIWindow, TimeMS: 1_200, Attribution: context, UIWindow: &jhlog.UIWindowEvent{WindowMS: 200, FrameCount: 12, JankCount: 7}},
+			{Type: jhlog.EventUIWindow, TimeMS: 1_200, Attribution: context, UIWindow: agentUIWindow()},
 			{Type: jhlog.EventAgent, TimeUS: 1_200_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentThreadStackSample, SchemaVersion: 1, ProducerSequence: 5, ThreadToken: 11, ContextToken: 77, Payload0: 0xB17, Payload2: uint64(1) | uint64(1)<<32}},
 			{Type: jhlog.EventAgent, TimeUS: 1_210_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentQualitySnapshot, SchemaVersion: 1, ProducerSequence: 6, Payload0: 8}},
 		}
@@ -158,16 +162,37 @@ func writeLog(path string, contextual, incomplete, agent bool) (result error) {
 	}
 	if incomplete {
 		quality[jhlog.QualityRuntimeGraphInputTotal] = 10
-		quality[jhlog.QualityRuntimeGraphCircuitBreakerTrip] = 1
-		quality[jhlog.QualityRuntimeGraphCircuitBreakerDrop] = 8
+		quality[jhlog.QualityRuntimeGraphEmittedTotal] = 2
+		quality[jhlog.QualityRuntimeGraphGenerationCapacityLoss] = 8
 	}
 	writer.SetQualitySnapshot(jhlog.QualitySnapshot{Sequence: 1, Counters: quality})
 	return nil
 }
 
-func runtimeCall(screen, step, count, total, max uint64) *jhlog.RuntimeCallEvent {
-	return &jhlog.RuntimeCallEvent{
-		ScreenID: screen, CallerID: 20, FlowID: 30, StepID: step, CalleeID: 21,
-		Count: count, TotalMS: total, MaxMS: max,
+func agentUIWindow() *jhlog.UIWindowEvent {
+	buckets := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	buckets[0] = 5
+	buckets[1] = 7
+	return &jhlog.UIWindowEvent{
+		WindowMS: 200, FrameCount: 12, JankCount: 7,
+		Source: jhlog.UIFrameSourceChoreographer, FrameDeadlineUS: 16_666_666,
+		FrameDurationBuckets: buckets,
+	}
+}
+
+func runtimeCallEvent(screenID, stepID, count, total, max, calleeID uint64) jhlog.Event {
+	return jhlog.Event{
+		Type: jhlog.EventRuntimeCall, TimeMS: total,
+		Attribution: jhlog.AttributionContext{
+			Present: true,
+			Screen:  jhlog.LocalSymbol(screenID),
+			Owner:   jhlog.LocalSymbol(20),
+			Flow:    jhlog.LocalSymbol(30),
+			Step:    jhlog.LocalSymbol(stepID),
+		},
+		RuntimeCall: &jhlog.RuntimeCallEvent{
+			CalleeRef: jhlog.LocalSymbol(calleeID),
+			Count:     count, TotalMS: total, MaxMS: max,
+		},
 	}
 }

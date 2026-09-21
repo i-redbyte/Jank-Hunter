@@ -6,8 +6,8 @@ func flowScenarioFromSignalContext(context SignalContextStats) FlowScenarioStats
 	return FlowScenarioStats{
 		StallStates:  context.StallStates,
 		Screen:       context.Screen,
-		Flow:         context.Operation,
-		Step:         "",
+		Flow:         firstNonEmpty(context.Flow, context.Operation),
+		Step:         context.Step,
 		Owner:        context.Owner,
 		RouteSample:  context.RouteSample,
 		HTTPCount:    context.HTTPCount,

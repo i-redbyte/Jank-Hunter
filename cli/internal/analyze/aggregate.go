@@ -626,6 +626,8 @@ type collectorSessionState struct {
 	currentLogIndex    uint64
 	currentAttrScreen  string
 	currentAttrOwner   string
+	currentAttrFlow    string
+	currentAttrStep    string
 	currentOperationID uint64
 	currentCohortKey   string
 	currentCohortDirty bool
@@ -710,6 +712,8 @@ func newCollector(title string, logCount int, options Options) *collector {
 			currentProduct:     "unknown",
 			currentAttrScreen:  "unknown",
 			currentAttrOwner:   "unknown",
+			currentAttrFlow:    "unknown",
+			currentAttrStep:    "unknown",
 			currentCohortDirty: true,
 			stableSymbols: stableSymbolResolver{
 				embedded:   map[embeddedSymbolKey]string{},
@@ -789,6 +793,8 @@ func (c *collector) finishLog() {
 func (c *collector) resetAttribution() {
 	c.currentAttrScreen = "unknown"
 	c.currentAttrOwner = "unknown"
+	c.currentAttrFlow = "unknown"
+	c.currentAttrStep = "unknown"
 	c.currentOperationID = 0
 }
 
@@ -1085,6 +1091,8 @@ func (c *collector) applyAttribution(dict map[uint64]string, context jhlog.Attri
 	}
 	c.currentAttrScreen = attrValue(c.resolveOwnerRef(dict, context.Screen))
 	c.currentAttrOwner = attrValue(c.resolveOwnerRef(dict, context.Owner))
+	c.currentAttrFlow = attrValue(c.resolveOwnerRef(dict, context.Flow))
+	c.currentAttrStep = attrValue(c.resolveOwnerRef(dict, context.Step))
 	c.currentOperationID = context.OperationID
 }
 

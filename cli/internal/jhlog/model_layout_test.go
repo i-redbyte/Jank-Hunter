@@ -13,7 +13,8 @@ func TestCanonicalModelLayoutStaysCompact(t *testing.T) {
 	}{
 		{name: "symbol", size: unsafe.Sizeof(SymbolRef{}), limit: 32},
 		{name: "attribution", size: unsafe.Sizeof(AttributionContext{}), limit: 144},
-		{name: "event", size: unsafe.Sizeof(Event{}), limit: 416},
+		// EventAgent adds one more typed payload pointer on the canonical Event shell.
+		{name: "event", size: unsafe.Sizeof(Event{}), limit: 480},
 		{name: "session", size: unsafe.Sizeof(SessionEvent{}), limit: 424},
 		{name: "http", size: unsafe.Sizeof(HTTPEvent{}), limit: 208},
 		{name: "ui", size: unsafe.Sizeof(UIWindowEvent{}), limit: 88},

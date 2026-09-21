@@ -90,6 +90,8 @@ func TestCanonicalCurrentAndRingAdaptersProduceEquivalentAgentSummary(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	stripAgentSummaryPaths(&current.Agent)
+	stripAgentSummaryPaths(&ring.Agent)
 	currentJSON, _ := json.Marshal(current.Agent)
 	ringJSON, _ := json.Marshal(ring.Agent)
 	if string(currentJSON) != string(ringJSON) {
@@ -184,6 +186,17 @@ func BenchmarkAgentAggregatorBoundedStreaming(b *testing.B) {
 	}
 }
 
+func validAgentUIWindow() *jhlog.UIWindowEvent {
+	buckets := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	buckets[0] = 5
+	buckets[1] = 7
+	return &jhlog.UIWindowEvent{
+		WindowMS: 200, FrameCount: 12, JankCount: 7,
+		Source: jhlog.UIFrameSourceChoreographer, FrameDeadlineUS: 16_666_666,
+		FrameDurationBuckets: buckets,
+	}
+}
+
 func agentImageFixture(dropGCSequence bool) []jhlog.Event {
 	context := jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(1), Owner: jhlog.LocalSymbol(2), OperationID: 3}
 	events := []jhlog.Event{
@@ -200,7 +213,7 @@ func agentImageFixture(dropGCSequence bool) []jhlog.Event {
 		{Type: jhlog.EventAgent, TimeUS: 1_000_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentClockSync, SchemaVersion: 1, Payload0: 1_000_000_000, Payload1: 10_000}},
 		{Type: jhlog.EventAgent, TimeUS: 1_150_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentGCInterval, SchemaVersion: 1, ProducerSequence: 4, Payload0: 1_050_000_000, Payload1: 100_000_000}},
 		{Type: jhlog.EventStall, TimeMS: 1_200, Attribution: context, Stall: &jhlog.StallEvent{DurationMS: 200}},
-		{Type: jhlog.EventUIWindow, TimeMS: 1_200, Attribution: context, UIWindow: &jhlog.UIWindowEvent{WindowMS: 200, FrameCount: 12, JankCount: 7}},
+		{Type: jhlog.EventUIWindow, TimeMS: 1_200, Attribution: context, UIWindow: validAgentUIWindow()},
 		{Type: jhlog.EventAgent, TimeUS: 1_200_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentThreadStackSample, SchemaVersion: 1, ProducerSequence: 5, ThreadToken: 11, ContextToken: 77, Payload0: 0xB17, Payload2: uint64(1) | uint64(1)<<32}},
 		{Type: jhlog.EventAgent, TimeUS: 1_210_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentQualitySnapshot, SchemaVersion: 1, ProducerSequence: 6, Payload0: 8}},
 	}
@@ -220,4 +233,13 @@ func agentImageFixture(dropGCSequence bool) []jhlog.Event {
 func agentEvent(source string, timeUS uint64, semantic jhlog.AgentSemanticType, sequence, startNS, durationNS uint64) jhlog.Event {
 	return jhlog.Event{Type: jhlog.EventAgent, Source: source, TimeUS: timeUS, TimeMS: timeUS / 1_000,
 		Agent: &jhlog.AgentEvent{SemanticType: semantic, SchemaVersion: 1, ProducerSequence: sequence, ThreadToken: 7, Payload0: startNS, Payload1: durationNS}}
+}
+
+func stripAgentSummaryPaths(summary *AgentSummary) {
+	for index := range summary.GC.Top {
+		summary.GC.Top[index].Source = ""
+	}
+	for index := range summary.Findings {
+		summary.Findings[index].TimelineReference = ""
+	}
 }

@@ -748,10 +748,12 @@ type StallStateCounts struct {
 }
 
 type SignalContextStats struct {
-	StallStates  StallStateCounts
-	Screen       string
-	Operation    string
-	Owner        string
+	StallStates StallStateCounts
+	Screen      string
+	Flow        string
+	Step        string
+	Operation   string
+	Owner       string
 	RouteSample  string
 	HTTPCount    int
 	HTTPFailed   int

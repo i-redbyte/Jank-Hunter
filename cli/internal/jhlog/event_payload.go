@@ -108,7 +108,7 @@ func (encoder eventPayloadEncoder) writeRefs(refs ...SymbolRef) error {
 }
 
 func equalAttribution(a, b AttributionContext) bool {
-	return a.Screen == b.Screen && a.Owner == b.Owner && a.OperationID == b.OperationID
+	return a.Screen == b.Screen && a.Owner == b.Owner && a.Flow == b.Flow && a.Step == b.Step && a.OperationID == b.OperationID
 }
 
 func writeAttribution(w io.Writer, context AttributionContext, stableAliases stableAliasTable) error {
@@ -118,6 +118,12 @@ func writeAttribution(w io.Writer, context AttributionContext, stableAliases sta
 	}
 	if !context.Owner.IsUnknown() {
 		mask |= 1 << 1
+	}
+	if !context.Flow.IsUnknown() {
+		mask |= 1 << 3
+	}
+	if !context.Step.IsUnknown() {
+		mask |= 1 << 4
 	}
 	if context.OperationID != 0 {
 		mask |= 1 << 2
@@ -132,6 +138,16 @@ func writeAttribution(w io.Writer, context AttributionContext, stableAliases sta
 	}
 	if mask&(1<<1) != 0 {
 		if err := writeSymbolRef(w, context.Owner, stableAliases); err != nil {
+			return err
+		}
+	}
+	if mask&(1<<3) != 0 {
+		if err := writeSymbolRef(w, context.Flow, stableAliases); err != nil {
+			return err
+		}
+	}
+	if mask&(1<<4) != 0 {
+		if err := writeSymbolRef(w, context.Step, stableAliases); err != nil {
 			return err
 		}
 	}

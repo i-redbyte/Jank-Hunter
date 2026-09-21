@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: анализ JVM TI</title>
-  <style>{{reportCSS .ReportStyle false}}</style>
+  <style>{{reportCSS .ReportStyle false "agent"}}</style>
 </head>
 <body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
@@ -68,7 +68,7 @@
     </div>
     {{range .Summary.Agent.Findings}}
     <article class="guide-card">
-      <strong>{{agentEvidenceLevelLabel .EvidenceLevel}} · доверие {{agentConfidenceLabel .Confidence}} ({{.ConfidenceScore}} из 100)</strong>
+      <strong>{{agentEvidenceLevelLabel .EvidenceLevel}} · надёжность вывода {{agentConfidenceLabel .Confidence}} ({{.ConfidenceScore}} из 100)</strong>
       <h3>{{.Symptom}}</h3>
       <p><b>Что могло повлиять:</b> {{.SuspectedCause}}</p>
       {{if .Method}}<p><b>Наблюдаемый метод:</b> <code>{{.Method}}</code></p>{{end}}

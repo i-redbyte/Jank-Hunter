@@ -22,12 +22,16 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"reportCSS": func(args ...interface{}) template.CSS {
 			includeMath := false
+			includeModern := true
 			for _, arg := range args {
 				if value, ok := arg.(bool); ok && value {
 					includeMath = true
 				}
+				if value, ok := arg.(string); ok && value == "agent" {
+					includeModern = false
+				}
 			}
-			return template.CSS(reportStylesheet(includeMath))
+			return template.CSS(reportStylesheet(includeMath, includeModern))
 		},
 		"flowKeyHint": flowKeyHint,
 		"flowCompareRows": func(baseline, candidate analyze.Summary) []flowCompareRow {
@@ -130,6 +134,7 @@ func reportTemplateFuncs() template.FuncMap {
 		"unixMillisTime":                  unixMillisTime,
 		"formatDurationNs":                formatDurationNs,
 		"dataSize":                        humanDataSizeKB,
+		"dataSizeBytes":                   humanDataSizeBytes,
 		"ruCount":                         russianCount,
 		"tip":                             tooltipHTML,
 		"metricHelp":                      metricHelp,

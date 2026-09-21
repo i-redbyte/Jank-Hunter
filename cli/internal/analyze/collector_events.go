@@ -29,6 +29,8 @@ type memoryLeakKey struct {
 type signalContextKey struct {
 	screen    string
 	operation string
+	flow      string
+	step      string
 	owner     string
 }
 
@@ -595,8 +597,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.logSpamStats[logKey]
 		if stats == nil {
 			stats = &LogSpamStats{
-				Screen: context.Screen, Flow: context.Operation, Operation: context.Operation, Owner: context.Owner,
-				Source: source, Level: level,
+				Screen: context.Screen, Flow: firstNonEmpty(context.Flow, context.Operation), Step: context.Step,
+				Operation: context.Operation, Owner: context.Owner, Source: source, Level: level,
 			}
 			c.logSpamStats[logKey] = stats
 		}
@@ -636,8 +638,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.runtimeCallStats[callKey]
 		if stats == nil {
 			stats = &RuntimeCallStats{
-				Screen: context.Screen, Flow: context.Operation, Operation: context.Operation,
-				Caller: caller, Callee: callee,
+				Screen: context.Screen, Flow: firstNonEmpty(context.Flow, context.Operation), Step: context.Step,
+				Operation: context.Operation, Caller: caller, Callee: callee,
 			}
 			c.runtimeCallStats[callKey] = stats
 		}
@@ -751,19 +753,23 @@ func (c *collector) contextKey(screenOverride, ownerOverride string) signalConte
 	return signalContextKey{
 		screen:    firstKnown(screenOverride, c.currentAttrScreen),
 		operation: c.operationAnalysis.activeName(c.currentOperationID),
+		flow:      c.currentAttrFlow,
+		step:      c.currentAttrStep,
 		owner:     firstKnown(ownerOverride, c.currentAttrOwner),
 	}
 }
 
 func signalContextKeyFromStats(context SignalContextStats) signalContextKey {
-	return signalContextKey{screen: context.Screen, operation: context.Operation, owner: context.Owner}
+	return signalContextKey{
+		screen: context.Screen, operation: context.Operation,
+		flow: context.Flow, step: context.Step, owner: context.Owner,
+	}
 }
 
 func (key signalContextKey) stats() SignalContextStats {
 	return SignalContextStats{
-		Screen:    attrValue(key.screen),
-		Operation: attrValue(key.operation),
-		Owner:     attrValue(key.owner),
+		Screen: attrValue(key.screen), Flow: attrValue(key.flow), Step: attrValue(key.step),
+		Operation: attrValue(key.operation), Owner: attrValue(key.owner),
 	}
 }
 
@@ -774,7 +780,8 @@ func (c *collector) ensureSignalContext(key signalContextKey) *SignalContextStat
 	}
 	context := key.stats()
 	stats = &SignalContextStats{
-		Screen: context.Screen, Operation: context.Operation, Owner: context.Owner,
+		Screen: context.Screen, Flow: context.Flow, Step: context.Step,
+		Operation: context.Operation, Owner: context.Owner,
 	}
 	c.signalContextStats[key] = stats
 	return stats
@@ -786,7 +793,8 @@ func (c *collector) addProblemWindow(context SignalContextStats, kind string, wi
 	stats := c.problemStats[problemKey]
 	if stats == nil {
 		stats = &ProblemWindowStats{
-			Screen: context.Screen, Flow: context.Operation, Operation: context.Operation, Owner: context.Owner, Kind: kind,
+			Screen: context.Screen, Flow: firstNonEmpty(context.Flow, context.Operation), Step: context.Step,
+			Operation: context.Operation, Owner: context.Owner, Kind: kind,
 		}
 		c.problemStats[problemKey] = stats
 	}

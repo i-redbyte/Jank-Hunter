@@ -105,6 +105,12 @@ func humanDataSizeKB(kb uint64) string {
 	}
 }
 
+func humanDataSizeBytes(value uint64) string {
+	var buf strings.Builder
+	writeDataSizeBytes(&buf, value)
+	return buf.String()
+}
+
 func tooltipHTML(label, body string) template.HTML {
 	escapedLabel := template.HTMLEscapeString(label)
 	escapedBody := template.HTMLEscapeString(body)

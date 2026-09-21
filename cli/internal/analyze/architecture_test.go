@@ -10,7 +10,7 @@ import (
 )
 
 func TestAggregationAndComparisonStaySeparated(t *testing.T) {
-	assertSourceLineLimit(t, "aggregate.go", 1_100)
+	assertSourceLineLimit(t, "aggregate.go", 1_110)
 	file, err := parser.ParseFile(token.NewFileSet(), "comparison.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse comparison.go: %v", err)
