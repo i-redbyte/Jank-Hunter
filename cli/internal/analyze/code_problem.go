@@ -433,6 +433,8 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 		Problems:        problems,
 		Signals:         signals,
 		Screens:         screens,
+		Flows:           append([]string(nil), operations...),
+		Steps:           nil,
 		Operations:      operations,
 		Routes:          routes,
 		DrillDown:       drillDown,

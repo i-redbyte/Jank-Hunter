@@ -67,6 +67,23 @@ type ReportPaths struct {
 	DependencyInjection string
 }
 
+func agentReportHref(summary analyze.Summary, link string) string {
+	if strings.TrimSpace(link) == "" || summary.Agent.EventCount == 0 {
+		return ""
+	}
+	return link
+}
+
+func agentCompareReportHref(comparison analyze.Comparison, link string) string {
+	if strings.TrimSpace(link) == "" {
+		return ""
+	}
+	if comparison.Baseline.Agent.EventCount == 0 && comparison.Candidate.Agent.EventCount == 0 {
+		return ""
+	}
+	return link
+}
+
 func PathsFor(primary string) ReportPaths {
 	return ReportPaths{
 		Main:                primary,
@@ -90,6 +107,8 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"Summary":                       summary,
 		"LogGrowthJSON":                 logGrowthJSON(summary.LogGrowth),
 		"Analysis":                      inspectAnalysis(summary, lang),
+		"ReportStyle":                   "",
+		"AgentReportHref":               agentReportHref(summary, options.Links.Agent),
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
 		"InfluenceReportHref":           options.Links.Influence,
@@ -118,6 +137,8 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 			{Title: "Логи проверяемого прогона", Empty: "Данные логов проверяемого прогона не встроены.", Logs: candidateLogs},
 		},
 		"Analysis":                      compareAnalysis(comparison, lang),
+		"ReportStyle":                   "",
+		"AgentReportHref":               agentCompareReportHref(comparison, options.Links.Agent),
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
 		"InfluenceReportHref":           options.Links.Influence,

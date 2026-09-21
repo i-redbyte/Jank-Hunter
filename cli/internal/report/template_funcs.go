@@ -20,8 +20,18 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return value
 		},
-		"reportCSS": func(includeMath bool) template.CSS {
+		"reportCSS": func(args ...interface{}) template.CSS {
+			includeMath := false
+			for _, arg := range args {
+				if value, ok := arg.(bool); ok && value {
+					includeMath = true
+				}
+			}
 			return template.CSS(reportStylesheet(includeMath))
+		},
+		"flowKeyHint": flowKeyHint,
+		"flowCompareRows": func(baseline, candidate analyze.Summary) []flowCompareRow {
+			return flowCompareRows(baseline, candidate)
 		},
 		"reportJS": func() template.JS {
 			return template.JS(reportJS)

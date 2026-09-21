@@ -67,6 +67,13 @@ func (s *uint64SampleSet) add(value uint64) {
 	}
 }
 
+func (s *uint64SampleSet) approximated() bool {
+	if s == nil || s.seen == 0 {
+		return false
+	}
+	return len(s.values) > 0 && s.seen > len(s.values)
+}
+
 func (s *uint64SampleSet) percentile(p float64) uint64 {
 	if s.seen == 0 {
 		return 0

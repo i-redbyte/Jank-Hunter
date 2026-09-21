@@ -66,6 +66,8 @@ type InstrumentationDecisionSummary struct {
 type InstrumentationAnnotationSummary struct {
 	Owner             string
 	Screen            string
+	Flow              string
+	Trace             string
 	Operation         string
 	OperationKind     string
 	OperationBudgetMS uint64
@@ -514,7 +516,16 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 func annotationSummaries(records []instrumentationAnnotationRecord) []InstrumentationAnnotationSummary {
 	out := make([]InstrumentationAnnotationSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationAnnotationSummary(record))
+		out = append(out, InstrumentationAnnotationSummary{
+			Owner:             record.Owner,
+			Screen:            record.Screen,
+			Flow:              record.Operation,
+			Trace:             record.OperationKind,
+			Operation:         record.Operation,
+			OperationKind:     record.OperationKind,
+			OperationBudgetMS: record.OperationBudgetMS,
+			Count:             record.Count,
+		})
 	}
 	sortAnnotationSummaries(out)
 	return out
@@ -605,6 +616,8 @@ func annotationMapSummaries(values map[instrumentationAnnotationKey]uint64) []In
 		out = append(out, InstrumentationAnnotationSummary{
 			Owner:             key.owner,
 			Screen:            key.screen,
+			Flow:              key.operation,
+			Trace:             key.operationKind,
 			Operation:         key.operation,
 			OperationKind:     key.operationKind,
 			OperationBudgetMS: key.operationBudgetMS,

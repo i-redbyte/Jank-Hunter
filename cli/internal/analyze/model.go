@@ -95,6 +95,8 @@ type RouteStats struct {
 	PeakRequestsPerSecond uint64
 	PeakWindowStartMS     uint64
 	BurstEstimateStatus   string
+	P95Approximate        bool
+	Sampled               int
 }
 
 type HTTPPhaseStats struct {
@@ -569,6 +571,8 @@ type ScreenStats struct {
 	FPSStatus              string
 	AvgFPS                 float64
 	MinFPS                 float64
+	P95MS                  uint64
+	MaxP99MS               uint64
 	FrameP50MS             uint64
 	FrameP95MS             uint64
 	FrameP99MS             uint64
@@ -751,8 +755,9 @@ type SignalContextStats struct {
 	RouteSample  string
 	HTTPCount    int
 	HTTPFailed   int
-	HTTPP95MS    uint64
-	StallCount   int
+	HTTPP95MS            uint64
+	HTTPP95Approximate   bool
+	StallCount           int
 	StallMaxMS   uint64
 	UIWindows    int
 	UIFrames     uint64
@@ -764,8 +769,33 @@ type SignalContextStats struct {
 	MemoryMaxKB  uint64
 }
 
+type FlowScenarioStats struct {
+	StallStates          StallStateCounts
+	Screen               string
+	Flow                 string
+	Step                 string
+	Owner                string
+	RouteSample          string
+	HTTPCount            int
+	HTTPFailed           int
+	HTTPP95MS            uint64
+	HTTPP95Approximate   bool
+	StallCount           int
+	StallMaxMS           uint64
+	UIWindows            int
+	UIFrames             uint64
+	UIJank               uint64
+	UIJankPct            float64
+	LogSpam              uint64
+	ProblemCount         uint64
+	ProblemMaxMS         uint64
+	MemoryMaxKB          uint64
+}
+
 type LogSpamStats struct {
 	Screen    string
+	Flow      string
+	Step      string
 	Operation string
 	Owner     string
 	Source    string
@@ -775,6 +805,8 @@ type LogSpamStats struct {
 
 type ProblemWindowStats struct {
 	Screen        string
+	Flow          string
+	Step          string
 	Operation     string
 	Owner         string
 	Kind          string
@@ -786,6 +818,8 @@ type ProblemWindowStats struct {
 
 type RuntimeCallStats struct {
 	Screen    string
+	Flow      string
+	Step      string
 	Operation string
 	Caller    string
 	Callee    string
@@ -818,6 +852,8 @@ type CodeProblemStats struct {
 	Problems        []string               `json:"problems,omitempty"`
 	Signals         []CodeProblemSignal    `json:"signals,omitempty"`
 	Screens         []string               `json:"screens,omitempty"`
+	Flows           []string               `json:"flows,omitempty"`
+	Steps           []string               `json:"steps,omitempty"`
 	Operations      []string               `json:"operations,omitempty"`
 	Routes          []string               `json:"routes,omitempty"`
 	DrillDown       []CodeProblemDrillDown `json:"drill_down,omitempty"`
@@ -845,6 +881,8 @@ type MemoryLeakSuspect struct {
 	ClassName                string
 	Holder                   string
 	Screen                   string
+	Flow                     string
+	Step                     string
 	Operation                string
 	Count                    uint64
 	MaxAgeMS                 uint64
@@ -1396,6 +1434,7 @@ type Summary struct {
 	ProcessExits          []ProcessExitStats
 	Owners                []OwnerStats
 	SignalContexts        []SignalContextStats
+	Flows                 []FlowScenarioStats
 	LogSpam               []LogSpamStats
 	ProblemWindows        []ProblemWindowStats
 	RuntimeCalls          []RuntimeCallStats

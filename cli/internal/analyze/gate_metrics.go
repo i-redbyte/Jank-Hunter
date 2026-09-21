@@ -17,7 +17,9 @@ func gateMetricKind(name string) (known, numeric bool) {
 	switch name {
 	case "HTTP p95", "HTTP failure rate", "UI jank rate", "UI avg FPS", stallDurationMetric,
 		"Max PSS", "Min available memory", "UID RX delta", "UID TX delta", "Retained objects",
-		"Log spam", "Problem windows", completenessMetric:
+		"Log spam", "Problem windows", completenessMetric,
+		"JVM TI: время сборки мусора", "JVM TI: число сборок мусора",
+		"JVM TI: время ожидания блокировок", "JVM TI: число ожиданий блокировок":
 		return true, true
 	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
 		return true, false

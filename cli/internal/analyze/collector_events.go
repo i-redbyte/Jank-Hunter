@@ -595,7 +595,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.logSpamStats[logKey]
 		if stats == nil {
 			stats = &LogSpamStats{
-				Screen: context.Screen, Operation: context.Operation, Owner: context.Owner,
+				Screen: context.Screen, Flow: context.Operation, Operation: context.Operation, Owner: context.Owner,
 				Source: source, Level: level,
 			}
 			c.logSpamStats[logKey] = stats
@@ -636,7 +636,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.runtimeCallStats[callKey]
 		if stats == nil {
 			stats = &RuntimeCallStats{
-				Screen: context.Screen, Operation: context.Operation,
+				Screen: context.Screen, Flow: context.Operation, Operation: context.Operation,
 				Caller: caller, Callee: callee,
 			}
 			c.runtimeCallStats[callKey] = stats
@@ -786,7 +786,7 @@ func (c *collector) addProblemWindow(context SignalContextStats, kind string, wi
 	stats := c.problemStats[problemKey]
 	if stats == nil {
 		stats = &ProblemWindowStats{
-			Screen: context.Screen, Operation: context.Operation, Owner: context.Owner, Kind: kind,
+			Screen: context.Screen, Flow: context.Operation, Operation: context.Operation, Owner: context.Owner, Kind: kind,
 		}
 		c.problemStats[problemKey] = stats
 	}

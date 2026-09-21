@@ -93,6 +93,8 @@ func (c *collector) finish() Summary {
 			BurstEstimateStatus:   burst.status(),
 			PeakRequestsPerSecond: burst.peak,
 			PeakWindowStartMS:     burst.peakWindowStartMS,
+			Sampled:               stats.durations.seen,
+			P95Approximate:        stats.durations.approximated(),
 		}
 		summary.Routes = append(summary.Routes, row)
 	}
@@ -121,6 +123,8 @@ func (c *collector) finish() Summary {
 		stats.FrameP50MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 50)
 		stats.FrameP95MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 95)
 		stats.FrameP99MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 99)
+		stats.P95MS = stats.FrameP95MS
+		stats.MaxP99MS = stats.FrameP99MS
 		summary.Screens = append(summary.Screens, *stats)
 	}
 	if summary.UIFrames > 0 {
@@ -135,6 +139,7 @@ func (c *collector) finish() Summary {
 	for key, stats := range c.signalContextStats {
 		if durations := c.signalContextHTTPDurations[key]; durations != nil {
 			stats.HTTPP95MS = durations.percentile(0.95)
+			stats.HTTPP95Approximate = durations.approximated()
 		}
 		if stats.UIFrames > 0 {
 			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
@@ -277,6 +282,7 @@ func (c *collector) finish() Summary {
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
 	sortSignalContexts(summary.SignalContexts)
+	summary.Flows = buildFlowScenarios(summary.SignalContexts)
 	sortLogSpam(summary.LogSpam)
 	sortProblems(summary.ProblemWindows)
 	sortRuntimeCalls(summary.RuntimeCalls)

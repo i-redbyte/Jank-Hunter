@@ -797,3 +797,118 @@ func nonNegativeInt(value int) uint64 {
 	}
 	return uint64(value)
 }
+
+type flowCompareRow struct {
+	signalContextCompareRow
+	Flow string
+	Step string
+}
+
+func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
+	base := map[string]analyze.FlowScenarioStats{}
+	cand := map[string]analyze.FlowScenarioStats{}
+	keys := map[string]struct{}{}
+	for _, flow := range baseline.Flows {
+		key := flowScenarioKey(flow)
+		base[key] = flow
+		keys[key] = struct{}{}
+	}
+	for _, flow := range candidate.Flows {
+		key := flowScenarioKey(flow)
+		cand[key] = flow
+		keys[key] = struct{}{}
+	}
+	rows := make([]flowCompareRow, 0, len(keys))
+	for key := range keys {
+		b, hasBaseline := base[key]
+		c, hasCandidate := cand[key]
+		countsComparable := hasBaseline && hasCandidate && durationComparableForReport(baseline.DurationMS, candidate.DurationMS)
+		httpComparable := hasBaseline && hasCandidate && b.HTTPCount > 0 && c.HTTPCount > 0
+		stallComparable := hasBaseline && hasCandidate && b.StallCount > 0 && c.StallCount > 0
+		uiComparable := hasBaseline && hasCandidate && b.UIFrames > 0 && c.UIFrames > 0
+		problemDelta := int64(0)
+		logDelta := int64(0)
+		httpDelta := int64(0)
+		stallDelta := int64(0)
+		jankDelta := float64(0)
+		if countsComparable {
+			problemDelta = saturatingSignedDelta(c.ProblemCount, b.ProblemCount)
+			logDelta = saturatingSignedDelta(c.LogSpam, b.LogSpam)
+		}
+		if httpComparable {
+			httpDelta = saturatingSignedDelta(c.HTTPP95MS, b.HTTPP95MS)
+		}
+		if stallComparable {
+			stallDelta = saturatingSignedDelta(c.StallMaxMS, b.StallMaxMS)
+		}
+		if uiComparable {
+			jankDelta = c.UIJankPct - b.UIJankPct
+		}
+		comparable := countsComparable || httpComparable || stallComparable || uiComparable
+		severity := "ok"
+		if comparable {
+			severity = signalContextDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta)
+		}
+		note := comparePresenceNote(hasBaseline, hasCandidate, "контекст сценария")
+		if hasBaseline && hasCandidate && !comparable {
+			note = "нет метрик с сопоставимым покрытием"
+		} else if hasBaseline && hasCandidate && !countsComparable {
+			note = "количества не сравниваются из-за разной длительности; статус рассчитан по доступным задержкам и UI-метрикам"
+		}
+		rows = append(rows, flowCompareRow{
+			signalContextCompareRow: signalContextCompareRow{
+				Screen:                firstNonEmpty(c.Screen, b.Screen),
+				Operation:             firstNonEmpty(c.Flow, b.Flow),
+				Owner:                 firstNonEmpty(c.Owner, b.Owner),
+				BaselineProblems:      b.ProblemCount,
+				CandidateProblems:     c.ProblemCount,
+				DeltaProblems:         problemDelta,
+				BaselineLogSpam:       b.LogSpam,
+				CandidateLogSpam:      c.LogSpam,
+				DeltaLogSpam:          logDelta,
+				BaselineHTTPP95MS:     b.HTTPP95MS,
+				CandidateHTTPP95MS:    c.HTTPP95MS,
+				DeltaHTTPP95MS:        httpDelta,
+				BaselineStallMaxMS:    b.StallMaxMS,
+				CandidateStallMaxMS:   c.StallMaxMS,
+				DeltaStallMaxMS:       stallDelta,
+				BaselineJankPct:       b.UIJankPct,
+				CandidateJankPct:      c.UIJankPct,
+				DeltaJankPct:          jankDelta,
+				Severity:              severity,
+				Comparable:            comparable,
+				ComparisonNote:        note,
+				BaselinePresent:       hasBaseline,
+				CandidatePresent:      hasCandidate,
+				BaselineHTTPPresent:   hasBaseline && b.HTTPCount > 0,
+				CandidateHTTPPresent:  hasCandidate && c.HTTPCount > 0,
+				BaselineUIPresent:     hasBaseline && b.UIFrames > 0,
+				CandidateUIPresent:    hasCandidate && c.UIFrames > 0,
+				BaselineStallPresent:  hasBaseline && b.StallCount > 0,
+				CandidateStallPresent: hasCandidate && c.StallCount > 0,
+				CountsComparable:      countsComparable,
+			},
+			Flow: firstNonEmpty(c.Flow, b.Flow),
+			Step: firstNonEmpty(c.Step, b.Step),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
+			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
+		}
+		return signalContextDeltaSortScore(rows[i].signalContextCompareRow) > signalContextDeltaSortScore(rows[j].signalContextCompareRow)
+	})
+	return rows
+}
+
+func flowScenarioKey(flow analyze.FlowScenarioStats) string {
+	return strings.Join([]string{flow.Screen, flow.Flow, flow.Step, flow.Owner}, "\x00")
+}
+
+func flowKeyHint(screen, flow, step, owner string) string {
+	parts := compactReportParts(screen, flow, step, owner)
+	if len(parts) == 0 {
+		return "контекст не задан"
+	}
+	return strings.Join(parts, " / ")
+}
