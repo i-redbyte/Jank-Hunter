@@ -86,7 +86,7 @@ class ArtTiHardeningTest {
     private fun waitForAgent() {
         val deadline = SystemClock.elapsedRealtime() + ATTACH_TIMEOUT_MS
         while (SystemClock.elapsedRealtime() < deadline) {
-            if (runCatching { publishSynthetic(AGENT_GC_INTERVAL, 0) }.getOrDefault(-1) == 0) return
+            if (runCatching { publishSynthetic(AGENT_GC_INTERVAL, 1) }.getOrDefault(-1) == 1) return
             SystemClock.sleep(POLL_MS)
         }
         fail("ART TI agent did not become active")

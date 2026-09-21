@@ -63,6 +63,7 @@ class RuntimeProcessStateTest {
             coordinator = RuntimeCoordinator(state) { 1L },
             elapsedRealtimeMs = RuntimeLongSource { 1L },
             processImportance = processImportance,
+            optionalIntegrations = OptionalIntegrationRegistry.disabledForTests(),
         )
     }
 }

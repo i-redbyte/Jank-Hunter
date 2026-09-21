@@ -27,7 +27,14 @@ class LegacyLifecycleCoverageTest {
         val writer = AsyncLogWriterFactory().open(directory, config, "main")
         val watcher = ObjectRetentionWatcher(1000)
         val state = RuntimeState().apply { objectRetentionWatcher = watcher }
-        val access = RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { 0L }, { 0L }, { 100 })
+        val access = RuntimeTelemetryAccess(
+            state,
+            ContextTracker(),
+            RuntimeCoordinator(state) { 0L },
+            { 0L },
+            { 100 },
+            OptionalIntegrationRegistry.disabledForTests(),
+        )
         var contextUpdates = 0L
         val metrics = RuntimeMetricsService(1, { 0L }, { writer }, { config }, { contextUpdates++ }, { false }, { _, _ -> false })
         val telemetry = RuntimeRetentionTelemetry(state, access, metrics) { 0L }

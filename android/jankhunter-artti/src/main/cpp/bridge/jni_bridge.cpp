@@ -57,6 +57,17 @@ Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeInitialize(
 }
 
 extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeResumeJvmti(
+    JNIEnv* env, jobject, jobject config_buffer) noexcept {
+  const auto* const input = DirectBuffer<ArtTiNativeConfigV1>(
+      env, config_buffer, sizeof(ArtTiNativeConfigV1));
+  if (input == nullptr) return static_cast<jint>(StatusCode::kInvalidArgument);
+  ArtTiNativeConfigV1 config{};
+  std::memcpy(&config, input, sizeof(config));
+  return Code(jankhunter::artti::art::ArtJvmtiAdapter::Instance().Resume(config));
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeDrain(
     JNIEnv* env, jobject, jobject output_buffer, jint max_records) noexcept {
   if (env == nullptr || output_buffer == nullptr || max_records < 0) {

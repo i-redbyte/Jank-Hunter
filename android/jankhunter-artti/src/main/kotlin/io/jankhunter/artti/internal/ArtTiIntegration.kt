@@ -165,10 +165,22 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
             phase = ControlPhase.PRE_ATTACH_HANDSHAKE
             verifyHandshake(runtimeConfig)
             phase = ControlPhase.ATTACH
-            // An absolute package install path may contain '=' in its base64 directory segment.
-            // Debug.attachJvmtiAgent rejects '=' in the library argument, so delegate lookup to
-            // the application class loader as intended by the public API.
-            Debug.attachJvmtiAgent(NATIVE_LIBRARY_FILE, runtimeConfig.agentOptions, context.classLoader)
+            if (jvmAgentAttached) {
+                val resumeStatus = ArtTiNativeStatus.fromWire(
+                    ArtTiNativeBridge.nativeResumeJvmti(runtimeConfig.native.encodeDirect()),
+                )
+                if (resumeStatus != ArtTiNativeStatus.OK) {
+                    lifecycle.set(Lifecycle.FAILED)
+                    report(Reason.ATTACH_FAILED, warning = true)
+                    return
+                }
+            } else {
+                // An absolute package install path may contain '=' in its base64 directory segment.
+                // Debug.attachJvmtiAgent rejects '=' in the library argument, so delegate lookup to
+                // the application class loader as intended by the public API.
+                Debug.attachJvmtiAgent(NATIVE_LIBRARY_FILE, runtimeConfig.agentOptions, context.classLoader)
+                jvmAgentAttached = true
+            }
             phase = ControlPhase.POST_ATTACH_HANDSHAKE
             val handshake = verifyHandshake(runtimeConfig)
             phase = ControlPhase.ACTIVATE
@@ -455,6 +467,9 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     }
 
     private companion object {
+        @Volatile
+        var jvmAgentAttached: Boolean = false
+
         const val TAG = "JankHunter"
         const val MIN_ATTACH_API = 28
         const val CONTROL_THREAD_NAME = "JankHunterArtTiControl"

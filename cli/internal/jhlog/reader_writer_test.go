@@ -917,6 +917,7 @@ func TestKnownQualityCounterSetIsClosedForCurrentFormat(t *testing.T) {
 		QualityReceiverAsyncRegistryEviction,
 		QualityReceiverAsyncResolutionMiss,
 		EventQualityCounterID(EventRuntimeCall, QualityLossAdmissionContention),
+		EventQualityCounterID(EventAgent, QualityLossAdmissionContention),
 	}
 	for _, id := range known {
 		if !IsKnownQualityCounter(id) {

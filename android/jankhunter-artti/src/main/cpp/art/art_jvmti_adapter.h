@@ -26,6 +26,7 @@ class ArtJvmtiAdapter final {
 
   [[nodiscard]] Status Attach(
       JavaVM* vm, jvmtiEnv* jvmti, const bridge::ArtTiNativeConfigV1& config) noexcept;
+  [[nodiscard]] Status Resume(const bridge::ArtTiNativeConfigV1& config) noexcept;
   [[nodiscard]] Status Stop(std::uint32_t timeout_ms) noexcept;
   [[nodiscard]] std::int32_t RefreshThreadMetadata(JNIEnv* jni) noexcept;
   [[nodiscard]] std::int32_t CaptureStack(
@@ -65,6 +66,7 @@ class ArtJvmtiAdapter final {
     NativeEngine* engine_{nullptr};
   };
 
+  [[nodiscard]] Status ActivateLocked() noexcept;
   [[nodiscard]] Status ConfigureCapabilities() noexcept;
   [[nodiscard]] Status ConfigureCallbacks() noexcept;
   [[nodiscard]] bool EnablePair(jvmtiEvent first, jvmtiEvent second) noexcept;

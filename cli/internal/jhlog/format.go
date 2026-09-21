@@ -1507,7 +1507,7 @@ func IsKnownQualityCounter(id uint64) bool {
 	}
 	eventType := EventType((id - 0x1000) / 16)
 	reason := QualityLossReason((id - 0x1000) % 16)
-	return eventType >= EventDictionary && eventType <= EventBinderTransaction &&
+	return eventType >= EventDictionary && eventType <= EventAgent &&
 		reason >= QualityLossQueueFull && reason <= QualityLossStorageBudget
 }
 

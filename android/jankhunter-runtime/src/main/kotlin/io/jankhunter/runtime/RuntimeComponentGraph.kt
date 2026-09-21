@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
+import io.jankhunter.runtime.internal.io.CurrentAgentEventSink
 import io.jankhunter.runtime.internal.system.isRuntimeMainThread
 import java.util.concurrent.TimeUnit
 
@@ -17,12 +18,17 @@ internal class RuntimeComponentGraph(
     val state = RuntimeState()
     val contextTracker = ContextTracker()
     val coordinator = RuntimeCoordinator(state, nowMs)
+    val optionalIntegrations = OptionalIntegrationRegistry(
+        eventSink = CurrentAgentEventSink { writer },
+        diagnostic = { },
+    )
     val telemetryAccess = RuntimeTelemetryAccess(
         state,
         contextTracker,
         coordinator,
         nowMs,
         AndroidProcessImportanceSource(),
+        optionalIntegrations,
     )
     val operationTelemetry = RuntimeOperationTelemetry(
         contextTracker,
@@ -73,6 +79,7 @@ internal class RuntimeComponentGraph(
         telemetryAccess,
         runtimeCallGraph,
         nowMs,
+        optionalIntegrations,
     )
     val systemTelemetry = RuntimeSystemTelemetry(
         contextTracker,
@@ -110,6 +117,7 @@ internal class RuntimeComponentGraph(
         collectors,
         writerFactory,
         nowMs,
+        optionalIntegrations,
     )
     val lifecycle = RuntimeLifecycleController(state, coordinator, session, metrics, nowMs)
     val networkAdapterTelemetry = RuntimeNetworkAdapterTelemetry(

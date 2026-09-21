@@ -11,6 +11,7 @@ internal class RuntimeContextTelemetry(
     private val access: RuntimeTelemetryAccess,
     private val callGraph: RuntimeCallGraph,
     private val elapsedRealtimeMs: RuntimeLongSource,
+    private val optionalIntegrations: OptionalIntegrationRegistry,
 ) {
     private val stallIds = AtomicLong()
 
@@ -35,6 +36,9 @@ internal class RuntimeContextTelemetry(
             ) {
                 writer?.updateProducerContext(context.screen, context.owner, context.operationId)
                 writer?.stall(context.screen, context.owner, stackHint, durationMs, foreground, incidentId, state.wireValue, SymbolOrigin.RUNTIME_STACK)
+                if (state == MainThreadStallState.ONGOING) {
+                    optionalIntegrations.onMainThreadStall(Thread.currentThread(), context)
+                }
                 // Make the first observation available in an open log, without main-thread recovery.
                 writer?.flush()
             }

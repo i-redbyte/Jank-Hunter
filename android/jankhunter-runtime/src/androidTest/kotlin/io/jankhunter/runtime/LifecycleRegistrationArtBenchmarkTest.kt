@@ -25,7 +25,14 @@ class LifecycleRegistrationArtBenchmarkTest {
             val running = ObjectRetentionWatcher::class.java.getDeclaredField("running").apply { isAccessible = true }
             (running.get(watcher) as AtomicBoolean).set(true)
             val state = RuntimeState().apply { objectRetentionWatcher = watcher }
-            val access = RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { 0L }, { 0L }, { 100 })
+            val access = RuntimeTelemetryAccess(
+                state,
+                ContextTracker(),
+                RuntimeCoordinator(state) { 0L },
+                { 0L },
+                { 100 },
+                OptionalIntegrationRegistry.disabledForTests(),
+            )
             val metrics = RuntimeMetricsService(8, { 0L }, { null }, { null }, {}, { false }, { _, _ -> false })
             val telemetry = RuntimeRetentionTelemetry(state, access, metrics) { 0L }
             val targets = Array(targetCount) { Any() }

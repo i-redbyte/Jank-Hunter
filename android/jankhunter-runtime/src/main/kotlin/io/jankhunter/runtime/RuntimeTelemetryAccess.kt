@@ -10,6 +10,7 @@ internal class RuntimeTelemetryAccess(
     private val coordinator: RuntimeCoordinator,
     private val elapsedRealtimeMs: RuntimeLongSource,
     private val processImportance: RuntimeIntSource,
+    private val optionalIntegrations: OptionalIntegrationRegistry,
 ) {
     private val contextChanged: () -> Unit = { ensureContextRecorded() }
 
@@ -100,6 +101,13 @@ internal class RuntimeTelemetryAccess(
             val current = state.mainThreadContext
             if (current == null || current.screen != screen || current.owner != owner || current.operationId != operationId) {
                 state.mainThreadContext = JankHunterContext(screen, owner, operationId)
+                optionalIntegrations.onContextChanged(
+                    thread = Thread.currentThread(),
+                    screen = screen,
+                    owner = owner,
+                    flow = contexts.currentOperationName(),
+                    step = null,
+                )
             }
         }
         activeWriter.updateProducerContext(

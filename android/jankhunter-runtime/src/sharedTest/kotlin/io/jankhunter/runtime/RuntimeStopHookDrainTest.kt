@@ -25,7 +25,12 @@ class RuntimeStopHookDrainTest {
         graph.state.writer = writer
         val session = RuntimeSessionController(
             graph.state, graph.coordinator, graph.metrics, graph.sampling, hooks, graph.runtimeCallGraph,
-            graph.handlerHooks, graph.asyncTelemetry, graph.collectors, AsyncLogWriterFactory(), { 10L },
+            graph.handlerHooks,
+            graph.asyncTelemetry,
+            graph.collectors,
+            AsyncLogWriterFactory(),
+            { 10L },
+            graph.optionalIntegrations,
         )
         try {
             hooks.start(writer)

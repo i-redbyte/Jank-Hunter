@@ -137,7 +137,14 @@ class RuntimeDatabaseTelemetryTest {
         val coordinator = RuntimeCoordinator(state) { 1L }
         coordinator.markStarted(enabledConfig)
         val telemetry = RuntimeDatabaseTelemetry(
-            RuntimeTelemetryAccess(state, ContextTracker(), coordinator, { 1L }, { 100 }),
+            RuntimeTelemetryAccess(
+                state,
+                ContextTracker(),
+                coordinator,
+                { 1L },
+                { 100 },
+                OptionalIntegrationRegistry.disabledForTests(),
+            ),
         )
         try {
             val database = Any()

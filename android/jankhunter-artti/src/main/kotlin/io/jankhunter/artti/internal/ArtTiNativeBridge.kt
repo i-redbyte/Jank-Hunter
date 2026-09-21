@@ -19,6 +19,8 @@ internal object ArtTiNativeBridge {
 
     external fun nativeInitialize(configBuffer: ByteBuffer): Int
 
+    external fun nativeResumeJvmti(configBuffer: ByteBuffer): Int
+
     /** Returns encoded byte count or a negative [ArtTiNativeStatus] code. */
     external fun nativeDrain(outputBuffer: ByteBuffer, maxRecords: Int): Int
 

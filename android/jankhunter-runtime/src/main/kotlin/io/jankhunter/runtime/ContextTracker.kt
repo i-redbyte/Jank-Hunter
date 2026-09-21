@@ -22,6 +22,8 @@ internal class ContextTracker(
 
     fun currentOperationId(): Long = currentOperationOrNull()?.id ?: propagatedOperationId.get()
 
+    fun currentOperationName(): String? = currentOperationOrNull()?.name
+
     fun currentOperationOrNull(): JankHunterOperation? {
         var current = operation.get()
         if (current == null || !current.isFinished) return current

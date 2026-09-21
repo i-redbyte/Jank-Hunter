@@ -83,6 +83,12 @@ internal class OptionalIntegrationRegistry(
     internal fun hasActive(): Boolean = active.isNotEmpty()
 
     companion object {
+        internal fun disabledForTests(
+            eventSink: JankHunterAgentEventSink = DisabledAgentEventSink,
+        ): OptionalIntegrationRegistry {
+            return OptionalIntegrationRegistry(discover = { emptyList() }, eventSink = eventSink, diagnostic = { })
+        }
+
         internal const val META_OPTIONAL_INTEGRATIONS = "io.jankhunter.runtime.optional_integrations"
         private const val MAX_INTEGRATIONS = 8
         private const val MAX_CLASS_NAME_LENGTH = 256
@@ -126,4 +132,18 @@ internal class OptionalIntegrationRegistry(
             }
         }
     }
+}
+
+private object DisabledAgentEventSink : JankHunterAgentEventSink {
+    override fun tryPublish(batch: JankHunterAgentEventBatch): Boolean = true
+
+    override fun tryPublishContext(
+        contextToken: Long,
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+    ): Boolean = true
+
+    override fun tryPublishMethodDefinition(methodId: Long, symbol: String): Boolean = true
 }

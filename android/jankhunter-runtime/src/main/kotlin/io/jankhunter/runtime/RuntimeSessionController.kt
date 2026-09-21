@@ -28,6 +28,7 @@ internal class RuntimeSessionController(
     private val collectors: RuntimeCollectorService,
     private val writerFactory: AsyncLogWriterFactory,
     private val elapsedRealtimeMs: RuntimeLongSource,
+    private val optionalIntegrations: OptionalIntegrationRegistry,
 ) {
     private val crashDrainInProgress = AtomicBoolean()
     private val buildIdentityResolver = RuntimeBuildIdentityResolver()
@@ -89,6 +90,7 @@ internal class RuntimeSessionController(
         hookEvents.start(writer)
         installCrashFlushHandler()
         recordRuntimeStartMetadata(writer, config, attempt)
+        optionalIntegrations.startAll(appContext)
 
         collectors.start(appContext, config, directory)
         state.logSnapshotCoordinator = try {
@@ -118,6 +120,9 @@ internal class RuntimeSessionController(
         if (stopResources) {
             val activeWriter = state.writer
             val shutdownDeadlineNs = monotonicDeadlineAfterMillis(BLOCKING_FLUSH_TIMEOUT_MS)
+            RuntimeHookGuard.swallow {
+                optionalIntegrations.stopAll(remainingTimeoutMs(shutdownDeadlineNs))
+            }
             RuntimeHookGuard.swallow { state.logSnapshotCoordinator?.close() }
             state.logSnapshotCoordinator = null
             RuntimeHookGuard.swallow { collectors.stopProducers(remainingTimeoutMs(shutdownDeadlineNs)) }

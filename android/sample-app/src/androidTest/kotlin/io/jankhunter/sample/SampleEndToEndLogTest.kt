@@ -13,6 +13,7 @@ import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterManifestConfig
 import io.jankhunter.runtime.JankHunterTelemetry
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -38,6 +39,7 @@ class SampleEndToEndLogTest {
             logDir.mkdirs()
             JankHunter.init(context, config)
         }
+        waitForActiveAgent()
 
         try {
             ActivityScenario.launch(MainActivity::class.java).use {
@@ -134,6 +136,28 @@ class SampleEndToEndLogTest {
         throw AssertionError("unreachable")
     }
 
+    private fun waitForActiveAgent() {
+        val deadline = SystemClock.elapsedRealtime() + AGENT_ATTACH_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (runCatching { publishSyntheticAgentEvent(AGENT_GC_INTERVAL, 1) }.getOrDefault(-1) == 1) {
+                return
+            }
+            SystemClock.sleep(POLL_INTERVAL_MS)
+        }
+        fail("ART TI agent did not become active")
+    }
+
+    private fun publishSyntheticAgentEvent(type: Int, count: Int): Int {
+        val bridge = Class.forName("io.jankhunter.artti.internal.ArtTiNativeBridge")
+        val instance = bridge.getDeclaredField("INSTANCE").get(null)
+        val method = bridge.getDeclaredMethod("nativePublishSynthetic", Int::class.java, Int::class.java)
+        return try {
+            method.invoke(instance, type, count) as Int
+        } catch (failure: InvocationTargetException) {
+            throw failure.targetException
+        }
+    }
+
     private fun waitForLog(logDir: File): File {
         val deadline = SystemClock.elapsedRealtime() + 5_000
         while (SystemClock.elapsedRealtime() < deadline) {
@@ -148,6 +172,7 @@ class SampleEndToEndLogTest {
     }
 
     private companion object {
+        const val AGENT_ATTACH_TIMEOUT_MS = 15_000L
         const val SCENARIO_TIMEOUT_MS = 70_000L
         const val HEAP_DUMP_TIMEOUT_MS = 45_000L
         const val GC_AND_SCHEDULER_SETTLE_MS = 6_000L

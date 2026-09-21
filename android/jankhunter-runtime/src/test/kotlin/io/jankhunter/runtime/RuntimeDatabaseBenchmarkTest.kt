@@ -302,7 +302,14 @@ class RuntimeDatabaseBenchmarkTest {
         }
         private val coordinator = RuntimeCoordinator(state) { 1L }
         val telemetry = RuntimeDatabaseTelemetry(
-            RuntimeTelemetryAccess(state, ContextTracker(), coordinator, { 1L }, { 100 }),
+            RuntimeTelemetryAccess(
+                state,
+                ContextTracker(),
+                coordinator,
+                { 1L },
+                { 100 },
+                OptionalIntegrationRegistry.disabledForTests(),
+            ),
         )
 
         fun flush(): Boolean = state.writer?.flushBlocking(5_000L) == true

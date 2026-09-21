@@ -107,6 +107,23 @@ Status ArtJvmtiAdapter::Attach(
   jvmti_ = jvmti;
   config_ = bridge::BridgeRuntime::ConfigFromWire(wire_config);
   requested_ = config_.requested_capabilities;
+  return ActivateLocked();
+}
+
+Status ArtJvmtiAdapter::Resume(const bridge::ArtTiNativeConfigV1& wire_config) noexcept {
+  std::lock_guard lock(control_mutex_);
+  if (jvmti_ == nullptr || vm_ == nullptr) return Status::Error(StatusCode::kInvalidState);
+  if (attached_) {
+    return config_.config_hash == wire_config.config_hash
+        ? Status::Ok()
+        : Status::Error(StatusCode::kInvalidState);
+  }
+  config_ = bridge::BridgeRuntime::ConfigFromWire(wire_config);
+  requested_ = config_.requested_capabilities;
+  return ActivateLocked();
+}
+
+Status ArtJvmtiAdapter::ActivateLocked() noexcept {
   PublishStatus(kStatusAttachStarted, 0U);
   if (!stack_fingerprints_.Initialize(config_.max_stack_definitions) ||
       !method_ids_.Initialize(config_.max_method_definitions)) {

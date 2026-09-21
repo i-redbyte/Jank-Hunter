@@ -73,7 +73,14 @@ class StreamingLifecycleRegistrationTest {
         return (field.get(watcher) as List<*>).size
     }
     private fun telemetry(state: RuntimeState): RuntimeRetentionTelemetry {
-        val access = RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { 0L }, { 0L }, { 100 })
+        val access = RuntimeTelemetryAccess(
+            state,
+            ContextTracker(),
+            RuntimeCoordinator(state) { 0L },
+            { 0L },
+            { 100 },
+            OptionalIntegrationRegistry.disabledForTests(),
+        )
         val metrics = RuntimeMetricsService(8, { 0L }, { null }, { null }, {}, { false }, { _, _ -> false })
         return RuntimeRetentionTelemetry(state, access, metrics) { 0L }
     }

@@ -20,7 +20,14 @@ class RuntimeRetentionLifecycleSessionTest {
         enable(old)
         enable(replacement)
         val state = RuntimeState().apply { objectRetentionWatcher = old }
-        val access = RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { now }, { now }, { 100 })
+        val access = RuntimeTelemetryAccess(
+            state,
+            ContextTracker(),
+            RuntimeCoordinator(state) { now },
+            { now },
+            { 100 },
+            OptionalIntegrationRegistry.disabledForTests(),
+        )
         val metrics = RuntimeMetricsService(8, { now }, { null }, { null }, {}, { false }, { _, _ -> false })
         val telemetry = RuntimeRetentionTelemetry(state, access, metrics) { now }
         val target = Any()
