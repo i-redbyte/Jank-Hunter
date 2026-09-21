@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "io.jankhunter.sample"
-        versionCode = 1yt
+        versionCode = 1
     }
 }
 

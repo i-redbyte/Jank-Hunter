@@ -20,7 +20,7 @@ internal class ColumnarMicroPage {
     private val stableOwnerAliases = LongArray(Jhlog.MAX_MICRO_PAGE_ROWS)
     private val operationIds = LongArray(Jhlog.MAX_MICRO_PAGE_ROWS)
     private val payloadLengths = IntArray(Jhlog.MAX_MICRO_PAGE_ROWS)
-    private val semanticCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
+    private val semanticCounts = LongArray(Jhlog.TYPE_AGENT + 1)
     private var payloadArena = ByteArray(INITIAL_PAYLOAD_BYTES)
     private var payloadBytes = 0
 

@@ -100,6 +100,6 @@ internal class BinaryDictionaryEncoder(
 
     private companion object {
         const val MAX_ENCODED_VALUE_BYTES = Jhlog.MAX_RAW_CHUNK_BYTES - 1024
-        const val DICTIONARY_KIND_COUNT = BinaryLogWriter.DICT_ATTRIBUTE_VALUE + 1
+        const val DICTIONARY_KIND_COUNT = BinaryLogWriter.DICT_METHOD + 1
     }
 }

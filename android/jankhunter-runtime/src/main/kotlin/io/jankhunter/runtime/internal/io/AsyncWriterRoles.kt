@@ -10,6 +10,7 @@ import java.util.concurrent.locks.ReentrantLock
 private const val DATABASE_POOL_CAPACITY = 1_024
 private const val RUNTIME_CALL_POOL_CAPACITY = 256
 private const val STABLE_COUNTER_POOL_CAPACITY = 256
+private const val AGENT_BATCH_POOL_CAPACITY = 64
 
 /** Producer-owned transport state. No field in this object is touched by session I/O code. */
 internal class AsyncWriterProducer(config: JankHunterConfig) {
@@ -37,6 +38,10 @@ internal class AsyncWriterProducer(config: JankHunterConfig) {
     @JvmField
     val stableCountersEventPool = PendingStableCountersEventPool(
         minOf(config.maxQueueSize(), STABLE_COUNTER_POOL_CAPACITY),
+    )
+    @JvmField
+    val agentBatchEventPool = PendingAgentBatchEventPool(
+        minOf(config.maxQueueSize(), AGENT_BATCH_POOL_CAPACITY),
     )
     @JvmField
     var acceptedSequence = 0L

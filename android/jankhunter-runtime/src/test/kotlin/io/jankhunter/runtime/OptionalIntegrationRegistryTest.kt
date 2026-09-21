@@ -29,7 +29,12 @@ class OptionalIntegrationRegistryTest {
             diagnostic = diagnostics::add,
         )
         val context: Context = ContextWrapper(null)
-        val snapshot = JankHunterContextSnapshot("Feed", "Images", "scroll", "bind")
+        val snapshot = JankHunterContextSnapshot(
+            screen = "Feed",
+            owner = "Images",
+            initiatorName = "scroll",
+            operationId = 1L,
+        )
 
         registry.startAll(context)
         registry.startAll(context)

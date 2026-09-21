@@ -112,7 +112,7 @@ internal class BinaryLogWriter private constructor(
     private val recordContext = BinaryRecordContext()
     private val microPage = ColumnarMicroPage()
     private val microPagePayload = BinaryPayload(Jhlog.TARGET_RAW_CHUNK_BYTES)
-    private val chunkTypeCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
+    private val chunkTypeCounts = LongArray(Jhlog.TYPE_AGENT + 1)
     private var chunkRecordCount = 0
     private var chunkSequence = 0L
     private val producerOverride = ProducerMetadataBuffer()
@@ -124,6 +124,7 @@ internal class BinaryLogWriter private constructor(
     private val sessionRecords = SessionBinaryRecordEncoder(this)
     private val executionRecords = ExecutionBinaryRecordEncoder(this)
     private val metricRecords = MetricBinaryRecordEncoder(this)
+    private val agentRecords = AgentBinaryRecordEncoder(this)
     private var qualityCounterIds = IntArray(INITIAL_QUALITY_SNAPSHOT_ENTRIES)
     private var qualitySnapshotValues = LongArray(INITIAL_QUALITY_SNAPSHOT_ENTRIES)
     private val qualityPreviousValues = LongArray(quality.counterCapacity())
@@ -540,6 +541,24 @@ internal class BinaryLogWriter private constructor(
         mode: MetricAggregationMode,
     ) {
         metricRecords.gauge(name, value, count, sum, max, mode)
+    }
+
+    fun agentEventFromBatchWords(words: LongArray, index: Int) {
+        agentRecords.fromBatchWords(words, index)
+    }
+
+    fun agentContextDefinition(
+        contextToken: Long,
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+    ) {
+        agentRecords.contextDefinition(contextToken, screen, owner, flow, step)
+    }
+
+    fun agentMethodDefinition(methodId: Long, symbol: String) {
+        agentRecords.methodDefinition(methodId, symbol)
     }
 
     fun logSpam(
@@ -1209,6 +1228,7 @@ internal class BinaryLogWriter private constructor(
         internal const val DICT_OPERATION = 13
         internal const val DICT_ATTRIBUTE_KEY = 14
         internal const val DICT_ATTRIBUTE_VALUE = 15
+        internal const val DICT_METHOD = 16
 
         private const val MAX_TIMEZONE_OFFSET_MINUTES = 14L * 60L
 
@@ -1225,13 +1245,17 @@ internal class BinaryLogWriter private constructor(
             Jhlog.TYPE_PROCESS_STATE,
             Jhlog.TYPE_ANDROID_COMPONENT,
             Jhlog.TYPE_BINDER_TRANSACTION,
+            Jhlog.TYPE_MICRO_PAGE,
+            Jhlog.TYPE_AGENT,
         )
 
         private fun isSemanticRecord(recordType: Int): Boolean {
             return recordType in Jhlog.TYPE_SESSION..Jhlog.TYPE_GAUGE ||
                 recordType == Jhlog.TYPE_OPERATION ||
                 recordType in Jhlog.TYPE_LOG_SPAM..Jhlog.TYPE_RUNTIME_CALL ||
-                recordType in Jhlog.TYPE_PROCESS_EXIT..Jhlog.TYPE_BINDER_TRANSACTION
+                recordType in Jhlog.TYPE_PROCESS_EXIT..Jhlog.TYPE_BINDER_TRANSACTION ||
+                recordType == Jhlog.TYPE_MICRO_PAGE ||
+                recordType == Jhlog.TYPE_AGENT
         }
 
         private fun isControlRecord(recordType: Int): Boolean {

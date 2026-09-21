@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterAgentEventBatch
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.JankHunterHttpEvent
@@ -565,6 +566,33 @@ internal class AsyncLogWriter internal constructor(
         if (batch.size <= 0) return true
         return enqueue(Jhlog.TYPE_COUNTER, LogEventLane.BULK, batch.logicalEventCount()) {
             producer.stableCountersEventPool.acquire(producer.context.capture(), batch)
+        }
+    }
+
+    fun agentBatch(batch: JankHunterAgentEventBatch): Boolean {
+        if (batch.size <= 0) return true
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK, batch.size.toLong()) {
+            producer.agentBatchEventPool.acquire(producer.context.capture(), batch)
+        }
+    }
+
+    fun agentContextDefinition(
+        contextToken: Long,
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+    ): Boolean {
+        if (contextToken == 0L) return false
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK) {
+            PendingAgentContextEvent(producer.context.capture(), contextToken, screen, owner, flow, step)
+        }
+    }
+
+    fun agentMethodDefinition(methodId: Long, symbol: String): Boolean {
+        if (methodId == 0L || symbol.isBlank()) return false
+        return enqueue(Jhlog.TYPE_AGENT, LogEventLane.BULK) {
+            PendingAgentMethodDefinitionEvent(producer.context.capture(), methodId, symbol)
         }
     }
 
