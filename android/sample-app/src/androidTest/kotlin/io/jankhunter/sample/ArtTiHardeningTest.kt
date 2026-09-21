@@ -4,7 +4,7 @@ import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.jankhunter.runtime.JankHunter
-import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterManifestConfig
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.CountDownLatch
@@ -24,7 +24,7 @@ class ArtTiHardeningTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val logDir = File(context.filesDir, "jankhunter-artti-hardening")
-        val config = JankHunterConfig.fromManifest(context).toBuilder()
+        val config = JankHunterManifestConfig.read(context).toBuilder()
             .flushIntervalMs(100)
             .logDirectory(logDir)
             .retainedHeapDumpEnabled(false)

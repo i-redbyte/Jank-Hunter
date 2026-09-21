@@ -109,7 +109,10 @@ class ArtTiPerformanceSmokeTest {
             .getApplicationInfo(context.packageName, PackageManager.GET_META_DATA)
             .metaData
         if (metadata?.getBoolean("io.jankhunter.enabled", false) != true) return "baseline"
-        val options = metadata.getString("io.jankhunter.artti.native_options").orEmpty()
+        val assetOptions = runCatching {
+            context.assets.open(SCALED_CONFIG_ASSET).bufferedReader().readLine()?.trim()
+        }.getOrNull()
+        val options = assetOptions ?: metadata.getString(META_NATIVE_OPTIONS).orEmpty()
         return when {
             "profile=2" in options -> "causal"
             options.isEmpty() -> "off"
@@ -123,6 +126,8 @@ class ArtTiPerformanceSmokeTest {
     }
 
     private companion object {
+        const val SCALED_CONFIG_ASSET = "jankhunter/artti-runtime-config.txt"
+        const val META_NATIVE_OPTIONS = "io.jankhunter.artti.native_options"
         const val RESULT_FILE = "artti-benchmark-result.json"
         const val WARMUP_ITERATIONS = 8
         const val MEASURED_ITERATIONS = 40

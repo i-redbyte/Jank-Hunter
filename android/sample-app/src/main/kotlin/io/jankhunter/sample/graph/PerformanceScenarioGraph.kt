@@ -24,11 +24,7 @@ internal class PerformanceScenarioUseCase(
     }
 
     fun collectJvmtiEvidence(holdDurationMs: Long): JvmtiEvidenceResult {
-        var result: JvmtiEvidenceResult? = null
-        JankHunterTelemetry.withOwner(JvmtiEvidenceScenario::class.java.name) {
-            result = jvmtiEvidence.blockMainThread(holdDurationMs)
-        }
-        return checkNotNull(result)
+        return jvmtiEvidence.blockMainThread(holdDurationMs)
     }
 }
 

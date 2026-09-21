@@ -457,8 +457,8 @@ else:
     expected_finding = any(
         isinstance(finding, dict)
         and value(finding, "EvidenceLevel", "evidence_level") == "STRONG_ASSOCIATION"
-        and value(finding, "Flow", "flow") == "sample.auto.jvmti.monitor_contention"
-        and value(finding, "Owner", "owner") == "io.jankhunter.sample.graph.JvmtiEvidenceScenario"
+        and value(finding, "Flow", "flow") == "FeedImages.load"
+        and value(finding, "Owner", "owner") == "FeedImages"
         for finding in findings or []
     )
     if not expected_finding:
@@ -522,8 +522,8 @@ validate_html_report() {
   local report="$1"
   grep -Fq 'Анализ работы среды Android' "$report" ||
     fail "HTML report does not contain the JVM TI analysis page"
-  grep -Fq 'JvmtiEvidenceScenario' "$report" ||
-    fail "HTML report does not contain the sample JVMTI causal evidence"
+  grep -Fq 'BitmapFactory.decodeStream' "$report" ||
+    fail "HTML report does not contain the sample JVM TI causal evidence"
 }
 
 require_command "$ADB"

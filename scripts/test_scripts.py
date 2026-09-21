@@ -1376,8 +1376,8 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
                 "Findings": [
                     {
                         "EvidenceLevel": "STRONG_ASSOCIATION",
-                        "Flow": "sample.auto.jvmti.monitor_contention",
-                        "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario",
+                        "Flow": "FeedImages.load",
+                        "Owner": "FeedImages",
                     }
                 ],
             },
@@ -1510,7 +1510,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '<html>Анализ работы среды Android JvmtiEvidenceScenario</html>\\n' > "$out"
+printf '<html>Анализ работы среды Android BitmapFactory.decodeStream</html>\\n' > "$out"
 printf '%s\\n' "$FAKE_INSPECT_JSON"
 """,
         )
