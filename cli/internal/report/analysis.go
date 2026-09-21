@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 )
@@ -29,22 +28,10 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		summary.EventCount,
 		summary.LogCount,
 	))
-	if summary.CollectionQuality.Level != "" && summary.CollectionQuality.Level != "high" {
-		detail := textf(lang,
-			"Collection quality limits confidence to %s.",
-			"Качество сбора ограничивает доверие уровнем %s.",
-			summary.CollectionQuality.Level,
-		)
-		if len(summary.CollectionQuality.Reasons) > 0 {
-			detail += " " + strings.Join(summary.CollectionQuality.Reasons, "; ") + "."
-		}
-		builder.add("medium", text(lang, "Data quality is limited", "Качество данных ограничено"), detail)
-	}
-
 	if summary.EventCount < 50 {
 		builder.add("medium", text(lang, "Low sample size", "Малая выборка"), text(lang,
 			"The run is small, so the verdict is useful as smoke-test feedback but not as a release-quality performance conclusion.",
-			"Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное заключение о производительности для релиза.",
+			"Прогон короткий. Вывод подходит для быстрой проверки, но не для решения о релизе.",
 		))
 		builder.recommend(text(lang,
 			"Collect several runs per scenario before trusting small deltas.",
@@ -80,20 +67,20 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	switch {
 	case summary.HTTPCount > 0 && summary.HTTPP95MS >= 1500:
 		severity := sampleAwareSeverity("high", uint64(summary.HTTPCount), 5)
-		builder.add(severity, text(lang, "HTTP p95 is very slow", "Зафиксирована высокая HTTP-задержка"), textf(lang,
+		builder.add(severity, text(lang, "HTTP p95 is very slow", "Зафиксирована высокая HTTP-задержка среди самых медленных запросов"), textf(lang,
 			"HTTP p95 is %d ms across %d calls; confirm a small sample before treating it as a stable tail estimate.",
-			"HTTP p95 = %d мс по %d запросам. На малой выборке это фактически одна из худших задержек, а не устойчивая оценка хвоста; подтвердите результат повтором.",
+			"95%% запросов завершились не дольше чем за %d мс, всего записано %d запросов. На малой выборке это фактически одна из худших задержек, а не устойчивая оценка; подтвердите результат повтором.",
 			summary.HTTPP95MS,
 			summary.HTTPCount,
 		))
 		builder.recommend(text(lang,
 			"Sort routes by p95 and TTFB; separate backend latency from DNS/connect/TLS overhead.",
-			"Отсортируйте маршруты по p95 и TTFB; отделите задержку сервера от накладных расходов DNS, соединения и TLS.",
+			"Отсортируйте маршруты по границе верхних 5% задержек и времени до первого байта; отделите задержку сервера от поиска адреса, соединения и установки защищённого соединения.",
 		))
 	case summary.HTTPCount > 0 && summary.HTTPP95MS >= 700:
-		builder.add("medium", text(lang, "HTTP p95 needs attention", "HTTP p95 требует внимания"), textf(lang,
+		builder.add("medium", text(lang, "HTTP p95 needs attention", "Задержка самых медленных HTTP-запросов требует внимания"), textf(lang,
 			"HTTP p95 is %d ms.",
-			"HTTP p95 = %d мс.",
+			"95%% запросов завершились не дольше чем за %d мс.",
 			summary.HTTPP95MS,
 		))
 	}
@@ -101,20 +88,20 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	switch {
 	case summary.UIFrames > 0 && summary.UIJankPct >= 10:
 		severity := sampleAwareSeverity("high", summary.UIFrames, 120)
-		builder.add(severity, text(lang, "UI jank is high", "Высокая доля подтормаживаний UI"), textf(lang,
+		builder.add(severity, text(lang, "UI jank is high", "Высокая доля подтормаживаний интерфейса"), textf(lang,
 			"Janky frames are %.2f%% of %d observed frames. Treat a short UI window as preliminary evidence.",
-			"Медленные UI-кадры составляют %.2f%% из %d наблюдаемых кадров. Для короткого UI-окна вывод считается предварительным.",
+			"Медленные кадры интерфейса составляют %.2f%% из %d наблюдаемых кадров. Для короткого интервала наблюдения вывод считается предварительным.",
 			summary.UIJankPct,
 			summary.UIFrames,
 		))
 		builder.recommend(text(lang,
 			"Open the UI and owner sections together: main-thread stalls often explain the worst screen jank.",
-			"Смотрите разделы UI и источников вместе: паузы главного потока часто объясняют худшие подтормаживания экранов.",
+			"Смотрите разделы интерфейса и источников вместе: паузы главного потока часто объясняют худшие подтормаживания экранов.",
 		))
 	case summary.UIFrames > 0 && summary.UIJankPct >= 3:
-		builder.add("medium", text(lang, "UI jank is noticeable", "Подтормаживания UI заметны"), textf(lang,
+		builder.add("medium", text(lang, "UI jank is noticeable", "Подтормаживания интерфейса заметны"), textf(lang,
 			"Janky frames are %.2f%% of all observed frames.",
-			"Медленные UI-кадры составляют %.2f%% всех наблюдаемых кадров.",
+			"Медленные кадры интерфейса составляют %.2f%% всех наблюдаемых кадров.",
 			summary.UIJankPct,
 		))
 	}
@@ -142,8 +129,8 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 			summary.StallMaxMS,
 		))
 		builder.recommend(text(lang,
-			"Confirm the stall in the same flow and exclude heap-dump or diagnostic overhead before treating it as a release blocker.",
-			"Повторите тот же сценарий и исключите накладные расходы heap dump и диагностики, прежде чем считать паузу релизным блокером.",
+			"Confirm the stall in the same operation and exclude heap-dump or diagnostic overhead before treating it as a release blocker.",
+			"Повторите ту же операцию и исключите накладные расходы дампа памяти и диагностики, прежде чем считать паузу препятствием для выпуска.",
 		))
 	case summary.StallMaxMS >= 250:
 		builder.add("medium", text(lang, "Main-thread stall detected", "Обнаружена пауза главного потока"), textf(lang,
@@ -175,7 +162,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		}
 		builder.add(severity, text(lang, "Retained objects detected", "Есть сигналы удержания объектов"), textf(lang,
 			"Retained object count is %d.",
-			"Событий удержания: %d. Runtime-наблюдение без HPROF-пути показывает неожиданно долгую достижимость объекта, но не доказывает утечку памяти.",
+			"Событий удержания: %d. Наблюдение во время выполнения без пути из снимка кучи HPROF показывает неожиданно долгое удержание объекта, но не доказывает утечку памяти.",
 			summary.Retained,
 		))
 		builder.recommend(text(lang,
@@ -187,7 +174,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	if len(builder.findingsWithoutCoverage()) == 0 {
 		builder.add("ok", text(lang, "No serious issues confirmed", "Серьезные проблемы не подтверждены"), text(lang,
 			"Available signals did not cross the heuristic thresholds. This conclusion applies only to the collected scenario and enabled telemetry.",
-			"Доступные сигналы не пересекли эвристические пороги. Вывод относится только к записанному сценарию и включенным источникам телеметрии.",
+			"Доступные сигналы не пересекли заданные пороги. Вывод относится только к записанному сценарию и включённому сбору данных.",
 		))
 		builder.recommend(text(lang,
 			"Use this report as a baseline and compare future runs against it.",
@@ -202,10 +189,8 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 	builder := analysisBuilder{lang: lang, severity: "ok"}
 	high := 0
 	medium := 0
-	incomparable := 0
 	for _, delta := range comparison.Deltas {
 		if !delta.Comparable {
-			incomparable++
 			continue
 		}
 		switch delta.Severity {
@@ -214,7 +199,7 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 			name := compareDeltaLabel(delta.Name)
 			builder.add("high", textf(lang, "High regression: %s", "Высокая регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s → %s (%s), доверие: %s, выборка: %d.",
+				"%s → %s (%s), надёжность: %s, наблюдений: %d.",
 				compareDeltaValue(delta.Baseline),
 				compareDeltaValue(delta.Candidate),
 				compareDeltaChange(delta.Change),
@@ -226,7 +211,7 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 			name := compareDeltaLabel(delta.Name)
 			builder.add("medium", textf(lang, "Medium regression: %s", "Средняя регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s → %s (%s), доверие: %s, выборка: %d.",
+				"%s → %s (%s), надёжность: %s, наблюдений: %d.",
 				compareDeltaValue(delta.Baseline),
 				compareDeltaValue(delta.Candidate),
 				compareDeltaChange(delta.Change),
@@ -237,27 +222,16 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 	}
 
 	for _, warning := range comparison.CohortWarnings {
-		builder.add("medium", text(lang, "Cohort mismatch", "Несовпадение когорт"), warning)
-	}
-	for _, warning := range comparison.QualityWarnings {
-		builder.add("medium", text(lang, "Data quality warning", "Ограничение качества данных"), warning)
+		builder.add("medium", text(lang, "Cohort mismatch", "Разные условия запуска"), warning)
 	}
 	for _, warning := range comparison.ExposureWarnings {
 		builder.add("medium", text(lang, "Scenario duration differs", "Разная длительность сценариев"), warning)
 	}
-	if incomparable > 0 {
-		builder.add("medium", text(lang, "Metrics without comparable data", "Есть метрики без сопоставимых данных"), textf(lang,
-			"%d metrics were not compared because at least one run had no required measurements.",
-			"Метрик без сравнения: %d. Хотя бы в одном прогоне отсутствовали необходимые измерения; нулевые значения не подставлялись.",
-			incomparable,
-		))
-	}
-
 	switch {
 	case high > 0:
 		builder.recommend(text(lang,
 			"Investigate and reproduce high-severity deltas in the same scenario before release.",
-			"До релиза разберите и повторите изменения высокой серьезности в том же сценарии.",
+			"До релиза разберите и повторите изменения высокого приоритета в том же сценарии.",
 		))
 	case medium > 0:
 		builder.recommend(text(lang,
@@ -266,8 +240,8 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 		))
 	default:
 		builder.add("ok", text(lang, "No regressions confirmed", "Регрессии не подтверждены"), text(lang,
-			"Comparable metrics did not produce high or medium regression signals. Missing measurements and cohort warnings still limit the conclusion.",
-			"Сопоставимые метрики не дали сигналов ухудшения высокой или средней серьезности. Отсутствующие измерения и предупреждения о когортах по-прежнему ограничивают вывод.",
+			"Comparable metrics did not produce high or medium regression signals. Repeat the same scenario to confirm the result.",
+			"Сопоставимые метрики не показали заметного ухудшения. Повторите тот же сценарий, чтобы подтвердить результат.",
 		))
 		builder.recommend(text(lang,
 			"Keep the generated report with the build artifacts for future comparison.",
@@ -322,7 +296,7 @@ func (b analysisBuilder) finish() ReportAnalysis {
 		status = text(b.lang, "Serious issues detected", "Есть серьезные проблемы")
 		summary = text(b.lang,
 			"The report contains high-severity signals that should be investigated before treating this run as healthy.",
-			"В отчете есть сигналы высокой серьезности; их нужно разобрать, прежде чем считать прогон здоровым.",
+			"В отчете есть сигналы высокого приоритета. Разберите их, прежде чем считать прогон исправным.",
 		)
 	case "medium":
 		status = text(b.lang, "Needs attention", "Требует внимания")
@@ -365,12 +339,16 @@ func percentInt(part, total int) float64 {
 
 func severityRank(severity string) int {
 	switch severity {
+	case "critical":
+		return 4
 	case "high":
 		return 3
 	case "medium":
 		return 2
-	default:
+	case "low":
 		return 1
+	default:
+		return 0
 	}
 }
 

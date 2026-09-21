@@ -1,17 +1,6 @@
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
+apply(from = "../gradle/jankhunter-repository-settings.gradle")
 
 dependencyResolutionManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
     versionCatalogs {
         create("libs") {
             from(files("../gradle/libs.versions.toml"))

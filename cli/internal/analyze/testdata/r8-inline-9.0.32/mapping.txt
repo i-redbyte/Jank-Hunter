@@ -1,0 +1,17 @@
+# compiler: R8
+# compiler_version: 9.0.32
+# common_typos_disable
+# {"id":"com.android.tools.r8.mapping","version":"2.2"}
+# pg_map_id: 37ab4fc69eec4d3815e5d68d85d3a7867f6f6cf4f1703c04e6d22c48719d398b
+# pg_map_hash: SHA-256 37ab4fc69eec4d3815e5d68d85d3a7867f6f6cf4f1703c04e6d22c48719d398b
+probe.Entry -> probe.Entry:
+# {"id":"sourceFile","fileName":"Entry.java"}
+    1:1:void main(java.lang.String[]):3:3 -> main
+    2:2:void probe.Screen.bind(int):6:6 -> main
+    2:2:void probe.Screen.render(int):3 -> main
+    2:2:void main(java.lang.String[]):3 -> main
+    3:3:void probe.Screen.bind(int):5:5 -> main
+    3:3:void probe.Screen.render(int):3 -> main
+    3:3:void main(java.lang.String[]):3 -> main
+probe.Screen -> R8$$REMOVED$$CLASS$$0:
+# {"id":"sourceFile","fileName":"Screen.java"}

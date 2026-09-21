@@ -3,7 +3,8 @@ package analyze
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,9 @@ const (
 	codeCategoryLifecycle  = "Утечка жизненного цикла"
 	codeCategoryLogSpam    = "Спам логами"
 	codeCategoryMainIO     = "Ввод-вывод на главном потоке"
+
+	codeProblemRuntimeImpact         = "утяжеляет цепочку выполнения в измеренном сценарии."
+	codeProblemRuntimeRecommendation = "проверьте цепочку вызовов и стоимость вызываемого метода."
 )
 
 type codeProblemAccumulator struct {
@@ -40,187 +44,75 @@ type codeProblemAccumulator struct {
 	runtimeCalls    uint64
 	runtimeMS       uint64
 	maxMS           uint64
-	categories      map[string]struct{}
-	problemNames    map[string]struct{}
-	signals         map[string]*CodeProblemSignal
-	screens         map[string]struct{}
-	flows           map[string]struct{}
-	steps           map[string]struct{}
-	routes          map[string]struct{}
+	categories      []string
+	problemNames    []string
+	signals         []CodeProblemSignal
+	contexts        []codeProblemContextAccumulator
+}
+
+type codeProblemContext struct {
+	screen    string
+	operation string
+	route     string
+}
+
+type codeProblemContextAccumulator struct {
+	context codeProblemContext
+	signals []string
+	count   uint64
+	totalMS uint64
+	maxMS   uint64
+	value   uint64
+}
+
+type codeProblemKey struct {
+	className string
+	method    string
 }
 
 func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
-	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	return BuildCodeProblemRegistryWithLambdaCaptures(summary, nil)
+}
+
+func BuildCodeProblemRegistryWithLambdaCaptures(summary Summary, captures *LambdaCaptureCatalog) []CodeProblemStats {
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
 	builder.addProblemWindows(summary.ProblemWindows)
 	builder.addMemoryLeaks(summary.MemoryLeaks)
 	builder.addLogSpam(summary.LogSpam)
 	builder.addRuntimeCalls(summary.RuntimeCalls)
+	builder.addLambdaCaptures(captures, summary.MemoryLeaks)
 	return builder.finish()
 }
 
-type codeProblemBuilder struct {
-	items map[string]*codeProblemAccumulator
-}
-
-func (b *codeProblemBuilder) addOwners(owners []OwnerStats) {
-	for _, owner := range owners {
-		className, method := codeLocationFromOwner(owner.Owner)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, owner.Owner)
-		item.runtimeEvidence = true
-		switch owner.Kind {
-		case "main_thread_stall":
-			item.addCategory(codeCategoryANR)
-			item.mainThreadMS += owner.TotalMS
-			item.problems += uint64(owner.Count)
-			item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Пауза главного потока",
-				Category: codeCategoryMainThread,
-				Severity: severityFromDuration(owner.MaxMS, 2_000, 8_000),
-				Score:    scoreDuration(owner.TotalMS, 1_800) + scoreDuration(owner.MaxMS, 500),
-				Count:    uint64(owner.Count),
-				TotalMS:  owner.TotalMS,
-				MaxMS:    owner.MaxMS,
-				Detail:   "Работа блокировала главный поток; это повышает риск АНР и пропуска кадров.",
-			})
-		case "http":
-			item.networkMS += owner.TotalMS
-			item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Сетевая задержка",
-				Category: codeCategoryNetwork,
-				Severity: severityFromDuration(owner.MaxMS, 700, 1_500),
-				Score:    scoreDuration(owner.TotalMS, 2_500) + scoreDuration(owner.MaxMS, 900),
-				Count:    uint64(owner.Count),
-				TotalMS:  owner.TotalMS,
-				MaxMS:    owner.MaxMS,
-				Detail:   "Источник связан с медленной сетевой работой.",
-			})
-		case "retained_object":
-			item.addCategory(codeCategoryLifecycle)
-			item.addCategory(codeCategoryOOM)
-			item.retained += uint64(owner.Count)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Удержанный объект",
-				Category: codeCategoryMemory,
-				Severity: severityFromCount(uint64(owner.Count), 2, 8),
-				Score:    scoreCount(uint64(owner.Count), 8) + scoreDuration(owner.MaxMS, 60_000),
-				Count:    uint64(owner.Count),
-				Value:    owner.MaxMS,
-				Unit:     "мс возраста",
-				Detail:   "Объекты живут дольше ожидаемого и могут усиливать давление памяти.",
-			})
-		default:
-			if owner.Count > 0 || owner.TotalMS > 0 {
-				item.runtimeCalls += uint64(owner.Count)
-				item.runtimeMS += owner.TotalMS
-				item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-				item.addSignal(CodeProblemSignal{
-					Name:     ownerKindForCodeProblem(owner.Kind),
-					Category: codeCategoryRuntime,
-					Severity: severityFromDuration(owner.MaxMS, 500, 2_000),
-					Score:    scoreCount(uint64(owner.Count), 120) + scoreDuration(owner.TotalMS, 2_500),
-					Count:    uint64(owner.Count),
-					TotalMS:  owner.TotalMS,
-					MaxMS:    owner.MaxMS,
-					Detail:   "Источник часто встречается в событиях выполнения.",
-				})
+func (b *codeProblemBuilder) addLambdaCaptures(catalog *LambdaCaptureCatalog, memoryLeaks []MemoryLeakSuspect) {
+	if catalog == nil || !catalog.Available {
+		return
+	}
+	heapEvidence := buildLambdaHeapEvidenceIndex(memoryLeaks)
+	for _, capture := range catalog.Captures {
+		for _, risk := range lambdaCaptureRisks(capture, heapEvidence) {
+			className, method := codeLocationFromOwner(capture.Owner)
+			if className == "" {
+				continue
 			}
+			item := b.item(className, method, capture.Owner)
+			item.addCategory(codeCategoryLifecycle)
+			if risk.detector == "memory.lambda_capture" {
+				item.addCategory(codeCategoryMemory)
+			}
+			priority := investigationPriority(risk.priority)
+			item.addSignal(CodeProblemSignal{
+				Name: risk.title, Category: categoryForLambdaRisk(risk),
+				Severity: severityForPriority(priority),
+				Score:    float64(priority) / 5,
+				Detail:   risk.detail,
+			})
 		}
 	}
 }
 
-func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
-	for _, flow := range flows {
-		className, method := codeLocationFromOwner(flow.Owner)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, flow.Owner)
-		item.runtimeEvidence = true
-		item.addContext(flow.Screen, flow.Flow, flow.Step, flow.RouteSample)
-		if flow.HTTPCount > 0 || flow.HTTPP95MS > 0 || flow.HTTPFailed > 0 {
-			item.networkMS += flow.HTTPP95MS
-			item.maxMS = maxUint64(item.maxMS, flow.HTTPP95MS)
-			score := scoreDuration(flow.HTTPP95MS, 900) + scoreCount(uint64(flow.HTTPFailed), 3)
-			item.addSignal(CodeProblemSignal{
-				Name:     "HTTP в сценарии",
-				Category: codeCategoryNetwork,
-				Severity: severityFromNetwork(flow.HTTPP95MS, flow.HTTPFailed),
-				Score:    score,
-				Count:    uint64(flow.HTTPCount),
-				MaxMS:    flow.HTTPP95MS,
-				Detail:   fmt.Sprintf("В этом контексте HTTP p95=%d мс, ошибок=%d.", flow.HTTPP95MS, flow.HTTPFailed),
-			})
-		}
-		if flow.UIJank > 0 || flow.UIJankPct > 0 {
-			item.uiJank += flow.UIJank
-			item.addSignal(CodeProblemSignal{
-				Name:     "UI-подтормаживания",
-				Category: codeCategoryUI,
-				Severity: severityFromPercent(flow.UIJankPct, 3, 8),
-				Score:    scoreCount(flow.UIJank, 50) + math.Min(flow.UIJankPct/2, 6),
-				Count:    flow.UIJank,
-				Value:    flow.UIFrames,
-				Unit:     "кадров",
-				Detail:   fmt.Sprintf("В сценарии медленных кадров %d из %d (%.2f%%).", flow.UIJank, flow.UIFrames, flow.UIJankPct),
-			})
-		}
-		if flow.StallCount > 0 || flow.StallMaxMS > 0 {
-			item.addCategory(codeCategoryANR)
-			item.mainThreadMS += flow.StallMaxMS
-			item.maxMS = maxUint64(item.maxMS, flow.StallMaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Пауза главного потока",
-				Category: codeCategoryMainThread,
-				Severity: severityFromDuration(flow.StallMaxMS, 2_000, 8_000),
-				Score:    scoreDuration(flow.StallMaxMS, 500) + scoreCount(uint64(flow.StallCount), 4),
-				Count:    uint64(flow.StallCount),
-				MaxMS:    flow.StallMaxMS,
-				Detail:   fmt.Sprintf("Максимальная пауза в сценарии: %d мс.", flow.StallMaxMS),
-			})
-		}
-		if flow.LogSpam > 0 {
-			item.addCategory(codeCategoryLogSpam)
-			item.logSpam += flow.LogSpam
-			item.addSignal(CodeProblemSignal{
-				Name:     "Спам логами",
-				Category: codeCategoryLogs,
-				Severity: severityFromCount(flow.LogSpam, 100, 1_000),
-				Score:    scoreCount(flow.LogSpam, 180),
-				Count:    flow.LogSpam,
-				Detail:   "Частые вызовы логирования в этом контексте могут мешать измерениям и добавлять работу.",
-			})
-		}
-		if flow.ProblemCount > 0 {
-			item.problems += flow.ProblemCount
-			item.addSignal(CodeProblemSignal{
-				Name:     "Проблемные окна",
-				Category: codeCategoryRuntime,
-				Severity: severityFromCount(flow.ProblemCount, 4, 20),
-				Score:    scoreCount(flow.ProblemCount, 10),
-				Count:    flow.ProblemCount,
-				MaxMS:    flow.ProblemMaxMS,
-				Detail:   "Сигналы попали в агрегированные проблемные окна.",
-			})
-		}
-		if flow.MemoryMaxKB > 0 {
-			item.addCategory(codeCategoryOOM)
-			item.memoryKB = maxUint64(item.memoryKB, flow.MemoryMaxKB)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Память в сценарии",
-				Category: codeCategoryMemory,
-				Severity: severityFromKB(flow.MemoryMaxKB, 256*1024, 768*1024),
-				Score:    scoreDuration(flow.MemoryMaxKB, 256*1024),
-				Value:    flow.MemoryMaxKB,
-				Unit:     "КБ",
-				Detail:   "В этом контексте был высокий PSS процесса.",
-			})
-		}
-	}
+type codeProblemBuilder struct {
+	items map[codeProblemKey]*codeProblemAccumulator
 }
 
 func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
@@ -232,13 +124,12 @@ func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 		item := b.item(className, method, spam.Owner)
 		item.runtimeEvidence = true
 		item.addCategory(codeCategoryLogSpam)
-		item.logSpam += spam.Count
-		item.addContext(spam.Screen, spam.Flow, spam.Step, "")
-		item.addSignal(CodeProblemSignal{
+		item.logSpam = saturatingUint64Sum(item.logSpam, spam.Count)
+		item.addContextSignal(spam.Screen, spam.Operation, "", CodeProblemSignal{
 			Name:     "Спам логами",
 			Category: codeCategoryLogs,
 			Severity: severityFromCount(spam.Count, 100, 1_000),
-			Score:    scoreCount(spam.Count, 160),
+			Score:    scoreContribution(spam.Count, 160),
 			Count:    spam.Count,
 			Detail:   fmt.Sprintf("%s.%s вызван %d раз.", spam.Source, spam.Level, spam.Count),
 		})
@@ -257,48 +148,21 @@ func (b *codeProblemBuilder) addProblemWindows(windows []ProblemWindowStats) {
 		}
 		item := b.item(className, method, window.Owner)
 		item.runtimeEvidence = true
-		item.problems += window.Count
+		item.problems = saturatingUint64Sum(item.problems, window.Count)
 		item.maxMS = maxUint64(item.maxMS, window.MaxMS)
-		item.addContext(window.Screen, window.Flow, window.Step, "")
 		category := categoryForProblemKind(window.Kind)
 		for _, category := range extraCategoriesForProblemKind(window.Kind) {
 			item.addCategory(category)
 		}
-		item.addSignal(CodeProblemSignal{
+		item.addContextSignal(window.Screen, window.Operation, "", CodeProblemSignal{
 			Name:     problemKindForCodeProblem(window.Kind),
 			Category: category,
 			Severity: severityFromProblemWindow(window),
-			Score:    scoreCount(window.Count, 8) + scoreDuration(window.MaxMS, 500),
+			Score:    scoreContribution(window.Count, 8) + scoreContribution(window.MaxMS, 500),
 			Count:    window.Count,
 			TotalMS:  window.TotalWindowMS,
 			MaxMS:    window.MaxMS,
 			Detail:   fmt.Sprintf("Окон: %d, событий: %d, максимальное значение: %d мс.", window.Windows, window.Count, window.MaxMS),
-		})
-	}
-}
-
-func (b *codeProblemBuilder) addRetained(retainedRows []NamedValue, lowMemoryCount int) {
-	for _, retained := range retainedRows {
-		className := normalizeClassName(retained.Name)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, "", retained.Name)
-		item.runtimeEvidence = true
-		item.addCategory(codeCategoryLifecycle)
-		item.addCategory(codeCategoryOOM)
-		item.retained += retained.Value
-		severity := severityFromCount(retained.Value, 2, 8)
-		if lowMemoryCount > 0 && severity != "high" {
-			severity = "medium"
-		}
-		item.addSignal(CodeProblemSignal{
-			Name:     "Удержанные объекты",
-			Category: codeCategoryMemory,
-			Severity: severity,
-			Score:    scoreCount(retained.Value, 8),
-			Count:    retained.Value,
-			Detail:   strings.TrimSpace("Класс встречается среди удержанных объектов. " + retained.Extra),
 		})
 	}
 }
@@ -317,28 +181,40 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			continue
 		}
 		item := b.item(className, method, target)
-		item.runtimeEvidence = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
+		item.runtimeEvidence = item.runtimeEvidence || leak.TimeOnlyCount > 0 || leak.AfterExplicitGCCount > 0
 		item.addCategory(codeCategoryLifecycle)
 		if leak.EstimatedRetainedKB >= 4*1024 || leak.RetainedObjectCount >= 3 {
 			item.addCategory(codeCategoryOOM)
 		}
-		item.retained += leak.Count
-		item.memoryKB += leak.EstimatedRetainedKB
+		item.retained = saturatingUint64Sum(item.retained, leak.Count)
+		// Retained subtrees can overlap, so summing estimates would exaggerate memory pressure.
+		item.memoryKB = maxUint64(item.memoryKB, leak.EstimatedRetainedKB)
 		item.maxMS = maxUint64(item.maxMS, leak.MaxAgeMS)
-		item.addContext(leak.Screen, leak.Flow, leak.Step, "")
+		evidenceLabel := leak.EvidenceLabel
+		if evidenceLabel == "" {
+			evidenceLabel = retainedEvidenceLabel(leak.EvidenceKind)
+		}
+		holder := leak.Holder
+		if holder == "" {
+			holder = "не определён"
+		}
+		holderQuality := leak.HolderQuality
+		if holderQuality == "" {
+			holderQuality = "не определена"
+		}
 		detail := fmt.Sprintf(
-			"Наблюдался достижимый %s; уровень: %s; держатель: %s; качество привязки: %s. %s.",
+			"Объект %s остался в памяти; основание: %s; вероятный держатель: %s; точность определения держателя: %s. %s.",
 			leak.ClassName,
-			leak.EvidenceKind,
-			leak.Holder,
-			leak.HolderQuality,
+			evidenceLabel,
+			holder,
+			holderQuality,
 			retainedEvidenceMeaning(leak.EvidenceKind),
 		)
 		if leak.ObjectKind != "" {
 			detail += " Тип: " + leak.ObjectKind + "."
 		}
 		if leak.LeakPattern != "" {
-			detail += " Паттерн: " + leak.LeakPattern + "."
+			detail += " Тип утечки: " + leak.LeakPattern + "."
 		}
 		if leak.HeapEvidence {
 			detail += " Дамп памяти подтвердил путь до корня GC"
@@ -354,7 +230,7 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 		if leak.HeapEvidence {
 			signalName = "Подтвержденный путь удержания HPROF"
 		}
-		item.addSignal(CodeProblemSignal{
+		item.addContextSignal(leak.Screen, leak.Operation, "", CodeProblemSignal{
 			Name:     signalName,
 			Category: codeCategoryMemory,
 			Severity: leak.Severity,
@@ -363,34 +239,6 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			Value:    leak.MaxAgeMS,
 			Unit:     "мс возраста",
 			Detail:   detail,
-		})
-	}
-}
-
-func (b *codeProblemBuilder) addRoutes(routes []RouteStats) {
-	for _, route := range routes {
-		className, method := codeLocationFromOwner(route.OwnerSample)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, route.OwnerSample)
-		item.runtimeEvidence = true
-		item.networkMS += route.P95MS
-		item.maxMS = maxUint64(item.maxMS, route.MaxMS)
-		item.addContext("", "", "", route.Route)
-		if route.Count >= 5 {
-			item.addCategory(codeCategoryDuplicate)
-		}
-		item.addSignal(CodeProblemSignal{
-			Name:     "Сетевой маршрут",
-			Category: codeCategoryNetwork,
-			Severity: severityFromNetwork(route.P95MS, route.Failures),
-			Score:    scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3) + scoreCount(uint64(route.Count), 120)*0.25,
-			Count:    uint64(route.Count),
-			Value:    route.P95MS,
-			Unit:     "мс p95",
-			MaxMS:    route.MaxMS,
-			Detail:   fmt.Sprintf("Маршрут %s: p95=%d мс, ошибок=%d.", route.Route, route.P95MS, route.Failures),
 		})
 	}
 }
@@ -409,62 +257,22 @@ func (b *codeProblemBuilder) addRuntimeCallEndpoint(owner string, call RuntimeCa
 	}
 	item := b.item(className, method, owner)
 	item.runtimeEvidence = true
-	item.runtimeCalls += call.Count
-	item.runtimeMS += call.TotalMS
+	item.runtimeCalls = saturatingUint64Sum(item.runtimeCalls, call.Count)
+	item.runtimeMS = saturatingUint64Sum(item.runtimeMS, call.TotalMS)
 	item.maxMS = maxUint64(item.maxMS, call.MaxMS)
-	item.addContext(call.Screen, call.Flow, call.Step, "")
 	if call.MaxMS >= 700 && likelyMainThreadOwner(owner) {
 		item.addCategory(codeCategoryANR)
 	}
-	item.addSignal(CodeProblemSignal{
+	item.addContextSignal(call.Screen, call.Operation, "", CodeProblemSignal{
 		Name:     name,
 		Category: codeCategoryRuntime,
 		Severity: severityFromDuration(call.MaxMS, 500, 2_000),
-		Score:    (scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2_200) + scoreDuration(call.MaxMS, 500)) * weight,
+		Score:    (scoreContribution(call.Count, 160) + scoreContribution(call.TotalMS, 2_200) + scoreContribution(call.MaxMS, 500)) * weight,
 		Count:    call.Count,
 		TotalMS:  call.TotalMS,
 		MaxMS:    call.MaxMS,
-		Detail:   fmt.Sprintf("Связка %s → %s, вызовов %d.", call.Caller, call.Callee, call.Count),
+		Detail:   "Метрики объединяют все связи метода, записанные при выполнении; точные переходы вызывающий → вызываемый сохранены в реестре вызовов.",
 	})
-}
-
-func (b *codeProblemBuilder) addInfluence(influence InfluenceSummary) {
-	if !influence.Available {
-		return
-	}
-	for _, node := range influence.TopNodes {
-		className := normalizeClassName(node.ClassName)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, "", className)
-		if node.RuntimeEvidence {
-			item.runtimeEvidence = true
-		}
-		for _, flow := range node.Flows {
-			item.addContext("", flow, "", "")
-		}
-		for _, screen := range node.Screens {
-			item.addContext(screen, "", "", "")
-		}
-		for _, route := range node.Routes {
-			item.addContext("", "", "", route)
-		}
-		item.problems += node.Problems
-		item.logSpam += node.LogSpam
-		item.mainThreadMS += node.MainThreadMS
-		item.networkMS += node.NetworkMS
-		item.memoryKB += node.MemoryPressure
-		item.uiJank += node.UIJank
-		item.retained += node.Retained
-		item.addSignal(CodeProblemSignal{
-			Name:     "Класс в графе влияния",
-			Category: codeCategoryInfluence,
-			Severity: influenceProblemSeverity(node),
-			Score:    node.Score * 0.35,
-			Detail:   influenceDetail(node),
-		})
-	}
 }
 
 func (b *codeProblemBuilder) finish() []CodeProblemStats {
@@ -475,21 +283,20 @@ func (b *codeProblemBuilder) finish() []CodeProblemStats {
 		}
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		leftScore := roundedCodeProblemScore(items[i].score)
-		rightScore := roundedCodeProblemScore(items[j].score)
+	slices.SortFunc(items, func(left, right *codeProblemAccumulator) int {
+		leftScore := roundedCodeProblemScore(left.score)
+		rightScore := roundedCodeProblemScore(right.score)
 		if leftScore == rightScore {
-			if items[i].className == items[j].className {
-				return items[i].method < items[j].method
+			if left.className == right.className {
+				return strings.Compare(left.method, right.method)
 			}
-			return items[i].className < items[j].className
+			return strings.Compare(left.className, right.className)
 		}
-		return leftScore > rightScore
+		if leftScore > rightScore {
+			return -1
+		}
+		return 1
 	})
-	if len(items) > 200 {
-		items = items[:200]
-	}
-
 	out := make([]CodeProblemStats, 0, len(items))
 	for _, item := range items {
 		out = append(out, item.toStats())
@@ -498,7 +305,7 @@ func (b *codeProblemBuilder) finish() []CodeProblemStats {
 }
 
 func (b *codeProblemBuilder) item(className, method, owner string) *codeProblemAccumulator {
-	key := className + "\x00" + method
+	key := codeProblemKey{className: className, method: method}
 	item := b.items[key]
 	if item != nil {
 		if item.owner == "" {
@@ -507,26 +314,48 @@ func (b *codeProblemBuilder) item(className, method, owner string) *codeProblemA
 		return item
 	}
 	item = &codeProblemAccumulator{
-		className:    className,
-		method:       method,
-		owner:        owner,
-		categories:   map[string]struct{}{},
-		problemNames: map[string]struct{}{},
-		signals:      map[string]*CodeProblemSignal{},
-		screens:      map[string]struct{}{},
-		flows:        map[string]struct{}{},
-		steps:        map[string]struct{}{},
-		routes:       map[string]struct{}{},
+		className: className,
+		method:    method,
+		owner:     owner,
 	}
 	b.items[key] = item
 	return item
 }
 
-func (a *codeProblemAccumulator) addContext(screen, flow, step, route string) {
-	addNonEmpty(a.screens, screen)
-	addNonEmpty(a.flows, flow)
-	addNonEmpty(a.steps, step)
-	addNonEmpty(a.routes, route)
+func (a *codeProblemAccumulator) addContextSignal(screen, operation, route string, signal CodeProblemSignal) {
+	context := codeProblemContext{
+		screen:    normalizeCodeProblemContextValue(screen),
+		operation: normalizeCodeProblemContextValue(operation),
+		route:     normalizeCodeProblemContextValue(route),
+	}
+	a.addSignal(signal)
+	if signal.Name == "" {
+		return
+	}
+	var observation *codeProblemContextAccumulator
+	for index := range a.contexts {
+		if a.contexts[index].context == context {
+			observation = &a.contexts[index]
+			break
+		}
+	}
+	if observation == nil {
+		a.contexts = append(a.contexts, codeProblemContextAccumulator{context: context})
+		observation = &a.contexts[len(a.contexts)-1]
+	}
+	observation.signals = appendUniqueCodeProblemValue(observation.signals, signal.Name)
+	observation.count = saturatingUint64Sum(observation.count, signal.Count)
+	observation.totalMS = saturatingUint64Sum(observation.totalMS, signal.TotalMS)
+	observation.maxMS = maxUint64(observation.maxMS, signal.MaxMS)
+	observation.value = maxUint64(observation.value, signal.Value)
+}
+
+func normalizeCodeProblemContextValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "unknown" {
+		return ""
+	}
+	return value
 }
 
 func (a *codeProblemAccumulator) addSignal(signal CodeProblemSignal) {
@@ -539,15 +368,19 @@ func (a *codeProblemAccumulator) addSignal(signal CodeProblemSignal) {
 	if signal.Severity == "" {
 		signal.Severity = "ok"
 	}
-	key := signal.Category + "\x00" + signal.Name
-	existing := a.signals[key]
+	var existing *CodeProblemSignal
+	for index := range a.signals {
+		if a.signals[index].Category == signal.Category && a.signals[index].Name == signal.Name {
+			existing = &a.signals[index]
+			break
+		}
+	}
 	if existing == nil {
-		clone := signal
-		a.signals[key] = &clone
+		a.signals = append(a.signals, signal)
 	} else {
 		existing.Score += signal.Score
-		existing.Count += signal.Count
-		existing.TotalMS += signal.TotalMS
+		existing.Count = saturatingUint64Sum(existing.Count, signal.Count)
+		existing.TotalMS = saturatingUint64Sum(existing.TotalMS, signal.TotalMS)
 		existing.MaxMS = maxUint64(existing.MaxMS, signal.MaxMS)
 		existing.Value = maxUint64(existing.Value, signal.Value)
 		if signal.Detail != "" && !strings.Contains(existing.Detail, signal.Detail) {
@@ -559,32 +392,36 @@ func (a *codeProblemAccumulator) addSignal(signal CodeProblemSignal) {
 		existing.Severity = maxSeverity(existing.Severity, signal.Severity)
 	}
 	a.score += signal.Score
-	a.categories[signal.Category] = struct{}{}
-	a.problemNames[signal.Name] = struct{}{}
+	a.categories = appendUniqueCodeProblemValue(a.categories, signal.Category)
+	a.problemNames = appendUniqueCodeProblemValue(a.problemNames, signal.Name)
 }
 
 func (a *codeProblemAccumulator) addCategory(category string) {
 	if category == "" {
 		return
 	}
-	a.categories[category] = struct{}{}
+	a.categories = appendUniqueCodeProblemValue(a.categories, category)
 }
 
 func (a *codeProblemAccumulator) toStats() CodeProblemStats {
-	signals := make([]CodeProblemSignal, 0, len(a.signals))
-	for _, signal := range a.signals {
-		signal.Score = math.Round(signal.Score*10) / 10
-		signals = append(signals, *signal)
+	signals := a.signals
+	for index := range signals {
+		signals[index].Score = math.Round(signals[index].Score*10) / 10
 	}
-	sort.Slice(signals, func(i, j int) bool {
-		if signals[i].Score == signals[j].Score {
-			return signals[i].Name < signals[j].Name
+	slices.SortFunc(signals, func(left, right CodeProblemSignal) int {
+		if left.Score == right.Score {
+			return strings.Compare(left.Name, right.Name)
 		}
-		return signals[i].Score > signals[j].Score
+		if left.Score > right.Score {
+			return -1
+		}
+		return 1
 	})
 	score := roundedCodeProblemScore(a.score)
-	categories := sortedSet(a.categories, 0)
-	problems := sortedSet(a.problemNames, 0)
+	categories := sortCodeProblemValues(a.categories)
+	problems := sortCodeProblemValues(a.problemNames)
+	recommendation := codeProblemRecommendation(categories)
+	drillDown, screens, operations, routes := codeProblemDrillDown(a, recommendation)
 	return CodeProblemStats{
 		ClassName:       a.className,
 		Method:          a.method,
@@ -595,13 +432,12 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 		Categories:      categories,
 		Problems:        problems,
 		Signals:         signals,
-		Screens:         sortedSet(a.screens, 6),
-		Flows:           sortedSet(a.flows, 6),
-		Steps:           sortedSet(a.steps, 6),
-		Routes:          sortedSet(a.routes, 6),
-		DrillDown:       codeProblemDrillDown(a, signals),
+		Screens:         screens,
+		Operations:      operations,
+		Routes:          routes,
+		DrillDown:       drillDown,
 		Impact:          codeProblemImpact(categories, a.runtimeEvidence),
-		Recommendation:  codeProblemRecommendation(categories),
+		Recommendation:  recommendation,
 		Evidence:        codeProblemEvidence(a),
 	}
 }
@@ -610,53 +446,104 @@ func roundedCodeProblemScore(score float64) float64 {
 	return math.Round(score*10) / 10
 }
 
-func codeProblemDrillDown(a *codeProblemAccumulator, signals []CodeProblemSignal) []CodeProblemDrillDown {
-	signalNames := make([]string, 0, len(signals))
-	for _, signal := range signals {
-		signalNames = append(signalNames, signal.Name)
+func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
+	[]CodeProblemDrillDown,
+	[]string,
+	[]string,
+	[]string,
+) {
+	contexts := a.contexts
+	slices.SortFunc(contexts, func(leftAccumulator, rightAccumulator codeProblemContextAccumulator) int {
+		left := leftAccumulator.context
+		right := rightAccumulator.context
+		if left.screen != right.screen {
+			return strings.Compare(left.screen, right.screen)
+		}
+		if left.operation != right.operation {
+			return strings.Compare(left.operation, right.operation)
+		}
+		return strings.Compare(left.route, right.route)
+	})
+	out := make([]CodeProblemDrillDown, 0, len(contexts))
+	var screens []string
+	var operations []string
+	var routes []string
+	for index := range contexts {
+		observation := &contexts[index]
+		context := observation.context
+		signals := sortCodeProblemValues(observation.signals)
+		screens = appendUniqueCodeProblemValue(screens, context.screen)
+		operations = appendUniqueCodeProblemValue(operations, context.operation)
+		routes = appendUniqueCodeProblemValue(routes, context.route)
+		out = append(out, CodeProblemDrillDown{
+			ClassName:      a.className,
+			Method:         a.method,
+			Screen:         context.screen,
+			Operation:      context.operation,
+			Route:          context.route,
+			Evidence:       codeProblemContextEvidence(observation, signals),
+			Recommendation: recommendation,
+			Signals:        signals,
+		})
 	}
-	evidence := codeProblemEvidence(a)
-	recommendation := codeProblemRecommendation(sortedSet(a.categories, 0))
-	var out []CodeProblemDrillDown
-	flows := sortedSet(a.flows, 0)
-	if len(flows) == 0 {
-		flows = []string{""}
+	slices.Sort(screens)
+	slices.Sort(operations)
+	slices.Sort(routes)
+	return out, screens, operations, routes
+}
+
+func appendUniqueCodeProblemValue(values []string, value string) []string {
+	if value == "" {
+		return values
 	}
-	screens := sortedSet(a.screens, 0)
-	if len(screens) == 0 {
-		screens = []string{""}
-	}
-	steps := sortedSet(a.steps, 0)
-	if len(steps) == 0 {
-		steps = []string{""}
-	}
-	routes := sortedSet(a.routes, 0)
-	if len(routes) == 0 {
-		routes = []string{""}
-	}
-	for _, flow := range flows {
-		for _, screen := range firstNStrings(screens, 3) {
-			for _, step := range firstNStrings(steps, 3) {
-				for _, route := range firstNStrings(routes, 3) {
-					out = append(out, CodeProblemDrillDown{
-						ClassName:      a.className,
-						Method:         a.method,
-						Screen:         screen,
-						Flow:           flow,
-						Step:           step,
-						Route:          route,
-						Evidence:       evidence,
-						Recommendation: recommendation,
-						Signals:        append([]string(nil), signalNames...),
-					})
-					if len(out) >= 12 {
-						return out
-					}
-				}
-			}
+	for _, existing := range values {
+		if existing == value {
+			return values
 		}
 	}
-	return out
+	return append(values, value)
+}
+
+func sortCodeProblemValues(values []string) []string {
+	slices.Sort(values)
+	return values
+}
+
+func codeProblemContextEvidence(observation *codeProblemContextAccumulator, signals []string) string {
+	if observation == nil {
+		return "Контекст записан без объединённых метрик."
+	}
+	var builder strings.Builder
+	builder.Grow(96 + len(signals)*16)
+	builder.WriteString("Сигналы: ")
+	for index, signal := range signals {
+		if index > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(signal)
+	}
+	if observation.count > 0 {
+		appendCodeProblemEvidenceMetric(&builder, "наблюдений=", observation.count, "")
+	}
+	if observation.totalMS > 0 {
+		appendCodeProblemEvidenceMetric(&builder, "суммарно=", observation.totalMS, " мс")
+	}
+	if observation.maxMS > 0 {
+		appendCodeProblemEvidenceMetric(&builder, "максимум=", observation.maxMS, " мс")
+	}
+	if observation.value > 0 {
+		appendCodeProblemEvidenceMetric(&builder, "значение=", observation.value, "")
+	}
+	builder.WriteByte('.')
+	return builder.String()
+}
+
+func appendCodeProblemEvidenceMetric(builder *strings.Builder, label string, value uint64, suffix string) {
+	var digits [20]byte
+	builder.WriteString("; ")
+	builder.WriteString(label)
+	builder.Write(strconv.AppendUint(digits[:0], value, 10))
+	builder.WriteString(suffix)
 }
 
 func codeLocationFromOwner(owner string) (string, string) {
@@ -726,144 +613,68 @@ func codeProblemSeverity(score float64, signals []CodeProblemSignal) string {
 	}
 }
 
-func codeProblemImpact(categories []string, runtimeEvidence bool) string {
-	parts := make([]string, 0, len(categories)+1)
-	for _, category := range categories {
-		switch category {
-		case codeCategoryNetwork:
-			parts = append(parts, "увеличивает задержки сценария и может создавать сетевые циклы")
-		case codeCategoryUI:
-			parts = append(parts, "ухудшает плавность интерфейса и отклик на действия")
-		case codeCategoryMainThread:
-			parts = append(parts, "блокирует главный поток, повышая риск АНР и пропуска кадров")
-		case codeCategoryMemory:
-			parts = append(parts, "повышает давление памяти, частоту GC и риск удержаний")
-		case codeCategoryLogs:
-			parts = append(parts, "создает шум логами и лишнюю работу в горячем сценарии")
-		case codeCategoryRuntime:
-			parts = append(parts, "утяжеляет цепочку выполнения в измеренном сценарии")
-		case codeCategoryInfluence:
-			parts = append(parts, "попал в граф влияния рядом с симптомами; это подсказка для расследования, а не самостоятельное доказательство бага")
-		case codeCategoryANR:
-			parts = append(parts, "создает риск ANR из-за долгой работы или цепочки на главном потоке")
-		case codeCategoryOOM:
-			parts = append(parts, "повышает риск OOM из-за роста памяти или удержаний")
-		case codeCategoryGCPressure:
-			parts = append(parts, "создает давление GC и может давать периодические паузы")
-		case codeCategoryDuplicate:
-			parts = append(parts, "может дублировать сетевые запросы или повторять один маршрут без дедупликации")
-		case codeCategoryLifecycle:
-			parts = append(parts, "похож на утечку жизненного цикла: объект живет дольше экрана или сценария")
-		case codeCategoryLogSpam:
-			parts = append(parts, "создает спам логами в горячем пути")
-		case codeCategoryMainIO:
-			parts = append(parts, "указывает на риск IO на главном потоке")
-		}
-	}
-	if !runtimeEvidence {
-		parts = append(parts, "пока нет подтверждения выполнением в этом прогоне")
-	}
-	if len(parts) == 0 {
-		return "Нужна ручная проверка: сигнал есть, но влияние пока слабое."
-	}
-	return strings.Join(parts, "; ") + "."
-}
-
-func codeProblemRecommendation(categories []string) string {
-	recommendations := []string{}
-	for _, category := range categories {
-		switch category {
-		case codeCategoryNetwork:
-			recommendations = append(recommendations, "проверьте дедупликацию запросов, кеширование, таймауты и повторные фоновые циклы")
-		case codeCategoryUI:
-			recommendations = append(recommendations, "проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле")
-		case codeCategoryMainThread:
-			recommendations = append(recommendations, "перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей")
-		case codeCategoryMemory:
-			recommendations = append(recommendations, "проверьте владельцев ссылок, жизненный цикл, кеши и рост PSS рядом с GC")
-		case codeCategoryLogs:
-			recommendations = append(recommendations, "уменьшите частоту логирования или вынесите шумные debug-логи из горячего пути")
-		case codeCategoryRuntime:
-			recommendations = append(recommendations, "проверьте цепочку вызовов и стоимость вызываемого метода")
-		case codeCategoryInfluence:
-			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с доказательствами выполнения; приоритет выше, если рядом есть паузы, сеть, память или runtime-вызовы")
-		case codeCategoryANR:
-			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока")
-		case codeCategoryOOM:
-			recommendations = append(recommendations, "проверьте рост heap/PSS, лимиты кешей, bitmap/buffer allocations и жизненный цикл владельцев")
-		case codeCategoryGCPressure:
-			recommendations = append(recommendations, "уменьшите текучесть аллокаций в горячем пути и проверьте повторные сборки/создание временных объектов")
-		case codeCategoryDuplicate:
-			recommendations = append(recommendations, "добавьте дедупликацию запросов в работе, кеширование ответа или задержку повторного запуска сценария")
-		case codeCategoryLifecycle:
-			recommendations = append(recommendations, "проверьте очистку слушателей, обратных вызовов и binding, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла")
-		case codeCategoryLogSpam:
-			recommendations = append(recommendations, "ограничьте частоту логов, уберите debug-логи из горячего пути или агрегируйте события")
-		case codeCategoryMainIO:
-			recommendations = append(recommendations, "вынесите дисковый и сетевой ввод-вывод с главного потока и проверьте нарушения StrictMode")
-		}
-	}
-	if len(recommendations) == 0 {
-		return "Проверьте источник вручную и сопоставьте его с таймлайном."
-	}
-	return strings.Join(uniqueStrings(recommendations), "; ") + "."
-}
-
 func codeProblemEvidence(a *codeProblemAccumulator) string {
-	parts := []string{}
-	if a.problems > 0 {
-		parts = append(parts, fmt.Sprintf("проблем=%d", a.problems))
+	metrics := [...]codeProblemEvidenceMetric{
+		{label: "проблем=", value: a.problems},
+		{label: "главный поток=", value: a.mainThreadMS, suffix: " мс"},
+		{label: "сеть=", value: a.networkMS, suffix: " мс"},
+		{label: "медленных кадров=", value: a.uiJank},
+		{label: "логов=", value: a.logSpam},
+		{label: "удержано=", value: a.retained},
+		{label: "макс. оценка памяти=", value: a.memoryKB, suffix: " КБ"},
+		{label: "вызовов=", value: a.runtimeCalls},
+		{label: "макс=", value: a.maxMS, suffix: " мс"},
 	}
-	if a.mainThreadMS > 0 {
-		parts = append(parts, fmt.Sprintf("главный поток=%d мс", a.mainThreadMS))
+	const prefix = "Сводка сигналов: "
+	length := len(prefix) + 1
+	count := 0
+	for _, metric := range metrics {
+		if metric.value == 0 {
+			continue
+		}
+		if count > 0 {
+			length += 2
+		}
+		length += len(metric.label) + decimalUint64Length(metric.value) + len(metric.suffix)
+		count++
 	}
-	if a.networkMS > 0 {
-		parts = append(parts, fmt.Sprintf("сеть=%d мс", a.networkMS))
-	}
-	if a.uiJank > 0 {
-		parts = append(parts, fmt.Sprintf("медленных кадров=%d", a.uiJank))
-	}
-	if a.logSpam > 0 {
-		parts = append(parts, fmt.Sprintf("логов=%d", a.logSpam))
-	}
-	if a.retained > 0 {
-		parts = append(parts, fmt.Sprintf("удержано=%d", a.retained))
-	}
-	if a.memoryKB > 0 {
-		parts = append(parts, fmt.Sprintf("память=%d КБ", a.memoryKB))
-	}
-	if a.runtimeCalls > 0 {
-		parts = append(parts, fmt.Sprintf("вызовов=%d", a.runtimeCalls))
-	}
-	if a.maxMS > 0 {
-		parts = append(parts, fmt.Sprintf("макс=%d мс", a.maxMS))
-	}
-	if len(parts) == 0 {
+	if count == 0 {
 		return "Доказательства выполнения ограничены: отчет видит только слабую связь с графом или статический след."
 	}
-	return "Сводка сигналов: " + strings.Join(parts, ", ") + "."
+	var builder strings.Builder
+	builder.Grow(length)
+	builder.WriteString(prefix)
+	var digits [20]byte
+	written := 0
+	for _, metric := range metrics {
+		if metric.value == 0 {
+			continue
+		}
+		if written > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(metric.label)
+		builder.Write(strconv.AppendUint(digits[:0], metric.value, 10))
+		builder.WriteString(metric.suffix)
+		written++
+	}
+	builder.WriteByte('.')
+	return builder.String()
 }
 
-func ownerKindForCodeProblem(kind string) string {
-	switch kind {
-	case "wrapped_runnable":
-		return "Долгая Runnable-задача"
-	case "wrapped_callable":
-		return "Долгая Callable-задача"
-	case "wrapped_coroutine":
-		return "Долгая корутинная задача"
-	case "wrapped_executor":
-		return "Долгая executor-задача"
-	case "wrapped_click":
-		return "Долгий click-handler"
-	case "main_thread_dispatch":
-		return "Медленный dispatch главного потока"
-	default:
-		if kind == "" {
-			return "Источник выполнения"
-		}
-		return strings.ReplaceAll(kind, "_", " ")
+type codeProblemEvidenceMetric struct {
+	label  string
+	suffix string
+	value  uint64
+}
+
+func decimalUint64Length(value uint64) int {
+	length := 1
+	for value >= 10 {
+		value /= 10
+		length++
 	}
+	return length
 }
 
 func problemKindForCodeProblem(kind string) string {
@@ -879,7 +690,9 @@ func problemKindForCodeProblem(kind string) string {
 	case "wrapped_callable":
 		return "Долгая Callable-задача"
 	case "wrapped_coroutine":
-		return "Долгая корутинная задача"
+		return "Долгая корутинная задача по полной длительности"
+	case "wrapped_coroutine_active":
+		return "Долгое активное выполнение корутинной задачи"
 	case "wrapped_executor":
 		return "Долгая executor-задача"
 	case "wrapped_click":
@@ -916,7 +729,7 @@ func categoryForProblemKind(kind string) string {
 		return codeCategoryMemory
 	case "log_spam":
 		return codeCategoryLogs
-	case "wrapped_runnable", "wrapped_callable", "wrapped_coroutine", "wrapped_executor":
+	case "wrapped_runnable", "wrapped_callable", "wrapped_coroutine", "wrapped_coroutine_active", "wrapped_executor":
 		return codeCategoryRuntime
 	default:
 		return codeCategoryRuntime
@@ -964,16 +777,6 @@ func likelyMainThreadOwner(owner string) bool {
 		strings.Contains(lower, "bind")
 }
 
-func severityFromNetwork(p95 uint64, failures int) string {
-	if p95 >= 1_500 || failures >= 3 {
-		return "high"
-	}
-	if p95 >= 700 || failures > 0 {
-		return "medium"
-	}
-	return "ok"
-}
-
 func severityFromDuration(value, medium, high uint64) string {
 	switch {
 	case value >= high && high > 0:
@@ -994,21 +797,6 @@ func severityFromCount(value, medium, high uint64) string {
 	default:
 		return "ok"
 	}
-}
-
-func severityFromPercent(value, medium, high float64) string {
-	switch {
-	case value >= high:
-		return "high"
-	case value >= medium:
-		return "medium"
-	default:
-		return "ok"
-	}
-}
-
-func severityFromKB(value, medium, high uint64) string {
-	return severityFromCount(value, medium, high)
 }
 
 func maxSeverity(a, b string) string {
@@ -1033,34 +821,6 @@ func codeProblemSeverityRank(value string) int {
 	}
 }
 
-func influenceDetail(node InfluenceNode) string {
-	parts := []string{}
-	parts = append(parts, "класс связан с симптомами через граф влияния; сам по себе этот сигнал не доказывает дефект")
-	if len(node.Reasons) > 0 {
-		parts = append(parts, "причины: "+strings.Join(node.Reasons, ", "))
-	}
-	if len(node.Flows) > 0 {
-		parts = append(parts, "сценарии: "+strings.Join(node.Flows, ", "))
-	}
-	if node.RuntimeEvidence {
-		parts = append(parts, "есть доказательства выполнения")
-	} else {
-		parts = append(parts, "только статический след")
-	}
-	return strings.Join(parts, "; ")
-}
-
-func influenceProblemSeverity(node InfluenceNode) string {
-	switch {
-	case node.RuntimeEvidence && node.Score >= 30:
-		return "high"
-	case node.Score >= 7 || node.Severity == "high" || node.Severity == "medium":
-		return "medium"
-	default:
-		return "ok"
-	}
-}
-
 func uniqueStrings(values []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
@@ -1072,13 +832,6 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func firstNStrings(values []string, limit int) []string {
-	if limit <= 0 || len(values) <= limit {
-		return values
-	}
-	return values[:limit]
 }
 
 func maxUint64(a, b uint64) uint64 {

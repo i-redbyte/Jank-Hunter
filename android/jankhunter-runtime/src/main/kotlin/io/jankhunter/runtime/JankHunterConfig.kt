@@ -1,8 +1,5 @@
 package io.jankhunter.runtime
 
-import android.content.Context
-import android.content.pm.ApplicationInfo
-import android.os.Bundle
 import io.jankhunter.runtime.internal.io.DictionaryIds
 import java.io.File
 
@@ -10,7 +7,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
     private val runtimeEnabled = builder.runtimeEnabled
     private val runtimeCallGraphEnabled = builder.runtimeCallGraphEnabled
-    private val runtimeCallGraphMode = builder.runtimeCallGraphMode
+    private val availableRuntimeFeaturesMask = builder.availableRuntimeFeaturesMask
+    private val enabledRuntimeFeaturesMask = builder.enabledRuntimeFeaturesMask
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
     private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
@@ -20,11 +18,15 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
     private val mainLooperDispatchMonitorEnabled = builder.mainLooperDispatchMonitorEnabled
     private val processExitInfoEnabled = builder.processExitInfoEnabled
+    private val ioTracingEnabled = builder.ioTracingEnabled
+    private val composeTracingEnabled = builder.composeTracingEnabled
+    private val roomTracingEnabled = builder.roomTracingEnabled
+    private val databaseTracingEnabled = builder.databaseTracingEnabled
+    private val workerTracingEnabled = builder.workerTracingEnabled
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
     private val retainedHeapDumpEnabled = builder.retainedHeapDumpEnabled
-    private val retainedHeapDumpPrivacyApproved = builder.retainedHeapDumpPrivacyApproved
     private val retainedHeapDumpMinIntervalMs = builder.retainedHeapDumpMinIntervalMs
     private val retainedHeapDumpMaxCount = builder.retainedHeapDumpMaxCount
     private val retainedHeapDumpMinRetainedAgeMs = builder.retainedHeapDumpMinRetainedAgeMs
@@ -34,9 +36,14 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
     private val uiWindowP95ThresholdMs = builder.uiWindowP95ThresholdMs
+    private val exactEventCollectionEnabled = builder.exactEventCollectionEnabled
     private val maxQueueSize = builder.maxQueueSize
+    private val mainThreadAdmissionWaitMs = builder.mainThreadAdmissionWaitMs
+    private val backgroundAdmissionWaitMs = builder.backgroundAdmissionWaitMs
     private val sessionLogSizeLimitEnabled = builder.sessionLogSizeLimitEnabled
     private val maxSessionLogSizeMiB = builder.maxSessionLogSizeMiB
+    private val logGrowthAnalyticsEnabled = builder.logGrowthAnalyticsEnabled
+    private val deleteObsoleteJhlogFormats = builder.deleteObsoleteJhlogFormats
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
@@ -62,9 +69,32 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun runtimeEnabled(): Boolean = runtimeEnabled
 
-    fun runtimeCallGraphEnabled(): Boolean = runtimeCallGraphEnabled
+    fun runtimeCallGraphEnabled(): Boolean =
+        runtimeCallGraphEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.CALL_GRAPH)
 
-    fun runtimeCallGraphMode(): JankHunterRuntimeGraphMode = runtimeCallGraphMode
+    fun isRuntimeFeatureEnabled(feature: JankHunterRuntimeFeature): Boolean {
+        val mask = feature.mask
+        return availableRuntimeFeaturesMask and enabledRuntimeFeaturesMask and mask != 0L
+    }
+
+    internal fun effectiveRuntimeFeatureMask(): Long {
+        if (!enabled || !runtimeEnabled) return 0L
+        var result = availableRuntimeFeaturesMask and enabledRuntimeFeaturesMask
+        if (!runtimeCallGraphEnabled) result = result without JankHunterRuntimeFeature.CALL_GRAPH
+        if (!mainLooperDispatchMonitorEnabled) result = result without JankHunterRuntimeFeature.MAIN_LOOPER
+        if (!databaseTracingEnabled) result = result without JankHunterRuntimeFeature.SQLITE
+        if (!roomTracingEnabled) result = result without JankHunterRuntimeFeature.ROOM
+        if (!ioTracingEnabled) {
+            result = result without JankHunterRuntimeFeature.RUNTIME_IO
+            result = result without JankHunterRuntimeFeature.BYTECODE_IO
+        }
+        if (!objectWatcherEnabled) result = result without JankHunterRuntimeFeature.LIFECYCLE_LEAKS
+        if (!retainedHeapDumpEnabled) result = result without JankHunterRuntimeFeature.HEAP_DUMPS
+        if (!composeTracingEnabled) result = result without JankHunterRuntimeFeature.COMPOSE
+        if (!workerTracingEnabled) result = result without JankHunterRuntimeFeature.WORKERS
+        if (!fpsMonitorEnabled && !jankStatsEnabled) result = result without JankHunterRuntimeFeature.JANK_STATS
+        return result
+    }
 
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
@@ -80,19 +110,41 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun systemSampleIntervalMs(): Long = systemSampleIntervalMs.coerceAtLeast(1L)
 
-    fun mainLooperDispatchMonitorEnabled(): Boolean = mainLooperDispatchMonitorEnabled
+    fun mainLooperDispatchMonitorEnabled(): Boolean =
+        mainLooperDispatchMonitorEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.MAIN_LOOPER)
 
     fun processExitInfoEnabled(): Boolean = processExitInfoEnabled
 
-    fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
+    fun ioTracingEnabled(): Boolean =
+        ioTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.RUNTIME_IO)
+
+    internal fun bytecodeIoTracingEnabled(): Boolean =
+        ioTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.BYTECODE_IO)
+
+    fun composeTracingEnabled(): Boolean =
+        composeTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.COMPOSE)
+
+    fun roomTracingEnabled(): Boolean =
+        roomTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.ROOM)
+
+    fun databaseTracingEnabled(): Boolean =
+        databaseTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.SQLITE)
+
+    fun workerTracingEnabled(): Boolean =
+        workerTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.WORKERS)
+
+    internal fun semanticTracingEnabled(): Boolean =
+        composeTracingEnabled() || roomTracingEnabled() || workerTracingEnabled()
+
+    fun objectWatcherEnabled(): Boolean =
+        objectWatcherEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS)
 
     fun retainedObjectDelayMs(): Long = retainedObjectDelayMs.coerceAtLeast(0L)
 
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
-    fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled && retainedHeapDumpPrivacyApproved
-
-    fun retainedHeapDumpPrivacyApproved(): Boolean = retainedHeapDumpPrivacyApproved
+    fun retainedHeapDumpEnabled(): Boolean =
+        retainedHeapDumpEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HEAP_DUMPS)
 
     fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs.coerceAtLeast(0L)
 
@@ -102,9 +154,11 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun retainedHeapDumpDirectory(): File? = retainedHeapDumpDirectory
 
-    fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
+    fun fpsMonitorEnabled(): Boolean =
+        fpsMonitorEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS)
 
-    fun jankStatsEnabled(): Boolean = jankStatsEnabled
+    fun jankStatsEnabled(): Boolean =
+        jankStatsEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS)
 
     fun fpsWindowMs(): Long = fpsWindowMs.coerceAtLeast(1L)
 
@@ -112,11 +166,28 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun uiWindowP95ThresholdMs(): Long = uiWindowP95ThresholdMs.coerceAtLeast(1L)
 
-    fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
+    /**
+     * Preserves accepted evidence through bounded admission and shutdown paths. Configured
+     * cardinality and storage limits remain hard safety boundaries; every rejection is reported
+     * by a quality counter.
+     */
+    fun exactEventCollectionEnabled(): Boolean = exactEventCollectionEnabled
+
+    fun maxQueueSize(): Int = maxQueueSize.coerceIn(1, MAX_QUEUE_SIZE)
+
+    /** Maximum time a main-thread producer may wait for bounded log admission. */
+    fun mainThreadAdmissionWaitMs(): Long = mainThreadAdmissionWaitMs.coerceAtLeast(0L)
+
+    /** Maximum time a background producer may wait for bounded log admission. */
+    fun backgroundAdmissionWaitMs(): Long = backgroundAdmissionWaitMs.coerceAtLeast(0L)
 
     fun sessionLogSizeLimitEnabled(): Boolean = sessionLogSizeLimitEnabled
 
     fun maxSessionLogSizeMiB(): Int = maxSessionLogSizeMiB.coerceAtLeast(1)
+
+    fun logGrowthAnalyticsEnabled(): Boolean = logGrowthAnalyticsEnabled
+
+    fun deleteObsoleteJhlogFormats(): Boolean = deleteObsoleteJhlogFormats
 
     internal fun sessionLogSizeLimitBytes(): Long {
         if (!sessionLogSizeLimitEnabled) return 0L
@@ -124,9 +195,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         return sizeMiB.coerceAtMost(Long.MAX_VALUE / BYTES_PER_MIB) * BYTES_PER_MIB
     }
 
-    fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
+    fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceIn(0, MAX_DICTIONARY_ENTRIES)
 
-    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceAtLeast(1)
+    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceIn(1, MAX_DICTIONARY_VALUE_BYTES)
 
     fun flushIntervalMs(): Long = flushIntervalMs.coerceAtLeast(1L)
 
@@ -169,7 +240,8 @@ class JankHunterConfig private constructor(builder: Builder) {
             .enabled(enabled)
             .runtimeEnabled(runtimeEnabled)
             .runtimeCallGraphEnabled(runtimeCallGraphEnabled)
-            .runtimeCallGraphMode(runtimeCallGraphMode)
+            .availableRuntimeFeaturesMask(availableRuntimeFeaturesMask)
+            .enabledRuntimeFeaturesMask(enabledRuntimeFeaturesMask)
             .autoStartCollectors(autoStartCollectors)
             .mainThreadStallThresholdMs(mainThreadStallThresholdMs)
             .ownerBlockThresholdMs(ownerBlockThresholdMs)
@@ -179,11 +251,15 @@ class JankHunterConfig private constructor(builder: Builder) {
             .systemSampleIntervalMs(systemSampleIntervalMs)
             .mainLooperDispatchMonitorEnabled(mainLooperDispatchMonitorEnabled)
             .processExitInfoEnabled(processExitInfoEnabled)
+            .ioTracingEnabled(ioTracingEnabled)
+            .composeTracingEnabled(composeTracingEnabled)
+            .roomTracingEnabled(roomTracingEnabled)
+            .databaseTracingEnabled(databaseTracingEnabled)
+            .workerTracingEnabled(workerTracingEnabled)
             .objectWatcherEnabled(objectWatcherEnabled)
             .retainedObjectDelayMs(retainedObjectDelayMs)
             .retainedObjectForceGcEnabled(retainedObjectForceGcEnabled)
             .retainedHeapDumpEnabled(retainedHeapDumpEnabled)
-            .retainedHeapDumpPrivacyApproved(retainedHeapDumpPrivacyApproved)
             .retainedHeapDumpMinIntervalMs(retainedHeapDumpMinIntervalMs)
             .retainedHeapDumpMaxCount(retainedHeapDumpMaxCount)
             .retainedHeapDumpMinRetainedAgeMs(retainedHeapDumpMinRetainedAgeMs)
@@ -193,9 +269,14 @@ class JankHunterConfig private constructor(builder: Builder) {
             .fpsWindowMs(fpsWindowMs)
             .jankFrameThresholdMs(jankFrameThresholdMs)
             .uiWindowP95ThresholdMs(uiWindowP95ThresholdMs)
+            .exactEventCollectionEnabled(exactEventCollectionEnabled)
             .maxQueueSize(maxQueueSize)
+            .mainThreadAdmissionWaitMs(mainThreadAdmissionWaitMs)
+            .backgroundAdmissionWaitMs(backgroundAdmissionWaitMs)
             .sessionLogSizeLimitEnabled(sessionLogSizeLimitEnabled)
             .maxSessionLogSizeMiB(maxSessionLogSizeMiB)
+            .logGrowthAnalyticsEnabled(logGrowthAnalyticsEnabled)
+            .deleteObsoleteJhlogFormats(deleteObsoleteJhlogFormats)
             .maxDictionaryEntries(maxDictionaryEntries)
             .maxDictionaryValueBytes(maxDictionaryValueBytes)
             .flushIntervalMs(flushIntervalMs)
@@ -228,7 +309,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var enabled = true
         internal var runtimeEnabled = true
         internal var runtimeCallGraphEnabled = true
-        internal var runtimeCallGraphMode = JankHunterRuntimeGraphMode.BUFFERED
+        internal var availableRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
+        internal var enabledRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
         internal var ownerBlockThresholdMs = 250L
@@ -238,11 +320,15 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var systemSampleIntervalMs = 15_000L
         internal var mainLooperDispatchMonitorEnabled = false
         internal var processExitInfoEnabled = true
+        internal var ioTracingEnabled = true
+        internal var composeTracingEnabled = true
+        internal var roomTracingEnabled = true
+        internal var databaseTracingEnabled = true
+        internal var workerTracingEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
         internal var retainedHeapDumpEnabled = false
-        internal var retainedHeapDumpPrivacyApproved = false
         internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
         internal var retainedHeapDumpMaxCount = 1
         internal var retainedHeapDumpMinRetainedAgeMs = 30_000L
@@ -252,9 +338,14 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
         internal var uiWindowP95ThresholdMs = 32L
-        internal var maxQueueSize = 2048
+        internal var exactEventCollectionEnabled = true
+        internal var maxQueueSize = 65_536
+        internal var mainThreadAdmissionWaitMs = 0L
+        internal var backgroundAdmissionWaitMs = 5L
         internal var sessionLogSizeLimitEnabled = true
-        internal var maxSessionLogSizeMiB = 16
+        internal var maxSessionLogSizeMiB = 50
+        internal var logGrowthAnalyticsEnabled = true
+        internal var deleteObsoleteJhlogFormats = true
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = DictionaryIds.DEFAULT_MAX_VALUE_BYTES
         internal var flushIntervalMs = 5_000L
@@ -270,7 +361,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxHandlerWrappersPerRunnable = 32
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
-        internal var mainProcessOnly = true
+        internal var mainProcessOnly = false
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
         internal var binaryStorage: JankHunterBinaryStorage? = null
@@ -282,7 +373,25 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun runtimeCallGraphEnabled(value: Boolean) = apply { runtimeCallGraphEnabled = value }
 
-        fun runtimeCallGraphMode(value: JankHunterRuntimeGraphMode) = apply { runtimeCallGraphMode = value }
+        internal fun availableRuntimeFeatures(features: Set<JankHunterRuntimeFeature>) = apply {
+            availableRuntimeFeaturesMask = JankHunterRuntimeFeature.maskOf(features)
+        }
+
+        fun runtimeFeatureEnabled(feature: JankHunterRuntimeFeature, value: Boolean) = apply {
+            enabledRuntimeFeaturesMask = if (value) {
+                enabledRuntimeFeaturesMask or feature.mask
+            } else {
+                enabledRuntimeFeaturesMask and feature.mask.inv()
+            }
+        }
+
+        internal fun availableRuntimeFeaturesMask(value: Long) = apply {
+            availableRuntimeFeaturesMask = value and JankHunterRuntimeFeature.allMask
+        }
+
+        internal fun enabledRuntimeFeaturesMask(value: Long) = apply {
+            enabledRuntimeFeaturesMask = value and JankHunterRuntimeFeature.allMask
+        }
 
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 
@@ -302,6 +411,16 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun processExitInfoEnabled(value: Boolean) = apply { processExitInfoEnabled = value }
 
+        fun ioTracingEnabled(value: Boolean) = apply { ioTracingEnabled = value }
+
+        fun composeTracingEnabled(value: Boolean) = apply { composeTracingEnabled = value }
+
+        fun roomTracingEnabled(value: Boolean) = apply { roomTracingEnabled = value }
+
+        fun databaseTracingEnabled(value: Boolean) = apply { databaseTracingEnabled = value }
+
+        fun workerTracingEnabled(value: Boolean) = apply { workerTracingEnabled = value }
+
         fun objectWatcherEnabled(value: Boolean) = apply { objectWatcherEnabled = value }
 
         fun retainedObjectDelayMs(value: Long) = apply { retainedObjectDelayMs = value }
@@ -309,8 +428,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun retainedObjectForceGcEnabled(value: Boolean) = apply { retainedObjectForceGcEnabled = value }
 
         fun retainedHeapDumpEnabled(value: Boolean) = apply { retainedHeapDumpEnabled = value }
-
-        fun retainedHeapDumpPrivacyApproved(value: Boolean) = apply { retainedHeapDumpPrivacyApproved = value }
 
         fun retainedHeapDumpMinIntervalMs(value: Long) = apply { retainedHeapDumpMinIntervalMs = value }
 
@@ -330,11 +447,21 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun uiWindowP95ThresholdMs(value: Long) = apply { uiWindowP95ThresholdMs = value }
 
+        fun exactEventCollectionEnabled(value: Boolean) = apply { exactEventCollectionEnabled = value }
+
         fun maxQueueSize(value: Int) = apply { maxQueueSize = value }
+
+        fun mainThreadAdmissionWaitMs(value: Long) = apply { mainThreadAdmissionWaitMs = value }
+
+        fun backgroundAdmissionWaitMs(value: Long) = apply { backgroundAdmissionWaitMs = value }
 
         fun sessionLogSizeLimitEnabled(value: Boolean) = apply { sessionLogSizeLimitEnabled = value }
 
         fun maxSessionLogSizeMiB(value: Int) = apply { maxSessionLogSizeMiB = value }
+
+        fun logGrowthAnalyticsEnabled(value: Boolean) = apply { logGrowthAnalyticsEnabled = value }
+
+        fun deleteObsoleteJhlogFormats(value: Boolean) = apply { deleteObsoleteJhlogFormats = value }
 
         fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
 
@@ -385,244 +512,17 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun build(): JankHunterConfig = JankHunterConfig(this)
     }
 
+
     companion object {
-        const val META_ENABLED = "io.jankhunter.enabled"
-        const val META_RUNTIME_ENABLED = "io.jankhunter.runtime_enabled"
-        const val META_RUNTIME_CALL_GRAPH_ENABLED = "io.jankhunter.runtime_call_graph_enabled"
-        const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
-        const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
-        const val META_OWNER_BLOCK_THRESHOLD_MS = "io.jankhunter.owner_block_threshold_ms"
-        const val META_HTTP_SLOW_THRESHOLD_MS = "io.jankhunter.http_slow_threshold_ms"
-        const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
-        const val META_SYSTEM_SAMPLER_ENABLED = "io.jankhunter.system_sampler_enabled"
-        const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
-        const val META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED = "io.jankhunter.main_looper_dispatch_monitor_enabled"
-        const val META_PROCESS_EXIT_INFO_ENABLED = "io.jankhunter.process_exit_info_enabled"
-        const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
-        const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
-        const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
-        const val META_RETAINED_HEAP_DUMP_ENABLED = "io.jankhunter.retained_heap_dump_enabled"
-        const val META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED = "io.jankhunter.retained_heap_dump_privacy_approved"
-        const val META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS = "io.jankhunter.retained_heap_dump_min_interval_ms"
-        const val META_RETAINED_HEAP_DUMP_MAX_COUNT = "io.jankhunter.retained_heap_dump_max_count"
-        const val META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS =
-            "io.jankhunter.retained_heap_dump_min_retained_age_ms"
-        const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
-        const val META_JANKSTATS_ENABLED = "io.jankhunter.jankstats_enabled"
-        const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
-        const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
-        const val META_UI_WINDOW_P95_THRESHOLD_MS = "io.jankhunter.ui_window_p95_threshold_ms"
-        const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
-        const val META_SESSION_LOG_SIZE_LIMIT_ENABLED = "io.jankhunter.session_log_size_limit_enabled"
-        const val META_MAX_SESSION_LOG_SIZE_MIB = "io.jankhunter.max_session_log_size_mib"
-        const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
-        const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
-        const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
-        const val META_ADAPTIVE_SAMPLING_ENABLED = "io.jankhunter.adaptive_sampling_enabled"
-        const val META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS = "io.jankhunter.adaptive_memory_stable_interval_ms"
-        const val META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS = "io.jankhunter.adaptive_context_stable_interval_ms"
-        const val META_METRIC_AGGREGATION_ENABLED = "io.jankhunter.metric_aggregation_enabled"
-        const val META_METRIC_AGGREGATION_WINDOW_MS = "io.jankhunter.metric_aggregation_window_ms"
-        const val META_MAX_METRIC_AGGREGATION_KEYS = "io.jankhunter.max_metric_aggregation_keys"
-        const val META_MAX_LOG_SPAM_KEYS = "io.jankhunter.max_log_spam_keys"
-        const val META_MAX_RUNTIME_CALL_GRAPH_KEYS = "io.jankhunter.max_runtime_call_graph_keys"
-        const val META_MAX_HANDLER_TRACKING_ENTRIES = "io.jankhunter.max_handler_tracking_entries"
-        const val META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = "io.jankhunter.max_handler_wrappers_per_runnable"
-        const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
-        const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
-        const val META_SYMBOL_NAMESPACE = "io.jankhunter.symbol_namespace"
+        private const val BYTES_PER_MIB = 1_048_576L
+        private const val SYMBOL_NAMESPACE_BYTES = 16
+        private const val MAX_QUEUE_SIZE = 262_144
+        private const val MAX_DICTIONARY_ENTRIES = 65_536
+        private const val MAX_DICTIONARY_VALUE_BYTES = 16_384
 
         @JvmStatic
         fun builder(): Builder = Builder()
-
-        @JvmStatic
-        fun fromManifest(context: Context): JankHunterConfig {
-            val metadata = metadata(context)
-            val defaultEnabled = isDebuggable(context)
-            return builder()
-                .enabled(metadataBoolean(metadata, META_ENABLED, defaultEnabled))
-                .runtimeEnabled(metadataBoolean(metadata, META_RUNTIME_ENABLED, true))
-                .runtimeCallGraphEnabled(metadataBoolean(metadata, META_RUNTIME_CALL_GRAPH_ENABLED, true))
-                .autoStartCollectors(metadataBoolean(metadata, META_AUTO_START_COLLECTORS, true))
-                .mainThreadStallThresholdMs(metadataLong(metadata, META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
-                .ownerBlockThresholdMs(metadataLong(metadata, META_OWNER_BLOCK_THRESHOLD_MS, 250L))
-                .httpSlowThresholdMs(metadataLong(metadata, META_HTTP_SLOW_THRESHOLD_MS, 1_000L))
-                .memorySampleIntervalMs(metadataLong(metadata, META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L))
-                .systemSamplerEnabled(metadataBoolean(metadata, META_SYSTEM_SAMPLER_ENABLED, true))
-                .systemSampleIntervalMs(metadataLong(metadata, META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L))
-                .mainLooperDispatchMonitorEnabled(
-                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false),
-                )
-                .processExitInfoEnabled(metadataBoolean(metadata, META_PROCESS_EXIT_INFO_ENABLED, true))
-                .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
-                .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
-                .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
-                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, false))
-                .retainedHeapDumpPrivacyApproved(
-                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, false),
-                )
-                .retainedHeapDumpMinIntervalMs(
-                    metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L),
-                )
-                .retainedHeapDumpMaxCount(metadataInt(metadata, META_RETAINED_HEAP_DUMP_MAX_COUNT, 1))
-                .retainedHeapDumpMinRetainedAgeMs(
-                    metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS, 30_000L),
-                )
-                .fpsMonitorEnabled(metadataBoolean(metadata, META_FPS_MONITOR_ENABLED, true))
-                .jankStatsEnabled(metadataBoolean(metadata, META_JANKSTATS_ENABLED, true))
-                .fpsWindowMs(metadataLong(metadata, META_FPS_WINDOW_MS, 1_000L))
-                .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
-                .uiWindowP95ThresholdMs(metadataLong(metadata, META_UI_WINDOW_P95_THRESHOLD_MS, 32L))
-                .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
-                .sessionLogSizeLimitEnabled(
-                    metadataBoolean(metadata, META_SESSION_LOG_SIZE_LIMIT_ENABLED, true),
-                )
-                .maxSessionLogSizeMiB(metadataInt(metadata, META_MAX_SESSION_LOG_SIZE_MIB, 16))
-                .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
-                .maxDictionaryValueBytes(
-                    metadataInt(
-                        metadata,
-                        META_MAX_DICTIONARY_VALUE_BYTES,
-                        DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
-                    ),
-                )
-                .flushIntervalMs(metadataLong(metadata, META_FLUSH_INTERVAL_MS, 5_000L))
-                .adaptiveSamplingEnabled(metadataBoolean(metadata, META_ADAPTIVE_SAMPLING_ENABLED, true))
-                .adaptiveMemoryStableIntervalMs(
-                    metadataLong(metadata, META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS, 60_000L),
-                )
-                .adaptiveContextStableIntervalMs(
-                    metadataLong(metadata, META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS, 60_000L),
-                )
-                .metricAggregationEnabled(metadataBoolean(metadata, META_METRIC_AGGREGATION_ENABLED, true))
-                .metricAggregationWindowMs(metadataLong(metadata, META_METRIC_AGGREGATION_WINDOW_MS, 5_000L))
-                .maxMetricAggregationKeys(metadataInt(metadata, META_MAX_METRIC_AGGREGATION_KEYS, 2048))
-                .maxLogSpamKeys(metadataInt(metadata, META_MAX_LOG_SPAM_KEYS, 2048))
-                .maxRuntimeCallGraphKeys(metadataInt(metadata, META_MAX_RUNTIME_CALL_GRAPH_KEYS, 4096))
-                .maxHandlerTrackingEntries(metadataInt(metadata, META_MAX_HANDLER_TRACKING_ENTRIES, 4096))
-                .maxHandlerWrappersPerRunnable(
-                    metadataInt(metadata, META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32),
-                )
-                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, true))
-                .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
-                .symbolNamespace(decodeSymbolNamespace(metadataString(metadata, META_SYMBOL_NAMESPACE)))
-                .build()
-        }
-
-        internal fun symbolNamespaceFromManifest(context: Context): ByteArray {
-            val metadata = metadata(context)
-            return decodeSymbolNamespace(metadataString(metadata, META_SYMBOL_NAMESPACE))
-        }
-
-        internal fun withBuildSymbolNamespace(
-            config: JankHunterConfig,
-            buildSymbolNamespace: ByteArray,
-        ): JankHunterConfig {
-            return config.toBuilder()
-                .symbolNamespace(buildSymbolNamespace)
-                .build()
-        }
-
-        private fun parseProcessList(raw: String?): List<String> {
-            return raw
-                ?.split(',')
-                ?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-                ?: emptyList()
-        }
-
-        internal fun metadataBoolean(metadata: Bundle?, key: String, defaultValue: Boolean): Boolean {
-            return coerceMetadataBoolean(metadataValue(metadata, key), defaultValue)
-        }
-
-        internal fun metadataLong(metadata: Bundle?, key: String, defaultValue: Long): Long {
-            return coerceMetadataLong(metadataValue(metadata, key), defaultValue)
-        }
-
-        internal fun metadataInt(metadata: Bundle?, key: String, defaultValue: Int): Int {
-            return coerceMetadataInt(metadataValue(metadata, key), defaultValue)
-        }
-
-        internal fun coerceMetadataBoolean(value: Any?, defaultValue: Boolean): Boolean {
-            return when (value) {
-                is Boolean -> value
-                is Number -> value.toInt() != 0
-                is String -> when (value.trim().lowercase()) {
-                    "true", "1" -> true
-                    "false", "0" -> false
-                    else -> defaultValue
-                }
-                else -> defaultValue
-            }
-        }
-
-        internal fun coerceMetadataLong(value: Any?, defaultValue: Long): Long {
-            return when (value) {
-                is Number -> value.toLong()
-                is String -> value.trim().toLongOrNull() ?: defaultValue
-                else -> defaultValue
-            }
-        }
-
-        internal fun coerceMetadataInt(value: Any?, defaultValue: Int): Int {
-            return when (value) {
-                is Number -> value.toInt()
-                is String -> value.trim().toIntOrNull() ?: defaultValue
-                else -> defaultValue
-            }
-        }
-
-        internal fun decodeSymbolNamespace(raw: String?): ByteArray {
-            val value = raw.orEmpty()
-            if (value.length != SYMBOL_NAMESPACE_HEX_CHARS) {
-                return ByteArray(0)
-            }
-            val decoded = ByteArray(value.length / 2)
-            for (index in decoded.indices) {
-                val high = value[index * 2].hexDigit()
-                val low = value[index * 2 + 1].hexDigit()
-                if (high < 0 || low < 0) return ByteArray(0)
-                decoded[index] = ((high shl 4) or low).toByte()
-            }
-            return decoded
-        }
-
-        private fun Char.hexDigit(): Int {
-            return when (this) {
-                in '0'..'9' -> code - '0'.code
-                in 'a'..'f' -> code - 'a'.code + 10
-                else -> -1
-            }
-        }
-
-        private fun metadataString(metadata: Bundle?, key: String): String? {
-            return when (val value = metadataValue(metadata, key)) {
-                is String -> value
-                null -> null
-                else -> value.toString()
-            }
-        }
-
-        @Suppress("DEPRECATION")
-        private fun metadataValue(metadata: Bundle?, key: String): Any? = metadata?.get(key)
-
-        private fun metadata(context: Context): Bundle? {
-            return try {
-                @Suppress("DEPRECATION")
-                context.packageManager
-                    .getApplicationInfo(context.packageName, android.content.pm.PackageManager.GET_META_DATA)
-                    .metaData
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        private fun isDebuggable(context: Context): Boolean {
-            val flags = context.applicationInfo?.flags ?: 0
-            return flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-        }
-
-        private const val BYTES_PER_MIB = 1_048_576L
-        private const val SYMBOL_NAMESPACE_BYTES = 16
-        private const val SYMBOL_NAMESPACE_HEX_CHARS = SYMBOL_NAMESPACE_BYTES * 2
     }
+
+    private infix fun Long.without(feature: JankHunterRuntimeFeature): Long = this and feature.mask.inv()
 }

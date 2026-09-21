@@ -32,7 +32,7 @@ dependencies {
         } else {
             intellijIdea(providers.gradleProperty("platformVersion").get())
         }
-        testFramework(TestFrameworkType.Bundled)
+        testFramework(TestFrameworkType.Platform)
         pluginVerifier("1.408")
     }
 }
@@ -49,6 +49,7 @@ kotlin {
 
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions {
+        allWarningsAsErrors.set(true)
         jvmTarget.set(JvmTarget.JVM_21)
     }
 }

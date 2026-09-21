@@ -13,8 +13,8 @@ class DictionaryIdsTest {
     fun reusesExistingDictionaryIds() {
         val ids = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 64)
 
-        val first = ids.idFor(1, "FeedRepository")
-        val second = ids.idFor(1, "FeedRepository")
+        val first = ids.lookup(1, "FeedRepository")
+        val second = ids.lookup(1, "FeedRepository")
 
         assertEquals(first.id, second.id)
         assertNotNull(first.definition)
@@ -25,9 +25,9 @@ class DictionaryIdsTest {
     fun overflowsAfterRegularEntryBudget() {
         val ids = DictionaryIds(maxRegularEntries = 1, maxValueBytes = 64)
 
-        val regular = ids.idFor(1, "one")
-        val overflow = ids.idFor(1, "two")
-        val anotherOverflow = ids.idFor(1, "three")
+        val regular = ids.lookup(1, "one")
+        val overflow = ids.lookup(1, "two")
+        val anotherOverflow = ids.lookup(1, "three")
 
         assertEquals("one", regular.definition?.value)
         assertEquals(DictionaryIds.OVERFLOW_VALUE, overflow.definition?.value)
@@ -39,7 +39,7 @@ class DictionaryIdsTest {
     fun truncatesLongValuesByUtf8Budget() {
         val ids = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 5)
 
-        val result = ids.idFor(2, "abcdef")
+        val result = ids.lookup(2, "abcdef")
 
         assertEquals("abcde", result.definition?.value)
     }
@@ -48,8 +48,8 @@ class DictionaryIdsTest {
     fun zeroByteBudgetUsesOverflowReferenceOnEveryUse() {
         val ids = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 0)
 
-        val first = ids.idFor(2, "first")
-        val second = ids.idFor(2, "second")
+        val first = ids.lookup(2, "first")
+        val second = ids.lookup(2, "second")
 
         assertTrue(first.overflowed)
         assertTrue(first.truncated)
@@ -64,8 +64,8 @@ class DictionaryIdsTest {
     fun utf8TruncationNeverSplitsSupplementaryCodePoint() {
         val ids = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 4)
 
-        val exact = ids.idFor(2, "🚀x")
-        val tooSmall = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 3).idFor(2, "🚀")
+        val exact = ids.lookup(2, "🚀x")
+        val tooSmall = DictionaryIds(maxRegularEntries = 4, maxValueBytes = 3).lookup(2, "🚀")
 
         assertEquals("🚀", exact.definition?.value)
         assertFalse(exact.overflowed)
@@ -84,14 +84,14 @@ class DictionaryIdsTest {
         assertEquals(
             high,
             DictionaryIds(maxRegularEntries = 4, maxValueBytes = 1)
-                .idFor(2, high)
+                .lookup(2, high)
                 .definition
                 ?.value,
         )
         assertEquals(
             low,
             DictionaryIds(maxRegularEntries = 4, maxValueBytes = 1)
-                .idFor(2, low)
+                .lookup(2, low)
                 .definition
                 ?.value,
         )
@@ -101,7 +101,7 @@ class DictionaryIdsTest {
     fun defaultBudgetPreservesLongRouteAndUtf8Boundary() {
         val route = "/messages/" + "длинный-сегмент/".repeat(31) + "🚀"
 
-        val result = DictionaryIds().idFor(2, route)
+        val result = DictionaryIds().lookup(2, route)
 
         assertEquals(route, result.definition?.value)
         assertFalse(result.truncated)
@@ -109,4 +109,17 @@ class DictionaryIdsTest {
         assertTrue(route.toByteArray(StandardCharsets.UTF_8).size > 256)
         assertTrue(route.toByteArray(StandardCharsets.UTF_8).size <= DictionaryIds.DEFAULT_MAX_VALUE_BYTES)
     }
+
+    private fun DictionaryIds.lookup(kind: Int, value: String?): LookupSnapshot {
+        val result = DictionaryLookupResult()
+        resolve(kind, value, result)
+        return LookupSnapshot(result.id, result.definition, result.overflowed, result.truncated)
+    }
+
+    private data class LookupSnapshot(
+        val id: Long,
+        val definition: DictionaryIds.Definition?,
+        val overflowed: Boolean,
+        val truncated: Boolean,
+    )
 }

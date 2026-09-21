@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,40 @@ func TestLoadDependencyInjectionCatalogAndBuildReport(t *testing.T) {
 	}
 }
 
+func TestBuildDependencyInjectionReportRetainsEveryCatalogEntry(t *testing.T) {
+	const classCount = 501
+	const edgeCount = 2_001
+	catalog := &DependencyInjectionCatalog{
+		Available: true,
+		Classes:   make([]DependencyInjectionClass, classCount),
+		Edges:     make([]DependencyInjectionEdge, edgeCount),
+	}
+	for index := range catalog.Classes {
+		catalog.Classes[index] = DependencyInjectionClass{
+			Name:      fmt.Sprintf("com.app.Class%04d", index),
+			Framework: "hilt",
+		}
+	}
+	for index := range catalog.Edges {
+		catalog.Edges[index] = DependencyInjectionEdge{
+			Consumer:      fmt.Sprintf("com.app.Consumer%04d", index),
+			Dependency:    fmt.Sprintf("com.app.Dependency%04d", index),
+			Framework:     "hilt",
+			InjectionKind: "constructor",
+			Site:          fmt.Sprintf("site-%04d", index),
+			Resolution:    "declared",
+		}
+	}
+
+	report := BuildDependencyInjectionReport(catalog, Summary{})
+	if got := len(report.Classes); got != classCount {
+		t.Fatalf("DI report classes = %d, want %d", got, classCount)
+	}
+	if got := len(report.Edges); got != edgeCount {
+		t.Fatalf("DI report edges = %d, want %d", got, edgeCount)
+	}
+}
+
 func TestDependencyInjectionCatalogRejectsRuntimeOrScoringSemantics(t *testing.T) {
 	for name, metadata := range map[string]string{
 		"runtime tracing": `{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":true,"affectsScore":false}`,
@@ -61,6 +96,46 @@ func TestDependencyInjectionCatalogRejectsRuntimeOrScoringSemantics(t *testing.T
 			}
 			if _, err := LoadDependencyInjectionCatalog(path); err == nil {
 				t.Fatal("LoadDependencyInjectionCatalog() accepted unsafe metadata")
+			}
+		})
+	}
+}
+
+func TestDependencyInjectionCatalogRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "di-catalog.jsonl")
+	metadata := `{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false,"runtimeTrace":false}`
+	if err := os.WriteFile(path, []byte(metadata+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadDependencyInjectionCatalog(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v, want strict schema rejection", err)
+	}
+}
+
+func TestDependencyInjectionCatalogRejectsMixedRecordShapes(t *testing.T) {
+	for name, records := range map[string][]string{
+		"blank variant": {
+			`{"format":1,"kind":"metadata","variant":"","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+		},
+		"class with edge payload": {
+			`{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+			`{"format":1,"kind":"class","name":"com.app.Feed","framework":"hilt","consumer":"com.app.Hidden"}`,
+		},
+		"edge with class payload": {
+			`{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+			`{"format":1,"kind":"edge","consumer":"com.app.Feed","dependency":"com.app.Repo","framework":"hilt","injectionKind":"constructor","site":"Feed#<init>","resolution":"declared","roles":["consumer"]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "di-catalog.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(records, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if catalog, err := LoadDependencyInjectionCatalog(path); err == nil {
+				t.Fatalf("LoadDependencyInjectionCatalog() accepted ambiguous record: %+v", catalog)
 			}
 		})
 	}
@@ -86,6 +161,11 @@ func TestDependencyInjectionCatalogDoesNotChangeRuntimeAnalysis(t *testing.T) {
 		},
 	}).finish()
 
+	if categoryCoverageByID(withCatalog.CategoryCoverage, ProblemCategoryDependencyInjection) == nil {
+		t.Fatalf("DI category is missing: %+v", withCatalog.CategoryCoverage)
+	}
+	withCatalog.CategoryCoverage = withoutCatalog.CategoryCoverage
+	withCatalog.ProblemSummary = withoutCatalog.ProblemSummary
 	if !reflect.DeepEqual(withoutCatalog, withCatalog) {
 		t.Fatalf("DI catalog changed runtime summary\nwithout=%+v\nwith=%+v", withoutCatalog, withCatalog)
 	}

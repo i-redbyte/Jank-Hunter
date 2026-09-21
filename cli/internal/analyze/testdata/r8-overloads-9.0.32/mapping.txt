@@ -1,0 +1,13 @@
+# compiler: R8
+# compiler_version: 9.0.32
+# common_typos_disable
+# {"id":"com.android.tools.r8.mapping","version":"2.2"}
+# pg_map_id: d34e87eee746921f4bc2472e8982ff026f79c80f4b4f521024be9e7270939cde
+# pg_map_hash: SHA-256 d34e87eee746921f4bc2472e8982ff026f79c80f4b4f521024be9e7270939cde
+fixture.Overloads -> a.a:
+# {"id":"sourceFile","fileName":"Overloads.java"}
+    long firstField -> a
+    java.lang.String secondField -> b
+    1:1:void <init>():3:3 -> <init>
+    1:1:int first(int):5:5 -> a
+    2:2:int second(java.lang.String):9:9 -> a

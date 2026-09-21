@@ -2,48 +2,49 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.Process
 import android.os.SystemClock
-import io.jankhunter.runtime.JankHunterAgentEventFlag
-import io.jankhunter.runtime.JankHunterAgentEventType
+import io.jankhunter.runtime.JankHunterHttpEvent
 import io.jankhunter.runtime.JankHunterBinaryWriter
-import java.io.BufferedOutputStream
-import java.io.ByteArrayOutputStream
+import io.jankhunter.runtime.JankHunterOperationAttributes
+import io.jankhunter.runtime.JankHunterWebSocketEvent
+import io.jankhunter.runtime.internal.saturatingAdd
 import java.io.Closeable
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
-import java.io.OutputStream
 import java.nio.charset.StandardCharsets
-import java.util.zip.CRC32
-import java.util.zip.GZIPOutputStream
+import java.security.MessageDigest
+import java.util.TimeZone
+
+private typealias Payload = BinaryPayload
 
 internal class LogSizeLimitReachedException(message: String) : IOException(message)
 
+/** Mutable encoder owned exclusively by one writer thread after construction. */
 internal class BinaryLogWriter private constructor(
-    internal val file: File?,
-    internal val path: String,
-    output: OutputStream,
-    initialBytesWritten: Long,
+    private val container: BinaryLogContainer,
     maxDictionaryEntries: Int,
     maxDictionaryValueBytes: Int,
     private val fileHeader: BinaryLogFileHeader,
     private val quality: LogQualityCounters,
-    maxPhysicalBytes: Long,
-) : Closeable {
+    logGrowth: LogGrowthSessionBinding?,
+) : Closeable, BinaryEncodingSink {
+    internal val file: File?
+        get() = container.file
+    internal val path: String
+        get() = container.path
+
     constructor(
         file: File,
         maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
         maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
-        maxPhysicalBytes: Long = 0L,
+        maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
+        archiveBudget: RunArchiveBudget? = null,
     ) : this(
-        file = file,
-        path = file.absolutePath,
-        output = FileOutputStream(file, false),
-        initialBytesWritten = 0L,
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = defaultFileHeader(),
         quality = LogQualityCounters(),
-        maxPhysicalBytes = maxPhysicalBytes,
+        logGrowth = null,
     )
 
     internal constructor(
@@ -52,17 +53,16 @@ internal class BinaryLogWriter private constructor(
         maxDictionaryValueBytes: Int,
         fileHeader: BinaryLogFileHeader,
         quality: LogQualityCounters,
-        maxPhysicalBytes: Long = 0L,
+        maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
+        logGrowth: LogGrowthSessionBinding? = null,
+        archiveBudget: RunArchiveBudget? = null,
     ) : this(
-        file = file,
-        path = file.absolutePath,
-        output = FileOutputStream(file, false),
-        initialBytesWritten = 0L,
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,
         quality = quality,
-        maxPhysicalBytes = maxPhysicalBytes,
+        logGrowth = logGrowth,
     )
 
     internal constructor(
@@ -71,15 +71,12 @@ internal class BinaryLogWriter private constructor(
         maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
         maxPhysicalBytes: Long = 0L,
     ) : this(
-        file = null,
-        path = writer.path,
-        output = ExternalBinaryOutputStream(writer),
-        initialBytesWritten = writer.bytesWritten(),
+        container = SequentialJhlogContainer(writer, maxPhysicalBytes),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = defaultFileHeader(),
         quality = LogQualityCounters(),
-        maxPhysicalBytes = maxPhysicalBytes,
+        logGrowth = null,
     )
 
     internal constructor(
@@ -89,69 +86,105 @@ internal class BinaryLogWriter private constructor(
         fileHeader: BinaryLogFileHeader,
         quality: LogQualityCounters,
         maxPhysicalBytes: Long = 0L,
+        logGrowth: LogGrowthSessionBinding? = null,
+        archiveBudget: RunArchiveBudget? = null,
     ) : this(
-        file = null,
-        path = writer.path,
-        output = ExternalBinaryOutputStream(writer),
-        initialBytesWritten = writer.bytesWritten(),
+        container = SequentialJhlogContainer(writer, maxPhysicalBytes, archiveBudget),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,
         quality = quality,
-        maxPhysicalBytes = maxPhysicalBytes,
+        logGrowth = logGrowth,
     )
 
-    private val bufferedOut = BufferedOutputStream(output, IO_BUFFER_BYTES)
-    private val physicalByteLimit = maxPhysicalBytes.takeIf { it > 0L } ?: Long.MAX_VALUE
-    private val dictionary = DictionaryIds(
-        maxDictionaryEntries,
-        minOf(maxDictionaryValueBytes, MAX_ENCODED_DICTIONARY_VALUE_BYTES),
+    private val dictionaryRecords = BinaryDictionaryEncoder(
+        sink = this,
+        quality = quality,
+        maxDictionaryEntries = maxDictionaryEntries,
+        maxDictionaryValueBytes = maxDictionaryValueBytes,
     )
-    private val stableSymbolDefinitions = HashMap<Long, String>()
-    private val rawChunk = ByteArrayOutputStream(JhlogV9.TARGET_RAW_CHUNK_BYTES)
-    private val chunkTypeCounts = IntArray(JhlogV9.TYPE_AGENT_EVENT + 1)
+    private val logGrowthRecords = BinaryLogGrowthEncoder(this, container, quality, logGrowth)
+    private val rawChunk = ReusableByteArrayOutput(Jhlog.TARGET_RAW_CHUNK_BYTES)
+    private val gzipEncoder = ReusableGzipEncoder()
+    private val eventPayload = BinaryPayload(256)
+    private val controlPayload = BinaryPayload(256)
+    private val recordEncoder = BinaryRecordEncoder(fileHeader.segmentStartElapsedUs)
+    private val recordContext = BinaryRecordContext()
+    private val microPage = ColumnarMicroPage()
+    private val microPagePayload = BinaryPayload(Jhlog.TARGET_RAW_CHUNK_BYTES)
+    private val chunkTypeCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
     private var chunkRecordCount = 0
     private var chunkSequence = 0L
-    private var lastTimedRecordUs = fileHeader.segmentStartElapsedUs
-    private var lastContext: ContextIds? = null
     private val producerOverride = ProducerMetadataBuffer()
     private val directProducer = ProducerMetadataBuffer()
+    private val databaseRecords = DatabaseBinaryRecordEncoder(this)
+    private val networkRecords = NetworkBinaryRecordEncoder(this)
+    private val androidComponentRecords = AndroidComponentBinaryRecordEncoder(this)
+    private val runtimeCallRecords = RuntimeCallBinaryRecordEncoder(this)
+    private val sessionRecords = SessionBinaryRecordEncoder(this)
+    private val executionRecords = ExecutionBinaryRecordEncoder(this)
+    private val metricRecords = MetricBinaryRecordEncoder(this)
+    private var qualityCounterIds = IntArray(INITIAL_QUALITY_SNAPSHOT_ENTRIES)
+    private var qualitySnapshotValues = LongArray(INITIAL_QUALITY_SNAPSHOT_ENTRIES)
+    private val qualityPreviousValues = LongArray(quality.counterCapacity())
+    private var qualitySnapshotCount = 0
+    private var pendingQualityCapturedUs = 0L
+    private var lastQualityCapturedUs = 0L
     private var producerOverrideActive = false
-    private var logicalBytesWritten = 0L
     private var segmentEventRecords = 0L
     private var segmentDictionaryRecords = 0L
     private var lastQualityGeneration = -1L
     private var lastQualitySequence = 0L
     private var commitQualityPending = false
     private var terminalChunkBuilding = false
+    private var microPageFlushing = false
     private var closed = false
     private var poisoned = false
+    @Volatile
+    private var storageBudgetExhausted = false
+    private var sealedSegmentDigest: ByteArray? = null
 
     init {
         try {
-            if (initialBytesWritten != 0L) {
-                throw IOException("JHLOG v9 segments must be opened empty: $path")
-            }
+            databaseRecords.resetSegmentState()
             writeFileHeader()
+            logGrowthRecords.begin(fileHeader, storageBudgetExhausted)
         } catch (error: Throwable) {
-            runCatching { bufferedOut.close() }
+            runCatching { gzipEncoder.close() }
+            runCatching { container.close() }
             throw error
         }
     }
 
-    @Synchronized
-    fun bytesWritten(): Long = logicalBytesWritten
+    fun bytesWritten(): Long = container.retainedBytes()
 
-    @Synchronized
+    internal fun logGrowthStats(): LogContainerStats = logGrowthRecords.stats(storageBudgetExhausted)
+
     fun flush() {
         ensureWritable()
         // Commit data first, then publish an exact snapshot in its own committed control chunk.
         commitChunk(final = false)
         commitQualityControlChunk()
-        bufferedOut.flush()
+        container.flush()
     }
 
-    @Synchronized
+    internal fun writeLogGrowthSummary(): Boolean {
+        ensureWritable()
+        commitChunk(final = false)
+        commitQualityControlChunk()
+        container.flush()
+        if (!logGrowthRecords.enabled) return false
+        return try {
+            if (!logGrowthRecords.checkpoint(storageBudgetExhausted)) return false
+            commitChunk(final = false)
+            container.flush()
+            true
+        } catch (error: Throwable) {
+            if (error is VirtualMachineError || error is ThreadDeath) throw error
+            false
+        }
+    }
+
     internal fun withProducer(
         elapsedUs: Long,
         threadId: Long,
@@ -172,14 +205,11 @@ internal class BinaryLogWriter private constructor(
         }
     }
 
-    @Synchronized
-    @Suppress("UNUSED_PARAMETER")
     fun session(
         appVersion: String?,
         build: String?,
         device: String?,
         sdkInt: Int,
-        processName: String?,
         androidRelease: String?,
         securityPatch: String?,
         primaryAbi: String?,
@@ -190,33 +220,20 @@ internal class BinaryLogWriter private constructor(
         board: String?,
         product: String?,
         deviceRooted: Boolean,
+        collectorFlags: Long,
         appForeground: Boolean = true,
     ) {
-        val payload = Payload()
-            .symbolRef(optionalIdFor(DICT_APP_VERSION, appVersion))
-            .symbolRef(optionalIdFor(DICT_BUILD, build))
-            .symbolRef(optionalIdFor(DICT_DEVICE, device))
-            .uvarint(nonNegative(sdkInt.toLong()))
-            .symbolRef(optionalIdFor(DICT_GENERIC, androidRelease))
-            .symbolRef(optionalIdFor(DICT_GENERIC, securityPatch))
-            .symbolRef(optionalIdFor(DICT_GENERIC, primaryAbi))
-            .symbolRef(optionalIdFor(DICT_GENERIC, supportedAbis))
-            .symbolRef(optionalIdFor(DICT_GENERIC, manufacturer))
-            .symbolRef(optionalIdFor(DICT_GENERIC, brand))
-            .symbolRef(optionalIdFor(DICT_GENERIC, hardware))
-            .symbolRef(optionalIdFor(DICT_GENERIC, board))
-            .symbolRef(optionalIdFor(DICT_GENERIC, product))
-        var attributes = foregroundFlag(appForeground)
-        if (deviceRooted) attributes = attributes or FLAG_DEVICE_ROOTED
-        record(JhlogV9.TYPE_SESSION, attributes, payload, currentProducerContext())
+        sessionRecords.session(
+            appVersion, build, device, sdkInt, androidRelease, securityPatch, primaryAbi,
+            supportedAbis, manufacturer, brand, hardware, board, product, deviceRooted,
+            collectorFlags, appForeground,
+        )
     }
 
-    @Synchronized
     fun screen(screen: String?) {
-        idFor(DICT_SCREEN, screen)
+        symbolId(DICT_SCREEN, screen)
     }
 
-    @Synchronized
     fun context(
         networkKind: Int,
         batteryPct: Int,
@@ -233,176 +250,287 @@ internal class BinaryLogWriter private constructor(
         totalStorageKb: Long,
         networkVpn: Boolean,
         foreground: Boolean = true,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ) {
-        var attributes = foregroundFlag(foreground)
-        if (lowMemory) attributes = attributes or FLAG_CONTEXT_LOW_MEMORY
-        if (networkMetered) attributes = attributes or FLAG_NETWORK_METERED
-        if (networkValidated) attributes = attributes or FLAG_NETWORK_VALIDATED
-        if (networkVpn) attributes = attributes or FLAG_NETWORK_VPN
-        val payload = Payload()
-            .uvarint(networkKind.coerceIn(0, 5).toLong())
-            .uvarint(batteryPct.coerceIn(0, 100).toLong())
-            .uvarint(nonNegative(availMemoryKb))
-            .uvarint(nonNegative(batteryState.toLong()))
-            .svarint(batteryTempDeciC.toLong())
-            .uvarint(nonNegative(rxBytes))
-            .uvarint(nonNegative(txBytes))
-            .uvarint(nonNegative(totalMemoryKb))
-            .uvarint(nonNegative(freeStorageKb))
-            .uvarint(nonNegative(totalStorageKb))
-        record(JhlogV9.TYPE_DEVICE_CONTEXT, attributes, payload, currentProducerContext())
+        sessionRecords.deviceContext(
+            networkKind, batteryPct, availMemoryKb, batteryState, batteryTempDeciC, lowMemory,
+            networkMetered, networkValidated, rxBytes, txBytes, totalMemoryKb, freeStorageKb,
+            totalStorageKb, networkVpn, foreground, trafficUidPlusOne, trafficKnownFlags,
+        )
     }
 
-    @Synchronized
-    fun http(
-        owner: String?,
-        route: String?,
-        durationMs: Long,
-        dnsMs: Long,
-        connectMs: Long,
-        ttfbMs: Long,
-        statusClass: Int,
-        rxBytes: Long,
-        txBytes: Long,
-        flags: Long,
-    ) {
-        val safeDurationMs = nonNegative(durationMs)
-        val payload = Payload()
-            .symbolRef(idFor(DICT_ROUTE, route))
-            .uvarint(safeDurationMs)
-            .uvarint(clampDuration(dnsMs, safeDurationMs))
-            .uvarint(clampDuration(connectMs, safeDurationMs))
-            .uvarint(clampDuration(ttfbMs, safeDurationMs))
-            .uvarint(statusClass.coerceIn(0, 5).toLong())
-            .uvarint(nonNegative(rxBytes))
-            .uvarint(nonNegative(txBytes))
-        val context = currentProducerContext().withOwner(owner)
-        record(JhlogV9.TYPE_HTTP, flags and FLAG_KNOWN_MASK, payload, context)
+    fun http(owner: String?, route: String?, event: JankHunterHttpEvent, flags: Long) {
+        networkRecords.http(owner, route, event, flags)
     }
 
-    @Synchronized
+    fun webSocket(owner: String?, event: JankHunterWebSocketEvent) {
+        networkRecords.webSocket(owner, event)
+    }
+
+    fun database(
+        sourceId: Long,
+        sourceName: String?,
+        query: String?,
+        framework: Long,
+        operation: Long,
+        outcome: Long,
+        durationUs: Long,
+        mainThread: Boolean,
+        failureKind: Long = if (outcome == Jhlog.DATABASE_OUTCOME_FAILURE) Jhlog.DATABASE_FAILURE_OTHER else Jhlog.DATABASE_FAILURE_NONE,
+        boundary: Long = Jhlog.DATABASE_BOUNDARY_EXECUTE,
+        statementFingerprint: Long = 0L,
+        resultKnown: Boolean = false,
+        resultKind: Long = Jhlog.DATABASE_RESULT_UNKNOWN,
+        resultCountBucket: Long = Jhlog.DATABASE_COUNT_UNKNOWN,
+        transactionId: Long = 0L,
+        statementToken: Long = 0L,
+        phaseMask: Long = 0L,
+        poolWaitUs: Long = 0L,
+        lockWaitUs: Long = 0L,
+        executeUs: Long = 0L,
+        materializeUs: Long = 0L,
+    ) {
+        databaseRecords.database(
+            sourceId,
+            sourceName,
+            query,
+            framework,
+            operation,
+            outcome,
+            durationUs,
+            mainThread,
+            failureKind,
+            boundary,
+            statementFingerprint,
+            resultKnown,
+            resultKind,
+            resultCountBucket,
+            transactionId,
+            statementToken,
+            phaseMask,
+            poolWaitUs,
+            lockWaitUs,
+            executeUs,
+            materializeUs,
+        )
+    }
+
+    fun databaseTransaction(
+        sourceId: Long,
+        sourceName: String?,
+        transactionId: Long,
+        parentId: Long,
+        stage: Long,
+        mode: Long,
+        outcome: Long,
+        failureKind: Long,
+        durationUs: Long,
+        statementCount: Long,
+        readCount: Long,
+        writeCount: Long,
+        mainThread: Boolean,
+    ) {
+        databaseRecords.databaseTransaction(
+            sourceId,
+            sourceName,
+            transactionId,
+            parentId,
+            stage,
+            mode,
+            outcome,
+            failureKind,
+            durationUs,
+            statementCount,
+            readCount,
+            writeCount,
+            mainThread,
+        )
+    }
+
+    fun processState(
+        uiVisibility: Long,
+        processImportance: Long,
+        androidImportance: Long,
+        reason: Long,
+    ) {
+        androidComponentRecords.processState(uiVisibility, processImportance, androidImportance, reason)
+    }
+
+    fun androidComponent(
+        componentId: Long,
+        componentName: String?,
+        action: String?,
+        instanceId: Long,
+        flowId: Long,
+        kind: Long,
+        stage: Long,
+        outcome: Long,
+        durationUs: Long,
+        componentFlags: Long,
+    ) {
+        androidComponentRecords.androidComponent(
+            componentId,
+            componentName,
+            action,
+            instanceId,
+            flowId,
+            kind,
+            stage,
+            outcome,
+            durationUs,
+            componentFlags,
+        )
+    }
+
+    fun binderTransaction(
+        descriptor: String?,
+        method: String?,
+        callId: Long,
+        direction: Long,
+        transactionCode: Long,
+        outcome: Long,
+        failureKind: Long,
+        durationUs: Long,
+        binderFlags: Long,
+        mainThread: Boolean,
+    ) {
+        androidComponentRecords.binderTransaction(
+            descriptor,
+            method,
+            callId,
+            direction,
+            transactionCode,
+            outcome,
+            failureKind,
+            durationUs,
+            binderFlags,
+            mainThread,
+        )
+    }
+
     fun stall(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         stackHint: String?,
         durationMs: Long,
         foreground: Boolean = true,
+        incidentId: Long = 0L,
+        state: Long = Jhlog.STALL_STATE_RECOVERED,
+        stackOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
-        val payload = Payload()
-            .symbolRef(idFor(DICT_STACK, stackHint))
-            .uvarint(nonNegative(durationMs))
-        val context = contextIds(screen, owner, flow, step)
-        record(JhlogV9.TYPE_STALL, FLAG_THREAD_MAIN or foregroundFlag(foreground), payload, context)
+        sessionRecords.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state, stackOrigin)
     }
 
-    @Synchronized
     fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean = true) {
-        val payload = Payload()
-            .uvarint(nonNegative(pssKb))
-            .uvarint(nonNegative(javaHeapKb))
-            .uvarint(nonNegative(nativeHeapKb))
-        record(JhlogV9.TYPE_MEMORY, foregroundFlag(foreground), payload, currentProducerContext())
+        sessionRecords.memory(pssKb, javaHeapKb, nativeHeapKb, foreground)
     }
 
-    @Synchronized
     fun retained(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         className: String?,
         holder: String?,
         ageMs: Long,
         count: Long,
         foreground: Boolean = true,
         evidence: Long,
+        classOrigin: SymbolOrigin = SymbolOrigin.UNKNOWN,
     ) {
-        val payload = Payload()
-            .symbolRef(idFor(DICT_CLASS, className))
-            .symbolRef(idFor(DICT_OWNER, holder))
-            .uvarint(nonNegative(ageMs))
-            .uvarint(nonNegative(count))
-            .uvarint(evidence.coerceIn(RETAINED_EVIDENCE_TIME_ONLY, RETAINED_EVIDENCE_AFTER_EXPLICIT_GC))
-        record(
-            JhlogV9.TYPE_RETAINED,
-            foregroundFlag(foreground),
-            payload,
-            contextIds(screen, owner, flow, step),
-        )
+        sessionRecords.retained(screen, owner, className, holder, ageMs, count, foreground, evidence, classOrigin)
     }
 
-    @Synchronized
     fun uiWindow(
         screen: String?,
         windowMs: Long,
         frameCount: Long,
         jankCount: Long,
-        p50Ms: Long,
-        p95Ms: Long,
-        p99Ms: Long,
+        source: Long,
+        frameDeadlineUs: Long,
+        frameDurationBuckets: LongArray,
         foreground: Boolean = true,
         flags: Long = 0L,
     ) {
-        val safeWindowMs = nonNegative(windowMs).coerceAtLeast(1L)
-        val safeFrameCount = nonNegative(frameCount)
-        val safeJankCount = nonNegative(jankCount).coerceAtMost(safeFrameCount)
-        val safeP50Ms = nonNegative(p50Ms)
-        val safeP95Ms = nonNegative(p95Ms).coerceAtLeast(safeP50Ms)
-        val safeP99Ms = nonNegative(p99Ms).coerceAtLeast(safeP95Ms)
-        val payload = Payload()
-            .uvarint(safeWindowMs)
-            .uvarint(safeFrameCount)
-            .uvarint(safeJankCount)
-            .uvarint(safeP50Ms)
-            .uvarint(safeP95Ms)
-            .uvarint(safeP99Ms)
-        val context = currentProducerContext().withScreen(screen)
-        val uiFlags = flags and (FLAG_UI_PROBLEM or FLAG_UI_CLASSIFIED)
-        val attributes = FLAG_THREAD_MAIN or foregroundFlag(foreground) or uiFlags
-        record(JhlogV9.TYPE_UI_WINDOW, attributes, payload, context)
+        sessionRecords.uiWindow(
+            screen, windowMs, frameCount, jankCount, source, frameDeadlineUs,
+            frameDurationBuckets, foreground, flags,
+        )
     }
 
-    @Synchronized
+    fun processExit(
+        reason: Long,
+        timestampUnixMs: Long,
+        importance: Long,
+        pssKb: Long,
+        rssKb: Long,
+        processName: String?,
+    ) {
+        sessionRecords.processExit(reason, timestampUnixMs, importance, pssKb, rssKb, processName)
+    }
+
+    fun io(
+        operation: Long,
+        durationUs: Long,
+        bytes: Long,
+        mainThread: Boolean,
+        sourceId: Long,
+        sourceName: String?,
+        outcome: Long,
+        bytesKnown: Boolean,
+    ) {
+        executionRecords.io(operation, durationUs, bytes, mainThread, sourceId, sourceName, outcome, bytesKnown)
+    }
+
+    fun worker(
+        workerId: Long,
+        workerName: String?,
+        instanceId: Long,
+        stage: Long,
+        outcome: Long,
+        durationMs: Long,
+        runAttempt: Long,
+        generation: Long,
+        stopReason: Long,
+        flags: Long,
+    ) {
+        executionRecords.worker(
+            workerId, workerName, instanceId, stage, outcome, durationMs, runAttempt,
+            generation, stopReason, flags,
+        )
+    }
+
+    fun operation(
+        name: String,
+        operationId: Long,
+        parentId: Long,
+        phase: Long,
+        kind: Long,
+        outcome: Long,
+        durationUs: Long,
+        budgetUs: Long,
+        attributes: JankHunterOperationAttributes,
+    ) {
+        executionRecords.operation(
+            name, operationId, parentId, phase, kind, outcome, durationUs, budgetUs, attributes,
+        )
+    }
+
     fun counter(name: String?, value: Long) {
-        if (value < 0L) {
-            quality.add(QualityCounterId.INVALID_METRIC)
-            return
-        }
-        metric(JhlogV9.TYPE_COUNTER, name, value, 1L, value, value, MetricAggregationMode.UNKNOWN)
+        metricRecords.counter(name, value)
     }
 
-    @Synchronized
-    fun stableCounter(metricId: Long, value: Long) {
-        stableCounter(metricId, null, value)
+    fun stableCounter(metricId: Long, metricName: String, value: Long) {
+        metricRecords.stableCounter(metricId, metricName, value)
     }
 
-    @Synchronized
-    fun stableCounter(metricId: Long, metricName: String?, value: Long) {
-        if (value < 0L) {
-            quality.add(QualityCounterId.INVALID_METRIC)
-            return
-        }
-        ensureStableSymbolDefinition(metricId, metricName)
-        val payload = Payload()
-            .stableSymbolRef(metricId)
-            .uvarint(value)
-            .uvarint(1L)
-            .uvarint(value)
-            .uvarint(value)
-            .uvarint(MetricAggregationMode.UNKNOWN.wireValue)
-        // Method counters are global aggregates. A string owner context would recreate the
-        // dictionary pressure that the stable metric reference removes.
-        record(JhlogV9.TYPE_COUNTER, 0L, payload, context = null)
-    }
-
-    @Synchronized
     fun gauge(name: String?, value: Long) {
-        gauge(name, value, 1L, value, value, MetricAggregationMode.AVERAGE)
+        metricRecords.gauge(name, value)
     }
 
-    @Synchronized
+    fun gaugeWide(name: String?, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long) {
+        metricRecords.gaugeWide(name, value, count, sum, max, mode, sumHigh)
+    }
+
     fun gauge(
         name: String?,
         value: Long,
@@ -411,409 +539,346 @@ internal class BinaryLogWriter private constructor(
         max: Long,
         mode: MetricAggregationMode,
     ) {
-        if (value < 0L || sum < 0L || max < 0L) {
-            quality.add(QualityCounterId.INVALID_METRIC)
-            return
-        }
-        metric(JhlogV9.TYPE_GAUGE, name, value, count.coerceAtLeast(1L), sum, max, mode)
+        metricRecords.gauge(name, value, count, sum, max, mode)
     }
 
-    @Synchronized
-    fun flowContext(screen: String?, owner: String?, flow: String?, step: String?) {
-        val payload = Payload()
-            .uvarint(JhlogV9.FLOW_PHASE_SNAPSHOT)
-            .uvarint(0L)
-        record(
-            JhlogV9.TYPE_FLOW_TRANSITION,
-            0L,
-            payload,
-            contextIds(screen, owner, flow, step),
-        )
-    }
-
-    @Synchronized
     fun logSpam(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
         source: String?,
         level: Int,
         count: Long,
     ) {
-        val payload = Payload()
-            .symbolRef(idFor(DICT_LOG_SOURCE, source))
-            .uvarint(nonNegative(level.toLong()))
-            .uvarint(nonNegative(count))
-        record(JhlogV9.TYPE_LOG_SPAM, 0L, payload, contextIds(screen, owner, flow, step))
+        metricRecords.logSpam(screen, owner, operationId, source, level, count)
     }
 
-    @Synchronized
     fun problemWindow(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         kind: String?,
         windowMs: Long,
         count: Long,
         maxMs: Long,
         foreground: Boolean = true,
     ) {
-        val payload = Payload()
-            .symbolRef(idFor(DICT_METRIC, kind))
-            .uvarint(nonNegative(windowMs).coerceAtLeast(1L))
-            .uvarint(nonNegative(count))
-            .uvarint(nonNegative(maxMs))
-        record(
-            JhlogV9.TYPE_PROBLEM,
-            foregroundFlag(foreground),
-            payload,
-            contextIds(screen, owner, flow, step),
-        )
+        metricRecords.problemWindow(screen, owner, kind, windowMs, count, maxMs, foreground)
     }
 
-    @Synchronized
-    fun runtimeCall(
-        screen: String?,
-        callerId: Long,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) {
-        runtimeCall(screen, callerId, null, flow, step, calleeId, null, count, totalMs, maxMs)
+    /** Writes one bounded structure-of-arrays runtime-call record to the wire. */
+    fun runtimeCalls(batch: RuntimeCallBatch) {
+        runtimeCallRecords.runtimeCalls(batch)
     }
 
-    @Synchronized
-    fun runtimeCall(
-        screen: String?,
-        callerId: Long,
-        callerName: String?,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        calleeName: String?,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) {
-        ensureStableSymbolDefinition(callerId, callerName)
-        ensureStableSymbolDefinition(calleeId, calleeName)
-        val payload = Payload()
-            .stableSymbolRef(calleeId)
-            .uvarint(nonNegative(count))
-            .uvarint(nonNegative(totalMs))
-            .uvarint(nonNegative(maxMs))
-        val context = contextIds(screen, null, flow, step).withStableOwner(callerId)
-        record(JhlogV9.TYPE_RUNTIME_CALL, 0L, payload, context)
-    }
+    override fun payload(): BinaryPayload = eventPayload.clear()
 
-    @Synchronized
-    @Suppress("LongParameterList")
-    fun agentEvent(
-        type: Int,
-        schemaVersion: Int,
-        flags: Int,
-        producerSequence: Long,
-        producerId: Long,
-        threadToken: Long,
-        contextToken: Long,
-        payload0: Long,
-        payload1: Long,
-        payload2: Long,
-        payload3: Long,
-    ) {
-        val payload = Payload()
-            .uvarint(type.toLong())
-            .uvarint(schemaVersion.toLong())
-            .uvarint(producerSequence)
-            .uvarint(producerId)
-            .uvarint(threadToken)
-            .uvarint(contextToken)
-            .uvarint(flags.toLong() and UINT32_MASK)
-            .uvarint(payload0)
-            .uvarint(payload1)
-            .uvarint(payload2)
-            .uvarint(payload3)
-        record(JhlogV9.TYPE_AGENT_EVENT, 0L, payload, currentProducerContext())
-    }
-
-    @Synchronized
-    fun agentContext(contextToken: Long) {
-        agentEvent(
-            type = JankHunterAgentEventType.CORRELATION_LINK,
-            schemaVersion = AGENT_EVENT_SCHEMA_V1,
-            flags = JankHunterAgentEventFlag.CONTEXT_DEFINITION,
-            producerSequence = 0L,
-            producerId = 0L,
-            threadToken = 0L,
-            contextToken = contextToken,
-            payload0 = contextToken,
-            payload1 = 0L,
-            payload2 = 0L,
-            payload3 = 0L,
-        )
-    }
-
-    @Synchronized
-    fun agentMethodDefinition(methodId: Long, symbol: String) {
-        val payload = Payload()
-            .uvarint(JankHunterAgentEventType.METHOD_DEFINITION.toLong())
-            .uvarint(AGENT_EVENT_SCHEMA_V1.toLong())
-            .uvarint(0L)
-            .uvarint(0L)
-            .uvarint(0L)
-            .uvarint(0L)
-            .uvarint(0L)
-            .uvarint(methodId)
-            .uvarint(0L)
-            .uvarint(0L)
-            .uvarint(0L)
-            .symbolRef(idFor(DICT_METHOD, symbol))
-        record(JhlogV9.TYPE_AGENT_EVENT, 0L, payload, null)
-    }
-
-    private fun metric(
-        recordType: Int,
-        name: String?,
-        value: Long,
-        count: Long,
-        sum: Long,
-        max: Long,
-        mode: MetricAggregationMode,
-    ) {
-        val normalizedCount = count.coerceAtLeast(1L)
-        val normalizedSum = if (sum == 0L) value else sum
-        val normalizedMax = if (max == 0L) value else max
-        val payload = Payload()
-            .symbolRef(idFor(DICT_METRIC, name))
-            .uvarint(value)
-            .uvarint(normalizedCount)
-            .uvarint(normalizedSum)
-            .uvarint(normalizedMax)
-            .uvarint(mode.wireValue)
-        record(recordType, 0L, payload, currentProducerContext())
-    }
-
-    private fun idFor(kind: Int, rawValue: String?): Long {
+    override fun symbolId(kind: Int, value: String?): Long {
         ensureWritable()
-        val result = dictionary.idFor(kind, rawValue)
-        if (result.overflowed) quality.add(QualityCounterId.DICTIONARY_OVERFLOW_TOTAL)
-        if (result.truncated) quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
-        result.definition?.let { definition ->
-            val bytes = definition.value.toByteArray(StandardCharsets.UTF_8)
-            val payload = Payload()
-                .uvarint(definition.kind.toLong())
-                .uvarint(definition.id)
-                .uvarint(DICTIONARY_ENCODING_UTF8)
-                .uvarint(bytes.size.toLong())
-                .bytes(bytes)
-            record(
-                recordType = JhlogV9.TYPE_DICTIONARY,
-                attributes = 0L,
-                payload = payload,
-                context = null,
-                producer = null,
-            )
-        }
-        return result.id
+        return dictionaryRecords.symbolId(kind, value)
     }
 
-    /**
-     * Stable method definitions are intentionally outside [DictionaryIds]: their IDs are already
-     * assigned by ASM and must not consume the bounded regular dictionary used by runtime data.
-     */
-    private fun ensureStableSymbolDefinition(stableId: Long, rawName: String?) {
-        val name = rawName?.takeIf(String::isNotBlank) ?: return
-        val existing = stableSymbolDefinitions[stableId]
-        if (existing != null) return
+    override fun symbolId(kind: Int, value: String?, origin: SymbolOrigin): Long {
+        ensureWritable()
+        return dictionaryRecords.symbolId(kind, value, origin)
+    }
 
-        val encoded = name.toByteArray(StandardCharsets.UTF_8)
-        val bytes = if (encoded.size <= MAX_ENCODED_DICTIONARY_VALUE_BYTES) {
-            encoded
-        } else {
-            quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
-            validUtf8Prefix(name, MAX_ENCODED_DICTIONARY_VALUE_BYTES)
+    override fun optionalSymbolId(kind: Int, value: String?): Long {
+        val present = value?.takeIf { it.isNotEmpty() } ?: return 0L
+        ensureWritable()
+        return dictionaryRecords.symbolId(kind, present)
+    }
+
+    override fun defineStableSymbol(id: Long, name: String?): Long {
+        ensureWritable()
+        return dictionaryRecords.defineStableSymbol(id, name)
+    }
+
+    override fun producerContext(owner: String?): BinaryRecordContext? = currentProducerContext().withOwner(owner)
+
+    override fun producerContextWithScreen(screen: String?): BinaryRecordContext? =
+        currentProducerContext().withScreen(screen)
+
+    override fun context(screen: String?, owner: String?, operationId: Long): BinaryRecordContext =
+        contextIds(screen, owner).also { context -> context.operationId = nonNegative(operationId) }
+
+    override fun recordInvalidMetric() {
+        quality.add(QualityCounterId.INVALID_METRIC)
+    }
+
+    override fun emitDictionaryDefinition(payload: BinaryPayload) = recordDictionary(payload)
+
+    override fun emitControl(recordType: Int, payload: BinaryPayload) = recordControl(recordType, payload)
+
+    override fun emitSemantic(
+        recordType: Int,
+        attributes: Long,
+        payload: BinaryPayload,
+        context: BinaryRecordContext?,
+        semanticEventCount: Long,
+    ) = recordSemantic(recordType, attributes, payload, context, semanticEventCount)
+
+    private fun contextIds(screen: String?, owner: String?): BinaryRecordContext {
+        return recordContext.set(
+            screenId = optionalSymbolId(DICT_SCREEN, screen),
+            ownerId = optionalSymbolId(DICT_OWNER, owner),
+        )
+    }
+
+    private fun currentProducerContext(): BinaryRecordContext? {
+        if (!producerOverrideActive) return null
+        val context = producerOverride.context ?: return null
+        return contextIds(context.screen, context.owner).also { resolved ->
+            resolved.operationId = context.operationId
         }
-        stableSymbolDefinitions[stableId] = name
-        val payload = Payload()
-            .uvarint(DICT_STABLE_SYMBOL.toLong())
-            .uvarint(stableId)
-            .uvarint(DICTIONARY_ENCODING_UTF8)
-            .uvarint(bytes.size.toLong())
-            .bytes(bytes)
-        record(
-            recordType = JhlogV9.TYPE_DICTIONARY,
-            attributes = 0L,
+    }
+
+    private fun BinaryRecordContext?.withOwner(owner: String?): BinaryRecordContext? {
+        val ownerId = optionalSymbolId(DICT_OWNER, owner)
+        if (ownerId == 0L) return this
+        val context = this ?: recordContext.clear()
+        context.ownerId = ownerId
+        context.stableOwnerAlias = 0L
+        context.hasStableOwner = false
+        return context
+    }
+
+    private fun BinaryRecordContext?.withStableOwner(ownerAlias: Long): BinaryRecordContext {
+        val context = this ?: recordContext.clear()
+        context.ownerId = 0L
+        context.stableOwnerAlias = ownerAlias
+        context.hasStableOwner = true
+        return context
+    }
+
+    private fun BinaryRecordContext?.withScreen(screen: String?): BinaryRecordContext? {
+        val screenId = optionalSymbolId(DICT_SCREEN, screen)
+        if (screenId == 0L) return this
+        val context = this ?: recordContext.clear()
+        context.screenId = screenId
+        return context
+    }
+
+    private fun recordDictionary(payload: Payload) {
+        ensureWritable()
+        flushMicroPage()
+        writeDirectRecord(
+            recordType = Jhlog.TYPE_DICTIONARY,
+            safeAttributes = 0L,
             payload = payload,
             context = null,
             producer = null,
+            semanticEventCount = 1L,
         )
     }
 
-    private fun optionalIdFor(kind: Int, rawValue: String?): Long {
-        val value = rawValue?.takeIf { it.isNotEmpty() } ?: return 0L
-        return idFor(kind, value)
-    }
-
-    private fun contextIds(screen: String?, owner: String?, flow: String?, step: String?): ContextIds {
-        return ContextIds(
-            screenId = optionalIdFor(DICT_SCREEN, screen),
-            ownerId = optionalIdFor(DICT_OWNER, owner),
-            flowId = optionalIdFor(DICT_FLOW, flow),
-            stepId = optionalIdFor(DICT_STEP, step),
+    private fun recordControl(recordType: Int, payload: Payload) {
+        require(isControlRecord(recordType)) { "Record type $recordType is not control state" }
+        ensureWritable()
+        flushMicroPage()
+        writeDirectRecord(
+            recordType = recordType,
+            safeAttributes = 0L,
+            payload = payload,
+            context = null,
+            producer = null,
+            semanticEventCount = 0L,
         )
     }
 
-    private fun currentProducerContext(): ContextIds? {
-        if (!producerOverrideActive) return null
-        val context = producerOverride.context ?: return null
-        return contextIds(context.screen, context.owner, context.flow, context.step)
-    }
-
-    private fun ContextIds?.withOwner(owner: String?): ContextIds? {
-        val ownerId = optionalIdFor(DICT_OWNER, owner)
-        if (ownerId == 0L) return this
-        return ContextIds(
-            screenId = this?.screenId ?: 0L,
-            ownerId = ownerId,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = 0L,
-        )
-    }
-
-    private fun ContextIds?.withStableOwner(ownerId: Long): ContextIds {
-        return ContextIds(
-            screenId = this?.screenId ?: 0L,
-            ownerId = 0L,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = ownerId,
-            hasStableOwner = true,
-        )
-    }
-
-    private fun ContextIds?.withScreen(screen: String?): ContextIds? {
-        val screenId = optionalIdFor(DICT_SCREEN, screen)
-        if (screenId == 0L) return this
-        return ContextIds(
-            screenId = screenId,
-            ownerId = this?.ownerId ?: 0L,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = this?.stableOwnerId ?: 0L,
-            hasStableOwner = this?.hasStableOwner ?: false,
-        )
-    }
-
-    private fun record(
+    private fun recordSemantic(
         recordType: Int,
         attributes: Long,
         payload: Payload,
-        context: ContextIds?,
-        producer: ProducerMetadataBuffer? = currentProducer(),
+        context: BinaryRecordContext?,
+        semanticEventCount: Long = 1L,
     ) {
+        require(isSemanticRecord(recordType)) { "Record type $recordType is not semantic data" }
         ensureWritable()
-        var encoded = encodeRecord(recordType, attributes, payload, context, producer)
-        val chunkTarget = if (terminalChunkBuilding) {
-            JhlogV9.MAX_RAW_CHUNK_BYTES
-        } else {
-            JhlogV9.TARGET_RAW_CHUNK_BYTES
-        }
-        if (rawChunk.size() > 0 && rawChunk.size() + encoded.size > chunkTarget) {
-            commitChunk(final = false)
-            encoded = encodeRecord(recordType, attributes, payload, context, producer)
-        }
-        if (encoded.size > JhlogV9.MAX_RAW_CHUNK_BYTES) {
-            if (recordType == JhlogV9.TYPE_DICTIONARY) {
-                throw IOException("JHLOG v9 dictionary definition exceeds raw chunk limit")
+        val safeAttributes = attributes and FLAG_KNOWN_MASK
+        val producer = currentProducer()
+        if (isSemanticRecord(recordType) && payload.size <= Jhlog.MAX_MICRO_PAGE_PAYLOAD_BYTES) {
+            prepareMicroPage(payload.size)
+            if (microPage.canAppend(payload.size)) {
+                microPage.append(recordType, safeAttributes, payload, context, producer, semanticEventCount)
+                if (microPage.size == Jhlog.MAX_MICRO_PAGE_ROWS) flushMicroPage()
+                return
             }
-            quality.addRejected(recordType, QualityCounterId.REASON_OVERSIZED)
+        }
+        flushMicroPage()
+        writeDirectRecord(recordType, safeAttributes, payload, context, producer, semanticEventCount)
+    }
+
+    private fun prepareMicroPage(payloadSize: Int) {
+        val chunkTarget = if (terminalChunkBuilding) Jhlog.MAX_RAW_CHUNK_BYTES else Jhlog.TARGET_RAW_CHUNK_BYTES
+        val reservedBytes = if (terminalChunkBuilding) 0L else TERMINAL_RESERVE_BYTES
+        if (microPage.size > 0) {
+            val projectedPageBytes = microPage.projectedRecordBytes(payloadSize)
+            val projectedChunkBytes = rawChunk.size().toLong() + projectedPageBytes.toLong()
+            if (
+                !microPage.canAppend(payloadSize) ||
+                projectedChunkBytes > chunkTarget ||
+                !container.canCommitRaw(projectedChunkBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), reservedBytes)
+            ) {
+                flushMicroPage()
+            }
+        }
+        if (microPage.size != 0) return
+
+        val singlePageBytes = microPage.projectedRecordBytes(payloadSize)
+        var projectedChunkBytes = rawChunk.size().toLong() + singlePageBytes.toLong()
+        if (
+            rawChunk.size() > 0 &&
+            (
+                projectedChunkBytes > chunkTarget ||
+                    !container.canCommitRaw(
+                        projectedChunkBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                        reservedBytes,
+                    )
+                )
+        ) {
+            commitChunk(final = false)
+            projectedChunkBytes = singlePageBytes.toLong()
+        }
+        if (
+            !container.canCommitRaw(
+                projectedChunkBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                reservedBytes,
+            )
+        ) {
+            throw LogSizeLimitReachedException(
+                "JHLOG ${Jhlog.FORMAT_VERSION} segment has no capacity for a micro-page row",
+            )
+        }
+    }
+
+    private fun writeDirectRecord(
+        recordType: Int,
+        safeAttributes: Long,
+        payload: Payload,
+        context: BinaryRecordContext?,
+        producer: ProducerMetadataBuffer?,
+        semanticEventCount: Long,
+    ) {
+        var encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
+        val chunkTarget = if (terminalChunkBuilding) {
+            Jhlog.MAX_RAW_CHUNK_BYTES
+        } else {
+            Jhlog.TARGET_RAW_CHUNK_BYTES
+        }
+        val projectedRawBytes = rawChunk.size().toLong() + encoded.size.toLong()
+        if (
+            rawChunk.size() > 0 &&
+            (rawChunk.size() + encoded.size > chunkTarget || projectedRawBytes > chunkTarget)
+        ) {
+            commitChunk(final = false)
+            encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
+        }
+        var rawBytes = rawChunk.size().toLong() + encoded.size.toLong()
+        val reservedBytes = if (terminalChunkBuilding) 0L else TERMINAL_RESERVE_BYTES
+        if (!container.canCommitRaw(rawBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), reservedBytes)) {
+            if (rawChunk.size() > 0) {
+                commitChunk(final = false)
+                encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
+                rawBytes = encoded.size.toLong()
+            }
+            if (!container.canCommitRaw(rawBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), reservedBytes)) {
+                throw LogSizeLimitReachedException(
+                    "JHLOG ${Jhlog.FORMAT_VERSION} segment has no capacity for record type $recordType",
+                )
+            }
+        }
+        if (encoded.size > Jhlog.MAX_RAW_CHUNK_BYTES) {
+            if (recordType == Jhlog.TYPE_DICTIONARY) {
+                throw IOException("JHLOG ${Jhlog.FORMAT_VERSION} dictionary definition exceeds raw chunk limit")
+            }
+            quality.addRejected(recordType, QualityCounterId.REASON_OVERSIZED, semanticEventCount)
             return
         }
-        rawChunk.write(encoded)
+        encoded.writeTo(rawChunk)
         chunkRecordCount++
-        if (recordType in chunkTypeCounts.indices) chunkTypeCounts[recordType]++
-        if (producer != null) lastTimedRecordUs = producer.elapsedUs
-        if (context != null) lastContext = context
+        if (recordType in chunkTypeCounts.indices) {
+            chunkTypeCounts[recordType] = saturatingAdd(chunkTypeCounts[recordType], semanticEventCount)
+        }
+        recordEncoder.commit(producer, context)
+    }
+
+    private fun flushMicroPage() {
+        if (microPage.size == 0 || microPageFlushing) return
+        microPage.encodeTo(
+            microPagePayload,
+            entropyEnabled = JhlogCompressionPolicy.useRansSections(
+                optionalFeatures = Jhlog.OPTIONAL_FEATURES,
+                chunkFlags = Jhlog.CHUNK_FLAG_GZIP,
+            ),
+        )
+        microPageFlushing = true
+        try {
+            writeDirectRecord(
+                recordType = Jhlog.TYPE_MICRO_PAGE,
+                safeAttributes = 0L,
+                payload = microPagePayload,
+                context = null,
+                producer = null,
+                semanticEventCount = 0L,
+            )
+        } finally {
+            microPageFlushing = false
+        }
+        microPage.addSemanticCountsTo(chunkTypeCounts)
+        microPage.reset()
     }
 
     private fun currentProducer(): ProducerMetadataBuffer {
         return if (producerOverrideActive) producerOverride else directProducer.capture(null)
     }
 
-    private fun encodeRecord(
-        recordType: Int,
-        attributes: Long,
-        payload: Payload,
-        context: ContextIds?,
-        producer: ProducerMetadataBuffer?,
-    ): ByteArray {
-        var envelopeFlags = 0L
-        if (producer != null) envelopeFlags = envelopeFlags or JhlogV9.ENVELOPE_HAS_TIME or JhlogV9.ENVELOPE_HAS_THREAD
-        if (context != null) envelopeFlags = envelopeFlags or JhlogV9.ENVELOPE_HAS_CONTEXT
-        val sameContext = context != null && lastContext == context
-        if (sameContext) envelopeFlags = envelopeFlags or JhlogV9.ENVELOPE_SAME_CONTEXT
-        val safeAttributes = attributes and FLAG_KNOWN_MASK
-        if (safeAttributes != 0L) envelopeFlags = envelopeFlags or JhlogV9.ENVELOPE_HAS_ATTRIBUTES
-
-        val body = Payload()
-            .uvarint(recordType.toLong())
-            .uvarint(envelopeFlags)
-        if (producer != null) {
-            body.svarint(producer.elapsedUs - lastTimedRecordUs)
-            body.uvarint(producer.threadId)
-        }
-        if (context != null && !sameContext) {
-            var presence = 0L
-            if (context.screenId != 0L) presence = presence or JhlogV9.CONTEXT_SCREEN
-            if (context.ownerId != 0L || context.hasStableOwner) {
-                presence = presence or JhlogV9.CONTEXT_OWNER
-            }
-            if (context.flowId != 0L) presence = presence or JhlogV9.CONTEXT_FLOW
-            if (context.stepId != 0L) presence = presence or JhlogV9.CONTEXT_STEP
-            body.uvarint(presence)
-            if (presence and JhlogV9.CONTEXT_SCREEN != 0L) body.symbolRef(context.screenId)
-            if (presence and JhlogV9.CONTEXT_OWNER != 0L) {
-                if (context.hasStableOwner) {
-                    body.stableSymbolRef(context.stableOwnerId)
-                } else {
-                    body.symbolRef(context.ownerId)
-                }
-            }
-            if (presence and JhlogV9.CONTEXT_FLOW != 0L) body.symbolRef(context.flowId)
-            if (presence and JhlogV9.CONTEXT_STEP != 0L) body.symbolRef(context.stepId)
-        }
-        if (safeAttributes != 0L) body.uvarint(safeAttributes)
-        body.bytes(payload.copyBytes())
-        return Payload().uvarint(body.size.toLong()).bytes(body.copyBytes()).copyBytes()
-    }
-
     private fun writeQualitySnapshot() {
         val generation = quality.generation()
         val sequence = quality.nextSnapshotSequence()
-        val entries = quality.snapshot()
-        val payload = Payload()
-            .uvarint(sequence)
-            .uvarint(nowElapsedUs())
-            .uvarint(entries.size.toLong())
-        entries.forEach { entry ->
-            payload.uvarint(entry.counterId.toLong()).uvarint(entry.value)
+        val capturedUs = nowElapsedUs()
+        var entries = quality.snapshotInto(qualityCounterIds, qualitySnapshotValues)
+        while (entries < 0) {
+            val required = maxOf(-entries, qualityCounterIds.size shl 1)
+            qualityCounterIds = IntArray(required)
+            qualitySnapshotValues = LongArray(required)
+            entries = quality.snapshotInto(qualityCounterIds, qualitySnapshotValues)
         }
-        record(
-            recordType = JhlogV9.TYPE_QUALITY_SNAPSHOT,
-            attributes = 0L,
-            payload = payload,
-            context = null,
-            producer = null,
-        )
+        var changedEntries = 0
+        for (index in 0 until entries) {
+            val counterId = qualityCounterIds[index]
+            val value = qualitySnapshotValues[index]
+            require(value >= qualityPreviousValues[counterId]) { "Quality counter $counterId regressed" }
+            if (value != qualityPreviousValues[counterId]) changedEntries++
+        }
+        val payload = controlPayload.clear()
+            .uvarint(sequence - lastQualitySequence)
+            .svarint(capturedUs - lastQualityCapturedUs)
+            .uvarint(changedEntries.toLong())
+        var previousCounterId = 0
+        for (index in 0 until entries) {
+            val counterId = qualityCounterIds[index]
+            val value = qualitySnapshotValues[index]
+            val previousValue = qualityPreviousValues[counterId]
+            if (value == previousValue) continue
+            payload
+                .uvarint((counterId - previousCounterId).toLong())
+                .uvarint(value - previousValue)
+            previousCounterId = counterId
+        }
+        recordControl(Jhlog.TYPE_QUALITY_SNAPSHOT, payload)
         lastQualityGeneration = generation
         lastQualitySequence = sequence
+        qualitySnapshotCount = entries
+        pendingQualityCapturedUs = capturedUs
         commitQualityPending = false
+    }
+
+    private fun commitQualityDeltaState() {
+        for (index in 0 until qualitySnapshotCount) {
+            qualityPreviousValues[qualityCounterIds[index]] = qualitySnapshotValues[index]
+        }
+        lastQualityCapturedUs = pendingQualityCapturedUs
+        qualitySnapshotCount = 0
     }
 
     private fun commitQualityControlChunk() {
@@ -827,6 +892,7 @@ internal class BinaryLogWriter private constructor(
         try {
             writeQualitySnapshot()
             commitChunk(final = false, countCommit = false)
+            commitQualityDeltaState()
             committed = true
         } finally {
             if (!committed) {
@@ -839,60 +905,56 @@ internal class BinaryLogWriter private constructor(
     }
 
     private fun writeSegmentEnd(reason: Long) {
-        val payload = Payload()
+        val payload = controlPayload.clear()
             .uvarint(reason)
             .uvarint(segmentEventRecords)
             .uvarint(segmentDictionaryRecords)
             .uvarint(lastQualitySequence)
-        record(
-            recordType = JhlogV9.TYPE_SEGMENT_END,
-            attributes = 0L,
-            payload = payload,
-            context = null,
-            producer = null,
-        )
+        recordControl(Jhlog.TYPE_SEGMENT_END, payload)
     }
 
     private fun commitChunk(final: Boolean, countCommit: Boolean = true) {
+        flushMicroPage()
         if (rawChunk.size() == 0) return
-        val raw = rawChunk.toByteArray()
-        val stored = gzip(raw)
-        val rawCrc = crc32(raw)
-        val flags = JhlogV9.CHUNK_FLAG_GZIP or if (final) JhlogV9.CHUNK_FLAG_FINAL else 0
-        val header = chunkHeader(flags, stored.size, raw.size, chunkRecordCount, rawCrc)
-        val trailer = commitTrailer(stored.size, raw.size, rawCrc)
-        val physicalBytes = header.size.toLong() + stored.size.toLong() + trailer.size.toLong()
-        ensurePhysicalCapacity(
-            bytes = physicalBytes,
-            reservedBytes = if (final) 0L else TERMINAL_RESERVE_BYTES,
-        )
+        val rawSize = rawChunk.length
+        gzipEncoder.encode(rawChunk.buffer, rawSize)
+        val flags = Jhlog.CHUNK_FLAG_GZIP or if (final) Jhlog.CHUNK_FLAG_FINAL else 0
         try {
-            bufferedOut.write(header)
-            bufferedOut.write(stored)
-            bufferedOut.write(trailer)
-            bufferedOut.flush()
+            container.commitChunk(
+                flags = flags,
+                sequence = chunkSequence,
+                stored = gzipEncoder.buffer,
+                storedSize = gzipEncoder.size,
+                rawSize = rawSize,
+                recordCount = chunkRecordCount,
+                rawCrc = gzipEncoder.rawCrc,
+                terminalReserveBytes = if (final) 0L else TERMINAL_RESERVE_BYTES,
+            )
+        } catch (error: StorageBudgetExhaustedException) {
+            throw error
+        } catch (error: LogSizeLimitReachedException) {
+            throw error
         } catch (error: IOException) {
             poisoned = true
             quality.add(QualityCounterId.FAILED_CHUNK_TOTAL)
             for (recordType in EVENT_RECORD_TYPES) {
                 val count = chunkTypeCounts[recordType]
-                if (count > 0) quality.addRejected(recordType, QualityCounterId.REASON_IO_LOST, count.toLong())
+                if (count > 0) quality.addRejected(recordType, QualityCounterId.REASON_IO_LOST, count)
             }
             resetChunkState()
             throw error
         }
-        logicalBytesWritten += physicalBytes
         var eventCount = 0L
         for (recordType in EVENT_RECORD_TYPES) {
-            eventCount += chunkTypeCounts[recordType].toLong()
+            eventCount = saturatingAdd(eventCount, chunkTypeCounts[recordType])
         }
         if (countCommit) quality.addHousekeeping(QualityCounterId.COMMITTED_CHUNK_TOTAL)
         if (eventCount > 0L) {
-            quality.addHousekeeping(QualityCounterId.WRITTEN_EVENT_TOTAL, eventCount)
-            segmentEventRecords += eventCount
+            quality.add(QualityCounterId.WRITTEN_EVENT_TOTAL, eventCount)
+            segmentEventRecords = saturatingAdd(segmentEventRecords, eventCount)
         }
-        val dictionaryCount = chunkTypeCounts[JhlogV9.TYPE_DICTIONARY].toLong()
-        segmentDictionaryRecords += dictionaryCount
+        val dictionaryCount = chunkTypeCounts[Jhlog.TYPE_DICTIONARY]
+        segmentDictionaryRecords = saturatingAdd(segmentDictionaryRecords, dictionaryCount)
         if (!final && (eventCount > 0L || dictionaryCount > 0L)) commitQualityPending = true
         chunkSequence++
         resetChunkState()
@@ -902,39 +964,16 @@ internal class BinaryLogWriter private constructor(
         rawChunk.reset()
         chunkTypeCounts.fill(0)
         chunkRecordCount = 0
-        lastTimedRecordUs = fileHeader.segmentStartElapsedUs
-        lastContext = null
-    }
-
-    private fun chunkHeader(flags: Int, storedSize: Int, rawSize: Int, records: Int, rawCrc: Long): ByteArray {
-        val header = ByteArray(JhlogV9.CHUNK_HEADER_BYTES)
-        System.arraycopy(JhlogV9.CHUNK_MAGIC, 0, header, 0, JhlogV9.CHUNK_MAGIC.size)
-        putUInt16Le(header, 4, JhlogV9.CHUNK_HEADER_BYTES)
-        putUInt16Le(header, 6, flags)
-        putUInt32Le(header, 8, chunkSequence)
-        putUInt32Le(header, 12, storedSize.toLong())
-        putUInt32Le(header, 16, rawSize.toLong())
-        putUInt32Le(header, 20, records.toLong())
-        putUInt32Le(header, 24, rawCrc)
-        putUInt32Le(header, 28, crc32(header, 0, 28))
-        return header
-    }
-
-    private fun commitTrailer(storedSize: Int, rawSize: Int, rawCrc: Long): ByteArray {
-        val trailer = ByteArray(JhlogV9.COMMIT_TRAILER_BYTES)
-        System.arraycopy(JhlogV9.COMMIT_MAGIC, 0, trailer, 0, JhlogV9.COMMIT_MAGIC.size)
-        putUInt32Le(trailer, 4, chunkSequence)
-        putUInt32Le(trailer, 8, storedSize.toLong())
-        putUInt32Le(trailer, 12, rawSize.toLong())
-        putUInt32Le(trailer, 16, rawCrc)
-        return trailer
+        recordEncoder.reset()
+        if (!microPageFlushing) microPage.reset()
     }
 
     private fun writeFileHeader() {
-        val payload = Payload()
-            .uvarint(JhlogV9.HEADER_SCHEMA)
-            .uvarint(JhlogV9.REQUIRED_FEATURES)
-            .uvarint(JhlogV9.OPTIONAL_FEATURES)
+        validateProcessScope()
+        val payload = controlPayload.clear()
+            .uvarint(Jhlog.HEADER_SCHEMA)
+            .uvarint(fileHeader.requiredFeatures)
+            .uvarint(Jhlog.OPTIONAL_FEATURES)
             .fixedBytes(exactId(fileHeader.runId))
             .fixedBytes(exactId(fileHeader.processInstanceId))
             .fixedBytes(exactId(fileHeader.sessionId))
@@ -944,29 +983,68 @@ internal class BinaryLogWriter private constructor(
             .uvarint(nonNegative(fileHeader.segmentStartElapsedUs))
             .uvarint(nonNegative(fileHeader.segmentStartUnixMs))
             .uvarint(nonNegative(fileHeader.identitySource))
+            .svarint(fileHeader.timezoneOffsetMinutes.coerceIn(-MAX_TIMEZONE_OFFSET_MINUTES, MAX_TIMEZONE_OFFSET_MINUTES))
             .boundedString(fileHeader.processName, MAX_HEADER_STRING_BYTES)
             .boundedBytes(fileHeader.symbolNamespace, MAX_HEADER_STRING_BYTES)
+            .uvarint(nonNegative(fileHeader.processScope))
+            .uvarint(nonNegative(fileHeader.allowedProcessCount))
+            .boundedBytes(fileHeader.processScopeFingerprint, Jhlog.PROCESS_SCOPE_FINGERPRINT_BYTES)
+            .boundedBytes(fileHeader.previousSegmentDigest, Jhlog.SEGMENT_DIGEST_BYTES)
+            .uvarint(nonNegative(fileHeader.expectedProcessCount))
+            .boundedBytes(fileHeader.expectedProcessFingerprint, Jhlog.PROCESS_ROSTER_FINGERPRINT_BYTES)
+            .uvarint(if (fileHeader.processRosterDeclarationComplete) 1L else 0L)
+            .buildIdentity(fileHeader.buildIdentity.forNamespace(fileHeader.symbolNamespace))
             .copyBytes()
-        if (payload.size > JhlogV9.MAX_FILE_HEADER_BYTES) {
-            throw IOException("JHLOG v9 file header exceeds ${JhlogV9.MAX_FILE_HEADER_BYTES} bytes")
-        }
-        val headerBytes = (JhlogV9.FILE_MAGIC.size + 8 + payload.size).toLong()
-        ensurePhysicalCapacity(headerBytes, TERMINAL_RESERVE_BYTES)
-        bufferedOut.write(JhlogV9.FILE_MAGIC)
-        writeUInt32Le(bufferedOut, payload.size.toLong())
-        writeUInt32Le(bufferedOut, crc32(payload))
-        bufferedOut.write(payload)
-        bufferedOut.flush()
-        logicalBytesWritten = headerBytes
+        container.writeFileHeader(payload)
     }
 
-    private fun ensurePhysicalCapacity(bytes: Long, reservedBytes: Long) {
-        if (physicalByteLimit == Long.MAX_VALUE) return
-        val remaining = physicalByteLimit - logicalBytesWritten
-        if (bytes < 0L || reservedBytes < 0L || remaining < 0L || bytes > remaining - reservedBytes) {
-            throw LogSizeLimitReachedException(
-                "JHLOG v9 physical size limit reached: path=$path limit=$physicalByteLimit written=$logicalBytesWritten",
+    private fun validateProcessScope() {
+        if (
+            fileHeader.requiredFeatures != Jhlog.REQUIRED_FEATURES &&
+            fileHeader.requiredFeatures != Jhlog.BEST_EFFORT_FEATURES
+        ) {
+            throw IOException(
+                "Unsupported JHLOG ${Jhlog.FORMAT_VERSION} required feature contract " +
+                    "0x${fileHeader.requiredFeatures.toString(16)}",
             )
+        }
+        when (fileHeader.processScope) {
+            Jhlog.PROCESS_SCOPE_ALL,
+            Jhlog.PROCESS_SCOPE_MAIN_ONLY,
+            -> if (fileHeader.allowedProcessCount != 0L || fileHeader.processScopeFingerprint.isNotEmpty()) {
+                throw IOException("Non-allowlist process scope cannot declare an allowlist identity")
+            }
+            Jhlog.PROCESS_SCOPE_ALLOWLIST -> if (
+                fileHeader.allowedProcessCount <= 0L ||
+                fileHeader.processScopeFingerprint.size != Jhlog.PROCESS_SCOPE_FINGERPRINT_BYTES
+            ) {
+                throw IOException(
+                    "Allowlist process scope must declare at least one process and a full fingerprint",
+                )
+            }
+            else -> throw IOException("Unknown process scope ${fileHeader.processScope}")
+        }
+        if (fileHeader.segmentIndex == 0L) {
+            if (fileHeader.previousSegmentDigest.isNotEmpty()) {
+                throw IOException("First segment cannot declare a predecessor digest")
+            }
+        } else if (fileHeader.previousSegmentDigest.size != Jhlog.SEGMENT_DIGEST_BYTES) {
+            throw IOException("Segment ${fileHeader.segmentIndex} must declare a full predecessor digest")
+        }
+        if (
+            fileHeader.expectedProcessCount <= 0L ||
+            fileHeader.expectedProcessFingerprint.size != Jhlog.PROCESS_ROSTER_FINGERPRINT_BYTES
+        ) {
+            throw IOException("Process roster must contain at least one process and a full fingerprint")
+        }
+    }
+
+    private fun publishLogGrowthCompletion() {
+        try {
+            if (!logGrowthRecords.complete(storageBudgetExhausted)) return
+            commitChunk(final = false)
+        } catch (error: Throwable) {
+            if (error is VirtualMachineError || error is ThreadDeath) throw error
         }
     }
 
@@ -974,15 +1052,14 @@ internal class BinaryLogWriter private constructor(
         if (closed || poisoned) throw IOException("BinaryLogWriter is not writable")
     }
 
-    @Synchronized
     internal fun abort() {
         if (closed) return
         closed = true
         poisoned = true
-        runCatching { bufferedOut.close() }
+        gzipEncoder.close()
+        runCatching { container.close() }
     }
 
-    @Synchronized
     internal fun sealSizeLimit() {
         if (closed) return
         if (poisoned) {
@@ -990,10 +1067,28 @@ internal class BinaryLogWriter private constructor(
             return
         }
         discardPendingEvents(QualityCounterId.REASON_SIZE_LIMIT)
-        finishTerminal(JhlogV9.SEGMENT_END_SIZE_LIMIT)
+        finishTerminal(Jhlog.SEGMENT_END_SIZE_LIMIT)
     }
 
-    @Synchronized
+    internal fun sealStorageBudget() {
+        if (closed) return
+        if (poisoned) {
+            abort()
+            return
+        }
+        storageBudgetExhausted = true
+        discardPendingEvents(QualityCounterId.REASON_STORAGE_BUDGET)
+        finishTerminal(Jhlog.SEGMENT_END_STORAGE_BUDGET)
+    }
+
+    internal fun sealRotation() {
+        if (closed) return
+        ensureWritable()
+        finishTerminal(Jhlog.SEGMENT_END_ROTATION, completeGrowth = false, freezeQuality = false)
+    }
+
+    internal fun sealedDigest(): ByteArray? = sealedSegmentDigest?.copyOf()
+
     internal fun sealIoError(): Boolean {
         if (closed) return false
         discardPendingEvents(QualityCounterId.REASON_IO_LOST)
@@ -1002,7 +1097,7 @@ internal class BinaryLogWriter private constructor(
             return false
         }
         return try {
-            finishTerminal(JhlogV9.SEGMENT_END_IO_ERROR)
+            finishTerminal(Jhlog.SEGMENT_END_IO_ERROR)
             true
         } catch (error: Throwable) {
             if (error is VirtualMachineError || error is ThreadDeath) throw error
@@ -1011,7 +1106,6 @@ internal class BinaryLogWriter private constructor(
         }
     }
 
-    @Synchronized
     internal fun close(reason: Long) {
         if (closed) return
         ensureWritable()
@@ -1024,7 +1118,11 @@ internal class BinaryLogWriter private constructor(
         finishTerminal(reason)
     }
 
-    private fun finishTerminal(reason: Long) {
+    private fun finishTerminal(
+        reason: Long,
+        completeGrowth: Boolean = true,
+        freezeQuality: Boolean = true,
+    ) {
         var finalCommitPredicted = false
         var finalCommitted = false
         var previousGeneration = lastQualityGeneration
@@ -1036,11 +1134,13 @@ internal class BinaryLogWriter private constructor(
             // Predict that commit so the snapshot is exact, then roll it back on any failed write.
             quality.addHousekeeping(QualityCounterId.COMMITTED_CHUNK_TOTAL)
             finalCommitPredicted = true
-            quality.freeze()
+            if (freezeQuality) quality.freeze()
             terminalChunkBuilding = true
+            if (completeGrowth) publishLogGrowthCompletion()
             writeQualitySnapshot()
             writeSegmentEnd(reason)
             commitChunk(final = true, countCommit = false)
+            commitQualityDeltaState()
             finalCommitted = true
         } finally {
             terminalChunkBuilding = false
@@ -1051,104 +1151,24 @@ internal class BinaryLogWriter private constructor(
                 commitQualityPending = true
             }
             closed = true
-            bufferedOut.close()
+            gzipEncoder.close()
+            container.close()
+            if (finalCommitted) sealedSegmentDigest = container.finishDigest()
         }
     }
 
     private fun discardPendingEvents(reason: Int) {
         for (recordType in EVENT_RECORD_TYPES) {
             val count = chunkTypeCounts[recordType]
-            if (count > 0) quality.addRejected(recordType, reason, count.toLong())
+            if (count > 0) quality.addRejected(recordType, reason, count)
         }
+        microPage.rejectSemanticCounts(quality, reason)
+        logGrowthRecords.discardDeltaBases()
         resetChunkState()
     }
 
-    @Synchronized
     override fun close() {
-        close(JhlogV9.SEGMENT_END_NORMAL)
-    }
-
-    private data class ContextIds(
-        val screenId: Long,
-        val ownerId: Long,
-        val flowId: Long,
-        val stepId: Long,
-        val stableOwnerId: Long = 0L,
-        val hasStableOwner: Boolean = false,
-    )
-
-    private class ExternalBinaryOutputStream(
-        private val writer: JankHunterBinaryWriter,
-    ) : OutputStream() {
-        override fun write(oneByte: Int) {
-            writeExternal { writer.writeByte(oneByte.toByte()) }
-        }
-
-        override fun write(buffer: ByteArray, offset: Int, length: Int) {
-            writeExternal { writer.writeBytes(buffer, offset, length) }
-        }
-
-        override fun flush() {
-            writeExternal(writer::flush)
-        }
-
-        override fun close() {
-            writeExternal(writer::close)
-        }
-
-        private inline fun writeExternal(action: () -> Unit) {
-            try {
-                action()
-            } catch (error: IOException) {
-                throw error
-            } catch (error: Throwable) {
-                throw IOException("External Jank Hunter binary writer failed", error)
-            }
-        }
-    }
-
-    private class Payload {
-        private val out = ByteArrayOutputStream(64)
-
-        val size: Int
-            get() = out.size()
-
-        fun uvarint(rawValue: Long): Payload {
-            writeUvarint(out, rawValue)
-            return this
-        }
-
-        fun svarint(value: Long): Payload = uvarint((value shl 1) xor (value shr 63))
-
-        fun symbolRef(localId: Long): Payload = uvarint(if (localId <= 0L) 0L else localId shl 1)
-
-        fun stableSymbolRef(stableId: Long): Payload {
-            uvarint(1L)
-            repeat(Long.SIZE_BYTES) { byteIndex ->
-                out.write((stableId ushr (byteIndex * Byte.SIZE_BITS)).toInt() and 0xff)
-            }
-            return this
-        }
-
-        fun bytes(value: ByteArray): Payload {
-            out.write(value)
-            return this
-        }
-
-        fun fixedBytes(value: ByteArray): Payload = bytes(value)
-
-        fun boundedString(value: String, maxBytes: Int): Payload {
-            return boundedBytes(validUtf8Prefix(value, maxBytes), maxBytes)
-        }
-
-        fun boundedBytes(value: ByteArray, maxBytes: Int): Payload {
-            val safe = if (value.size <= maxBytes) value else value.copyOf(maxBytes)
-            uvarint(safe.size.toLong())
-            bytes(safe)
-            return this
-        }
-
-        fun copyBytes(): ByteArray = out.toByteArray()
+        close(Jhlog.SEGMENT_END_NORMAL)
     }
 
     companion object {
@@ -1163,131 +1183,105 @@ internal class BinaryLogWriter private constructor(
         const val FLAG_UI_PROBLEM: Long = 1L shl 16
         const val FLAG_HTTP_CLASSIFIED: Long = 1L shl 17
         const val FLAG_UI_CLASSIFIED: Long = 1L shl 18
-
-        private const val RETAINED_EVIDENCE_TIME_ONLY = 1L
-        private const val RETAINED_EVIDENCE_AFTER_EXPLICIT_GC = 2L
-
         private const val FLAG_KNOWN_MASK: Long =
-            ((1L shl 10) - 1L) or FLAG_HTTP_SLOW or FLAG_UI_PROBLEM or FLAG_HTTP_CLASSIFIED or
-                FLAG_UI_CLASSIFIED
-        private const val IO_BUFFER_BYTES = 32 * 1024
+            ((1L shl 14) - 1L) or FLAG_HTTP_SLOW or FLAG_UI_PROBLEM or FLAG_HTTP_CLASSIFIED or
+                FLAG_UI_CLASSIFIED or Jhlog.FLAG_WORKER_PERIODIC or Jhlog.FLAG_WORKER_STOP_REASON_KNOWN or
+                Jhlog.FLAG_IO_BYTES_KNOWN or Jhlog.FLAG_HTTP_BODY_TOTALS or
+                Jhlog.FLAG_HTTP_TTFB_OBSERVED or Jhlog.FLAG_HTTP_TTFB_KNOWN
         private const val TERMINAL_RESERVE_BYTES = 8L * 1024L
+        private const val DEFAULT_LOCAL_FILE_LIMIT_BYTES = 16L * 1024L * 1024L
         private const val MAX_HEADER_STRING_BYTES = 1024
-        private const val MAX_ENCODED_DICTIONARY_VALUE_BYTES = JhlogV9.TARGET_RAW_CHUNK_BYTES - 1024
-        private const val DICTIONARY_ENCODING_UTF8 = 0L
+        private const val INITIAL_QUALITY_SNAPSHOT_ENTRIES = 256
 
-        private const val DICT_GENERIC = 0
-        private const val DICT_OWNER = 1
-        private const val DICT_ROUTE = 2
-        private const val DICT_SCREEN = 3
-        private const val DICT_CLASS = 4
-        private const val DICT_STACK = 5
-        private const val DICT_METRIC = 6
-        private const val DICT_DEVICE = 7
-        private const val DICT_APP_VERSION = 8
-        private const val DICT_BUILD = 9
-        private const val DICT_FLOW = 11
-        private const val DICT_STEP = 12
-        private const val DICT_LOG_SOURCE = 13
-        private const val DICT_STABLE_SYMBOL = 14
-        private const val DICT_METHOD = 15
+        internal const val DICT_GENERIC = 0
+        internal const val DICT_OWNER = 1
+        internal const val DICT_ROUTE = 2
+        internal const val DICT_SCREEN = 3
+        internal const val DICT_CLASS = 4
+        internal const val DICT_STACK = 5
+        internal const val DICT_METRIC = 6
+        internal const val DICT_DEVICE = 7
+        internal const val DICT_APP_VERSION = 8
+        internal const val DICT_BUILD = 9
+        internal const val DICT_PROCESS = 10
+        internal const val DICT_LOG_SOURCE = 11
+        internal const val DICT_STABLE_SYMBOL = 12
+        internal const val DICT_OPERATION = 13
+        internal const val DICT_ATTRIBUTE_KEY = 14
+        internal const val DICT_ATTRIBUTE_VALUE = 15
 
-        private val EVENT_RECORD_TYPES = IntArray(
-            JhlogV9.TYPE_RUNTIME_CALL - JhlogV9.TYPE_SESSION + 2,
-        ) { index ->
-            if (index <= JhlogV9.TYPE_RUNTIME_CALL - JhlogV9.TYPE_SESSION) {
-                JhlogV9.TYPE_SESSION + index
-            } else {
-                JhlogV9.TYPE_AGENT_EVENT
-            }
+        private const val MAX_TIMEZONE_OFFSET_MINUTES = 14L * 60L
+
+        private val EVENT_RECORD_TYPES = intArrayOf(
+            *IntArray(Jhlog.TYPE_GAUGE - Jhlog.TYPE_SESSION + 1) { Jhlog.TYPE_SESSION + it },
+            Jhlog.TYPE_OPERATION,
+            *IntArray(Jhlog.TYPE_RUNTIME_CALL - Jhlog.TYPE_LOG_SPAM + 1) { Jhlog.TYPE_LOG_SPAM + it },
+            Jhlog.TYPE_PROCESS_EXIT,
+            Jhlog.TYPE_IO,
+            Jhlog.TYPE_WORKER,
+            Jhlog.TYPE_WEBSOCKET,
+            Jhlog.TYPE_DATABASE,
+            Jhlog.TYPE_DATABASE_TRANSACTION,
+            Jhlog.TYPE_PROCESS_STATE,
+            Jhlog.TYPE_ANDROID_COMPONENT,
+            Jhlog.TYPE_BINDER_TRANSACTION,
+        )
+
+        private fun isSemanticRecord(recordType: Int): Boolean {
+            return recordType in Jhlog.TYPE_SESSION..Jhlog.TYPE_GAUGE ||
+                recordType == Jhlog.TYPE_OPERATION ||
+                recordType in Jhlog.TYPE_LOG_SPAM..Jhlog.TYPE_RUNTIME_CALL ||
+                recordType in Jhlog.TYPE_PROCESS_EXIT..Jhlog.TYPE_BINDER_TRANSACTION
         }
-        private const val AGENT_EVENT_SCHEMA_V1 = 1
-        private const val UINT32_MASK = 0xFFFF_FFFFL
+
+        private fun isControlRecord(recordType: Int): Boolean {
+            return recordType == Jhlog.TYPE_QUALITY_SNAPSHOT ||
+                recordType == Jhlog.TYPE_SEGMENT_END ||
+                recordType == Jhlog.TYPE_LOG_GROWTH
+        }
 
         private fun defaultFileHeader(): BinaryLogFileHeader {
             val elapsedUs = nowElapsedUs()
+            val unixMs = System.currentTimeMillis().coerceAtLeast(0L)
             return BinaryLogFileHeader(
                 runId = BinaryLogFileHeader.randomId(),
                 processInstanceId = BinaryLogFileHeader.randomId(),
                 sessionId = BinaryLogFileHeader.randomId(),
-                segmentIndex = 1L,
+                segmentIndex = 0L,
                 osPid = Process.myPid().toLong().coerceAtLeast(0L),
                 collectorStartElapsedUs = elapsedUs,
                 segmentStartElapsedUs = elapsedUs,
-                segmentStartUnixMs = System.currentTimeMillis().coerceAtLeast(0L),
+                segmentStartUnixMs = unixMs,
+                timezoneOffsetMinutes = TimeZone.getDefault().getOffset(unixMs) / 60_000L,
                 identitySource = 0L,
                 processName = "unknown",
                 symbolNamespace = ByteArray(0),
+                expectedProcessFingerprint = processRosterFingerprint(setOf("unknown")),
             )
         }
 
-        private fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)
+        private fun processRosterFingerprint(processes: Set<String>): ByteArray {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val length = ByteArray(Int.SIZE_BYTES)
+            processes.sorted().forEach { processName ->
+                val bytes = processName.toByteArray(StandardCharsets.UTF_8)
+                length[0] = (bytes.size ushr 24).toByte()
+                length[1] = (bytes.size ushr 16).toByte()
+                length[2] = (bytes.size ushr 8).toByte()
+                length[3] = bytes.size.toByte()
+                digest.update(length)
+                digest.update(bytes)
+            }
+            return digest.digest()
+        }
 
-        private fun foregroundFlag(foreground: Boolean): Long = if (foreground) FLAG_APP_FOREGROUND else 0L
-
-        private fun clampDuration(value: Long, durationMs: Long): Long = nonNegative(value).coerceAtMost(durationMs)
+        internal fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)
 
         private fun exactId(value: ByteArray): ByteArray {
             return if (value.size == 16) value else value.copyOf(16)
         }
 
-        private fun validUtf8Prefix(value: String, maxBytes: Int): ByteArray {
-            val limit = maxBytes.coerceAtLeast(0)
-            val encoded = value.toByteArray(StandardCharsets.UTF_8)
-            if (encoded.size <= limit) return encoded
-            if (limit == 0) return ByteArray(0)
-
-            val builder = StringBuilder()
-            var usedBytes = 0
-            var offset = 0
-            while (offset < value.length) {
-                val codePoint = value.codePointAt(offset)
-                val charCount = Character.charCount(codePoint)
-                val codePointBytes = value
-                    .substring(offset, offset + charCount)
-                    .toByteArray(StandardCharsets.UTF_8)
-                if (usedBytes + codePointBytes.size > limit) break
-                builder.appendCodePoint(codePoint)
-                usedBytes += codePointBytes.size
-                offset += charCount
-            }
-            return builder.toString().toByteArray(StandardCharsets.UTF_8)
-        }
-
         private fun nowElapsedUs(): Long = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0L) / 1_000L
 
-        private fun gzip(raw: ByteArray): ByteArray {
-            val compressed = ByteArrayOutputStream(raw.size.coerceAtLeast(64))
-            GZIPOutputStream(compressed).use { gzip -> gzip.write(raw) }
-            return compressed.toByteArray()
-        }
-
-        private fun crc32(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size): Long {
-            return CRC32().apply { update(bytes, offset, length) }.value
-        }
-
-        private fun writeUvarint(out: OutputStream, rawValue: Long) {
-            // Long carries unsigned varint bits here. Semantic unsigned fields are sanitized by
-            // their callers; keeping the sign bit is required for zig-zag encoded Long.MIN_VALUE.
-            var value = rawValue
-            while (value and 0x7fL.inv() != 0L) {
-                out.write(((value and 0x7fL) or 0x80L).toInt())
-                value = value ushr 7
-            }
-            out.write(value.toInt())
-        }
-
-        private fun writeUInt32Le(out: OutputStream, value: Long) {
-            repeat(4) { shift -> out.write((value ushr (shift * 8)).toInt() and 0xff) }
-        }
-
-        private fun putUInt16Le(target: ByteArray, offset: Int, value: Int) {
-            target[offset] = (value and 0xff).toByte()
-            target[offset + 1] = ((value ushr 8) and 0xff).toByte()
-        }
-
-        private fun putUInt32Le(target: ByteArray, offset: Int, value: Long) {
-            repeat(4) { index -> target[offset + index] = ((value ushr (index * 8)) and 0xff).toByte() }
-        }
     }
 }

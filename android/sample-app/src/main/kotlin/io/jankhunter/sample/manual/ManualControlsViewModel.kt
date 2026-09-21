@@ -53,6 +53,14 @@ internal class ManualControlsViewModel(
                 effectChannel.trySend(ManualControlsEffect.ShareDiagnostics)
                 mutableState.value
             }
+            ManualStateUpdate.OpenCustomViewLab -> {
+                effectChannel.trySend(ManualControlsEffect.OpenCustomViewLab)
+                mutableState.value
+            }
+            ManualStateUpdate.OpenComposeLab -> {
+                effectChannel.trySend(ManualControlsEffect.OpenComposeLab)
+                mutableState.value
+            }
         }
     }
 }

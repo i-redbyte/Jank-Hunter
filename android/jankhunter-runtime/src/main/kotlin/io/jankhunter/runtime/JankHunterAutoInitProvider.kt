@@ -7,11 +7,7 @@ import android.net.Uri
 
 class JankHunterAutoInitProvider : ContentProvider() {
     override fun onCreate(): Boolean {
-        try {
-            context?.let { JankHunter.init(it) }
-        } catch (_: Throwable) {
-            // Startup instrumentation must never be allowed to take the host app down.
-        }
+        JankHunter.autoInit(context)
         return true
     }
 

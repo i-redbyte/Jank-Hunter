@@ -1,60 +1,61 @@
 package mathanalysis
 
 import (
+	"container/heap"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
+	"unsafe"
 )
 
 const maxFloydWarshallNodes = 60
 
 type causalGraphBuilder struct {
-	nodes map[string]CausalNode
-	edges map[string]*causalEdgeAgg
+	nodes         map[string]CausalNode
+	edges         map[causalEdgeKey]*causalEdgeAgg
+	work, results *collectionAccount
+	httpWindow    int
+	httpNodes     map[causalContextKey]string
 }
+
+type causalEdgeKey struct{ from, to, kind string }
+type causalContextKey struct{ kind, value string }
 
 type causalEdgeAgg struct {
 	from        string
 	to          string
 	kind        string
 	count       int
+	httpWindow  int
 	strength    float64
 	description string
 }
 
 func buildCausalGraph(timeline []TimelineBucket, loops []NetworkLoopFinding, markov MarkovModel) CausalGraph {
-	builder := newCausalGraphBuilder()
-	builder.addTimeline(timeline, markov)
-	builder.addNetworkLoops(loops)
-	nodes := builder.nodeList()
-	edges := builder.edgeList()
-	paths := causalShortestPaths(nodes, edges)
-	allPairs := floydWarshallGraphPaths(nodes, edges, 6)
-	ownerScores := causalOwnerScores(nodes, edges, loops)
-	return CausalGraph{
-		Nodes:       nodes,
-		Edges:       edges,
-		Paths:       paths,
-		AllPairs:    allPairs,
-		OwnerScores: ownerScores,
-	}
+	return buildCausalGraphWithBudget(timeline, loops, markov, nil)
 }
 
 func newCausalGraphBuilder() *causalGraphBuilder {
-	return &causalGraphBuilder{
-		nodes: map[string]CausalNode{},
-		edges: map[string]*causalEdgeAgg{},
-	}
+	return newCausalGraphBuilderWithBudget(nil)
 }
 
 func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov MarkovModel) {
+	states := b.work.scratch("causal state index")
+	defer states.close()
+	if !states.reserve(mathMapBaseBytes) || !states.reserveItems(len(markov.States), mathMapEntryBytes) {
+		return
+	}
 	stateByTime := make(map[uint64]string, len(markov.States))
 	for _, state := range markov.States {
 		stateByTime[state.TimeMS] = state.State
 	}
 	for _, bucket := range timeline {
+		if !b.work.canReserve(0) {
+			return
+		}
 		state, ok := stateByTime[bucket.StartMS]
+		b.addHTTPObservations(bucket.HTTPRouteObservations, state == markovNetworkSlow)
 		if !ok {
 			continue
 		}
@@ -71,7 +72,7 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 		}
 		if bucket.OwnerSample != "" {
 			ownerID := causalNodeID("owner", bucket.OwnerSample)
-			b.addNode(ownerID, "источник: "+bucket.OwnerSample, "owner")
+			b.addNode(ownerID, "место запуска: "+analysisOwnerLabel(bucket.OwnerSample), "owner")
 			b.addUndirectedEdge(ownerID, stateID, "owner-state", strength, "источник активен рядом с состоянием")
 			if bucket.ScreenSample != "" {
 				b.addUndirectedEdge(causalNodeID("screen", bucket.ScreenSample), ownerID, "screen-owner", strength*0.8, "экран и источник совпали во временном интервале")
@@ -81,50 +82,26 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 			routeID := causalNodeID("route", bucket.RouteSample)
 			b.addNode(routeID, "маршрут: "+bucket.RouteSample, "route")
 			b.addUndirectedEdge(routeID, stateID, "route-state", strength, "маршрут активен рядом с состоянием")
-			if bucket.OwnerSample != "" {
-				b.addUndirectedEdge(causalNodeID("owner", bucket.OwnerSample), routeID, "owner-route", strength+0.5, "источник вызвал маршрут")
-			}
-			b.addNetworkPhaseEdges(routeID, bucket, strength)
 		}
 		if bucket.NetworkSample != "" {
 			networkID := causalNodeID("network", bucket.NetworkSample)
 			b.addNode(networkID, "сеть: "+bucket.NetworkSample, "network")
-			b.addUndirectedEdge(networkID, stateID, "сеть -> состояние", strength*0.7, "сетевая когорта совпала с состоянием")
+			b.addUndirectedEdge(networkID, stateID, "сеть → состояние", strength*0.7, "группа сетевых событий совпала с состоянием")
 		}
-	}
-}
-
-func (b *causalGraphBuilder) addNetworkPhaseEdges(routeID string, bucket TimelineBucket, strength float64) {
-	if bucket.HTTPCount > 0 {
-		phaseID := causalNodeID("phase", "HTTP")
-		b.addNode(phaseID, "фаза: HTTP", "phase")
-		b.addUndirectedEdge(routeID, phaseID, "route-phase", strength, "HTTP активность маршрута")
-	}
-	if bucket.DNSCount > 0 {
-		phaseID := causalNodeID("phase", "DNS")
-		b.addNode(phaseID, "фаза: DNS", "phase")
-		b.addUndirectedEdge(routeID, phaseID, "route-phase", strength+float64(bucket.DNSCount)*0.3, "DNS активность маршрута")
-		b.addUndirectedEdge(phaseID, causalNodeID("symptom", "network_slow"), "phase-symptom", strength+0.5, "DNS всплеск связан с сетевым симптомом")
-	}
-	if bucket.ConnectCount > 0 {
-		phaseID := causalNodeID("phase", "connect")
-		b.addNode(phaseID, "фаза: соединение", "phase")
-		b.addUndirectedEdge(routeID, phaseID, "route-phase", strength+float64(bucket.ConnectCount)*0.3, "активность соединения маршрута")
-		b.addUndirectedEdge(phaseID, causalNodeID("symptom", "network_slow"), "phase-symptom", strength+0.5, "всплеск соединения связан с сетевым симптомом")
-	}
-	if bucket.HTTPFailed > 0 {
-		b.addUndirectedEdge(routeID, causalNodeID("symptom", "network_slow"), "route-symptom", strength+float64(bucket.HTTPFailed), "ошибки маршрута связаны с сетевым симптомом")
 	}
 }
 
 func (b *causalGraphBuilder) addNetworkLoops(loops []NetworkLoopFinding) {
 	for _, loop := range loops {
+		if !b.work.canReserve(0) {
+			return
+		}
 		strength := 1 + loop.Confidence*3 + math.Min(3, loop.BurnScore/10)
 		symptomID := causalNodeID("symptom", "network_loop")
 		b.addNode(symptomID, "симптом: сетевой цикл", "symptom")
 		if loop.Owner != "" {
 			ownerID := causalNodeID("owner", loop.Owner)
-			b.addNode(ownerID, "источник: "+loop.Owner, "owner")
+			b.addNode(ownerID, "место запуска: "+analysisOwnerLabel(loop.Owner), "owner")
 			b.addUndirectedEdge(symptomID, ownerID, "loop-owner", strength, "сетевой цикл связан с источником")
 		}
 		if loop.Route != "" {
@@ -132,15 +109,15 @@ func (b *causalGraphBuilder) addNetworkLoops(loops []NetworkLoopFinding) {
 			b.addNode(routeID, "маршрут: "+loop.Route, "route")
 			b.addUndirectedEdge(symptomID, routeID, "loop-route", strength, "сетевой цикл связан с маршрутом")
 			if loop.Owner != "" {
-				b.addUndirectedEdge(causalNodeID("owner", loop.Owner), routeID, "owner-route", strength, "источник связан с маршрутом сетевого цикла")
+				b.addUndirectedEdge(causalNodeID("owner", loop.Owner), routeID, "loop-owner-route", strength, "источник связан с маршрутом сетевого цикла")
 			}
 		}
 		for _, token := range loop.Motif {
 			if token == "dns_high" {
-				b.addUndirectedEdge(symptomID, causalNodeID("phase", "DNS"), "loop-phase", strength, "паттерн цикла содержит DNS")
+				b.addUndirectedEdge(symptomID, causalNodeID("phase", "DNS"), "loop-phase", strength, "повторяемая последовательность содержит DNS")
 			}
 			if token == "connect_high" || token == "reconnect_high" || token == "websocket_reconnect" {
-				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "паттерн цикла содержит повторное соединение или соединение")
+				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "повторяемая последовательность содержит соединение или переподключение")
 			}
 		}
 	}
@@ -153,6 +130,10 @@ func (b *causalGraphBuilder) addNode(id, label, kind string) {
 	if _, ok := b.nodes[id]; ok {
 		return
 	}
+	if !b.work.reserve(mathMapEntryBytes+uint64(unsafe.Sizeof(CausalNode{}))) ||
+		!b.results.reserve(uint64(len(id)+len(label)+len(kind))) {
+		return
+	}
 	b.nodes[id] = CausalNode{ID: id, Label: label, Kind: kind}
 }
 
@@ -162,19 +143,40 @@ func (b *causalGraphBuilder) addUndirectedEdge(from, to, kind string, strength f
 }
 
 func (b *causalGraphBuilder) addEdge(from, to, kind string, strength float64, description string) {
-	if from == "" || to == "" || from == to {
+	b.addEdgeCount(from, to, kind, strength, description, 1)
+}
+
+func (b *causalGraphBuilder) addEdgeCount(from, to, kind string, strength float64, description string, count int) {
+	edge := b.edge(from, to, kind, description)
+	if edge == nil {
 		return
+	}
+	edge.count += count
+	edge.strength += math.Max(0.1, strength)
+}
+
+func (b *causalGraphBuilder) edge(from, to, kind, description string) *causalEdgeAgg {
+	if from == "" || to == "" || from == to {
+		return nil
 	}
 	b.ensureKnownNode(from)
 	b.ensureKnownNode(to)
-	key := from + "\x00" + to + "\x00" + kind
+	if !b.work.canReserve(0) {
+		return nil
+	}
+	// Reuse canonical node IDs instead of retaining newly formatted copies per edge.
+	from, to = b.nodes[from].ID, b.nodes[to].ID
+	key := causalEdgeKey{from, to, kind}
 	edge := b.edges[key]
 	if edge == nil {
+		if !b.work.reserve(mathMapEntryBytes+uint64(unsafe.Sizeof(causalEdgeAgg{}))+uint64(unsafe.Sizeof(key))) ||
+			!b.results.reserve(uint64(len(kind)+len(description))) {
+			return nil
+		}
 		edge = &causalEdgeAgg{from: from, to: to, kind: kind, description: description}
 		b.edges[key] = edge
 	}
-	edge.count++
-	edge.strength += math.Max(0.1, strength)
+	return edge
 }
 
 func (b *causalGraphBuilder) ensureKnownNode(id string) {
@@ -186,6 +188,9 @@ func (b *causalGraphBuilder) ensureKnownNode(id string) {
 }
 
 func (b *causalGraphBuilder) nodeList() []CausalNode {
+	if !b.results.reserveItems(len(b.nodes), uint64(unsafe.Sizeof(CausalNode{}))) {
+		return nil
+	}
 	nodes := make([]CausalNode, 0, len(b.nodes))
 	for _, node := range b.nodes {
 		nodes = append(nodes, node)
@@ -200,6 +205,9 @@ func (b *causalGraphBuilder) nodeList() []CausalNode {
 }
 
 func (b *causalGraphBuilder) edgeList() []CausalEdge {
+	if !b.results.reserveItems(len(b.edges), uint64(unsafe.Sizeof(CausalEdge{}))) {
+		return nil
+	}
 	edges := make([]CausalEdge, 0, len(b.edges))
 	for _, edge := range b.edges {
 		confidence := math.Min(1, edge.strength/6)
@@ -228,7 +236,13 @@ func (b *causalGraphBuilder) edgeList() []CausalEdge {
 		if edges[i].Count != edges[j].Count {
 			return edges[i].Count > edges[j].Count
 		}
-		return edges[i].FromLabel+"->"+edges[i].ToLabel < edges[j].FromLabel+"->"+edges[j].ToLabel
+		if edges[i].From != edges[j].From {
+			return edges[i].From < edges[j].From
+		}
+		if edges[i].To != edges[j].To {
+			return edges[i].To < edges[j].To
+		}
+		return edges[i].Kind < edges[j].Kind
 	})
 	return edges
 }
@@ -246,29 +260,25 @@ func causalShortestPaths(nodes []CausalNode, edges []CausalEdge) []GraphPath {
 			targets = append(targets, node.ID)
 		}
 	}
-	var paths []GraphPath
+	paths := make([]GraphPath, 0, 6)
 	for _, source := range sources {
+		distances, previous := causalShortestPathTree(adjacency, source)
+		bestTargets := make([]causalPathTarget, 0, 6)
 		for _, target := range targets {
-			path, ok := shortestGraphPathWithAdjacency(nodeMap, adjacency, source, target)
+			cost, reachable := distances[target]
+			if !reachable {
+				continue
+			}
+			bestTargets = retainCausalPathTarget(bestTargets, causalPathTarget{id: target, cost: cost}, 6)
+		}
+		for _, target := range bestTargets {
+			path, ok := causalGraphPath(nodeMap, distances, previous, source, target.id)
 			if ok && len(path.Nodes) > 1 {
-				paths = append(paths, path)
+				paths = retainGraphPath(paths, path, 6)
 			}
 		}
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].Cost != paths[j].Cost {
-			return paths[i].Cost < paths[j].Cost
-		}
-		return strings.Join(paths[i].Nodes, "->") < strings.Join(paths[j].Nodes, "->")
-	})
-	if len(paths) > 6 {
-		paths = paths[:6]
-	}
 	return paths
-}
-
-func shortestGraphPath(nodes map[string]CausalNode, edges []CausalEdge, source, target string) (GraphPath, bool) {
-	return shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), source, target)
 }
 
 func shortestGraphPathWithAdjacency(
@@ -283,41 +293,89 @@ func shortestGraphPathWithAdjacency(
 	if _, ok := nodes[target]; !ok {
 		return GraphPath{}, false
 	}
-	dist := map[string]float64{}
-	prev := map[string]string{}
-	visited := map[string]bool{}
-	for id := range nodes {
-		dist[id] = math.Inf(1)
+	distances, previous := causalShortestPathTree(adjacency, source)
+	return causalGraphPath(nodes, distances, previous, source, target)
+}
+
+type causalPathQueueItem struct {
+	id   string
+	cost float64
+}
+
+type causalPathQueue []causalPathQueueItem
+
+func (queue causalPathQueue) Len() int { return len(queue) }
+
+func (queue causalPathQueue) Less(i, j int) bool {
+	if queue[i].cost != queue[j].cost {
+		return queue[i].cost < queue[j].cost
 	}
-	dist[source] = 0
-	for {
-		current := ""
-		best := math.Inf(1)
-		for id, value := range dist {
-			if !visited[id] && (value < best || (value == best && (current == "" || id < current))) {
-				current = id
-				best = value
-			}
+	return queue[i].id < queue[j].id
+}
+
+func (queue causalPathQueue) Swap(i, j int) { queue[i], queue[j] = queue[j], queue[i] }
+
+func (queue *causalPathQueue) Push(value any) {
+	*queue = append(*queue, value.(causalPathQueueItem))
+}
+
+func (queue *causalPathQueue) Pop() any {
+	previous := *queue
+	last := len(previous) - 1
+	value := previous[last]
+	*queue = previous[:last]
+	return value
+}
+
+func causalShortestPathTree(
+	adjacency map[string][]CausalEdge,
+	source string,
+) (map[string]float64, map[string]string) {
+	distances := map[string]float64{source: 0}
+	previous := make(map[string]string)
+	visited := make(map[string]struct{})
+	queue := causalPathQueue{{id: source, cost: 0}}
+	for queue.Len() > 0 {
+		current := heap.Pop(&queue).(causalPathQueueItem)
+		if _, done := visited[current.id]; done {
+			continue
 		}
-		if current == "" || current == target {
-			break
+		best, currentReachable := distances[current.id]
+		if !currentReachable || current.cost != best {
+			continue
 		}
-		visited[current] = true
-		for _, edge := range adjacency[current] {
-			next := edge.To
-			candidate := dist[current] + edge.Weight
-			if candidate < dist[next] || (candidate == dist[next] && (prev[next] == "" || current < prev[next])) {
-				dist[next] = candidate
-				prev[next] = current
+		visited[current.id] = struct{}{}
+		for _, edge := range adjacency[current.id] {
+			candidate := current.cost + edge.Weight
+			known, reachable := distances[edge.To]
+			if reachable && candidate > known {
+				continue
 			}
+			if reachable && candidate == known && previous[edge.To] != "" && current.id >= previous[edge.To] {
+				continue
+			}
+			distances[edge.To] = candidate
+			previous[edge.To] = current.id
+			heap.Push(&queue, causalPathQueueItem{id: edge.To, cost: candidate})
 		}
 	}
-	if math.IsInf(dist[target], 1) {
+	return distances, previous
+}
+
+func causalGraphPath(
+	nodes map[string]CausalNode,
+	distances map[string]float64,
+	previous map[string]string,
+	source,
+	target string,
+) (GraphPath, bool) {
+	cost, reachable := distances[target]
+	if !reachable {
 		return GraphPath{}, false
 	}
 	ids := []string{target}
 	for ids[len(ids)-1] != source {
-		parent := prev[ids[len(ids)-1]]
+		parent := previous[ids[len(ids)-1]]
 		if parent == "" {
 			return GraphPath{}, false
 		}
@@ -332,9 +390,65 @@ func shortestGraphPathWithAdjacency(
 		From:       nodes[source].Label,
 		To:         nodes[target].Label,
 		Nodes:      labels,
-		Cost:       dist[target],
-		Confidence: 1 / (1 + dist[target]),
+		Cost:       cost,
+		Confidence: 1 / (1 + cost),
 	}, true
+}
+
+type causalPathTarget struct {
+	id   string
+	cost float64
+}
+
+func retainCausalPathTarget(values []causalPathTarget, candidate causalPathTarget, limit int) []causalPathTarget {
+	insert := len(values)
+	for index, current := range values {
+		if candidate.cost < current.cost || (candidate.cost == current.cost && candidate.id < current.id) {
+			insert = index
+			break
+		}
+	}
+	if len(values) < limit {
+		values = append(values, candidate)
+		copy(values[insert+1:], values[insert:len(values)-1])
+		values[insert] = candidate
+	} else if insert < limit {
+		copy(values[insert+1:], values[insert:limit-1])
+		values[insert] = candidate
+	}
+	return values
+}
+
+func retainGraphPath(paths []GraphPath, candidate GraphPath, limit int) []GraphPath {
+	insert := len(paths)
+	for index, current := range paths {
+		if graphPathBetter(candidate, current) {
+			insert = index
+			break
+		}
+	}
+	if len(paths) < limit {
+		paths = append(paths, candidate)
+		copy(paths[insert+1:], paths[insert:len(paths)-1])
+		paths[insert] = candidate
+	} else if insert < limit {
+		copy(paths[insert+1:], paths[insert:limit-1])
+		paths[insert] = candidate
+	}
+	return paths
+}
+
+func graphPathBetter(left, right GraphPath) bool {
+	if left.Cost != right.Cost {
+		return left.Cost < right.Cost
+	}
+	common := min(len(left.Nodes), len(right.Nodes))
+	for index := range common {
+		if left.Nodes[index] != right.Nodes[index] {
+			return left.Nodes[index] < right.Nodes[index]
+		}
+	}
+	return len(left.Nodes) < len(right.Nodes)
 }
 
 func floydWarshallGraphPaths(nodes []CausalNode, edges []CausalEdge, limit int) []GraphPath {
@@ -381,7 +495,7 @@ func floydWarshallGraphPaths(nodes []CausalNode, edges []CausalEdge, limit int) 
 			}
 		}
 	}
-	var paths []GraphPath
+	paths := make([]GraphPath, 0, limit)
 	for i := 0; i < n; i++ {
 		for j := 0; j < n; j++ {
 			if i == j || math.IsInf(dist[i][j], 1) {
@@ -398,23 +512,14 @@ func floydWarshallGraphPaths(nodes []CausalNode, edges []CausalEdge, limit int) 
 			for _, id := range pathIDs {
 				labels = append(labels, nodeMap[id].Label)
 			}
-			paths = append(paths, GraphPath{
+			paths = retainGraphPath(paths, GraphPath{
 				From:       nodes[i].Label,
 				To:         nodes[j].Label,
 				Nodes:      labels,
 				Cost:       dist[i][j],
 				Confidence: 1 / (1 + dist[i][j]),
-			})
+			}, limit)
 		}
-	}
-	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].Cost != paths[j].Cost {
-			return paths[i].Cost < paths[j].Cost
-		}
-		return strings.Join(paths[i].Nodes, "->") < strings.Join(paths[j].Nodes, "->")
-	})
-	if len(paths) > limit {
-		paths = paths[:limit]
 	}
 	return paths
 }
@@ -445,10 +550,13 @@ func causalOwnerScores(nodes []CausalNode, edges []CausalEdge, loops []NetworkLo
 			continue
 		}
 		owner := strings.TrimPrefix(edge.From, "owner:")
+		if !analysisOwnerIsKnown(owner) {
+			continue
+		}
 		scores[owner] += edge.Confidence
 	}
 	for _, loop := range loops {
-		if loop.Owner != "" {
+		if analysisOwnerIsKnown(loop.Owner) {
 			scores[loop.Owner] += loop.Confidence*2 + math.Min(3, loop.BurnScore/10)
 		}
 	}
@@ -472,17 +580,17 @@ func causalOwnerScores(nodes []CausalNode, edges []CausalEdge, loops []NetworkLo
 }
 
 func compareCausalGraphs(baseline, candidate CausalGraph) []CausalDelta {
-	var deltas []CausalDelta
+	deltas := make([]CausalDelta, 0, 12)
 	baselineEdges := causalEdgeMap(baseline.Edges)
 	candidateEdges := causalEdgeMap(candidate.Edges)
 	for key, edge := range candidateEdges {
 		base, ok := baselineEdges[key]
 		if !ok {
 			if edge.Confidence >= 0.35 {
-				deltas = append(deltas, CausalDelta{
+				deltas = retainCausalDelta(deltas, CausalDelta{
 					Kind:           "новая связь",
 					Severity:       causalDeltaSeverity(edge.Confidence, 0),
-					Summary:        fmt.Sprintf("Новая статистическая связь: %s ↔ %s, уверенность %.2f, совместных наблюдений %d. Она не доказывает направление причины.", edge.FromLabel, edge.ToLabel, edge.Confidence, edge.Count),
+					Summary:        fmt.Sprintf("Новая статистическая связь: %s ↔ %s, надёжность %.2f, совместных наблюдений %d. Она не доказывает направление причины.", edge.FromLabel, edge.ToLabel, edge.Confidence, edge.Count),
 					CandidateValue: edge.Confidence,
 					Delta:          edge.Confidence,
 				})
@@ -491,10 +599,10 @@ func compareCausalGraphs(baseline, candidate CausalGraph) []CausalDelta {
 		}
 		delta := edge.Confidence - base.Confidence
 		if delta >= 0.25 {
-			deltas = append(deltas, CausalDelta{
+			deltas = retainCausalDelta(deltas, CausalDelta{
 				Kind:           "усилилась связь",
 				Severity:       causalDeltaSeverity(delta, base.Confidence),
-				Summary:        fmt.Sprintf("Статистическая связь усилилась: %s ↔ %s, уверенность %.2f -> %.2f. Это приоритет проверки, а не доказанная причина.", edge.FromLabel, edge.ToLabel, base.Confidence, edge.Confidence),
+				Summary:        fmt.Sprintf("Статистическая связь усилилась: %s ↔ %s, надёжность %.2f → %.2f. Это приоритет проверки, а не доказанная причина.", edge.FromLabel, edge.ToLabel, base.Confidence, edge.Confidence),
 				BaselineValue:  base.Confidence,
 				CandidateValue: edge.Confidence,
 				Delta:          delta,
@@ -502,22 +610,40 @@ func compareCausalGraphs(baseline, candidate CausalGraph) []CausalDelta {
 		}
 	}
 	if changedPathDelta, ok := causalChangedPathDelta(baseline.Paths, candidate.Paths); ok {
-		deltas = append(deltas, changedPathDelta)
+		deltas = retainCausalDelta(deltas, changedPathDelta)
 	}
-	deltas = append(deltas, causalOwnerScoreDeltas(baseline.OwnerScores, candidate.OwnerScores)...)
-	sort.Slice(deltas, func(i, j int) bool {
-		if severityRank(deltas[i].Severity) != severityRank(deltas[j].Severity) {
-			return severityRank(deltas[i].Severity) > severityRank(deltas[j].Severity)
-		}
-		if math.Abs(deltas[i].Delta) != math.Abs(deltas[j].Delta) {
-			return math.Abs(deltas[i].Delta) > math.Abs(deltas[j].Delta)
-		}
-		return deltas[i].Summary < deltas[j].Summary
-	})
-	if len(deltas) > 12 {
-		deltas = deltas[:12]
+	for _, delta := range causalOwnerScoreDeltas(baseline.OwnerScores, candidate.OwnerScores) {
+		deltas = retainCausalDelta(deltas, delta)
 	}
 	return deltas
+}
+
+func retainCausalDelta(deltas []CausalDelta, candidate CausalDelta) []CausalDelta {
+	insert := len(deltas)
+	for i, current := range deltas {
+		if causalDeltaLess(candidate, current) {
+			insert = i
+			break
+		}
+	}
+	if len(deltas) < 12 {
+		deltas = append(deltas, candidate)
+	} else if insert == 12 {
+		return deltas
+	}
+	copy(deltas[insert+1:], deltas[insert:len(deltas)-1])
+	deltas[insert] = candidate
+	return deltas
+}
+
+func causalDeltaLess(a, b CausalDelta) bool {
+	if severityRank(a.Severity) != severityRank(b.Severity) {
+		return severityRank(a.Severity) > severityRank(b.Severity)
+	}
+	if math.Abs(a.Delta) != math.Abs(b.Delta) {
+		return math.Abs(a.Delta) > math.Abs(b.Delta)
+	}
+	return a.Summary < b.Summary
 }
 
 func causalChangedPathDelta(baseline, candidate []GraphPath) (CausalDelta, bool) {
@@ -544,7 +670,7 @@ func causalChangedPathDelta(baseline, candidate []GraphPath) (CausalDelta, bool)
 	return CausalDelta{
 		Kind:           "усилилась цепочка связей",
 		Severity:       "medium",
-		Summary:        fmt.Sprintf("Самая сильная цепочка статистических связей изменилась: было `%s`, стало `%s`; уверенность %.2f -> %.2f. Направление причины этим не установлено.", fallbackPathText(baselinePath), candidatePath, baselineConfidence, candidate[0].Confidence),
+		Summary:        fmt.Sprintf("Самая сильная цепочка связей изменилась: было `%s`, стало `%s`; надёжность %.2f → %.2f. Направление причины не установлено.", fallbackPathText(baselinePath), candidatePath, baselineConfidence, candidate[0].Confidence),
 		BaselineValue:  baselineCost,
 		CandidateValue: candidate[0].Cost,
 		Delta:          candidate[0].Cost - baselineCost,
@@ -608,7 +734,7 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Есть цепочка связей для проверки",
-			Detail:         fmt.Sprintf("%s; условная стоимость %.2f, уверенность %.2f. Цепочка не устанавливает направление причины.", strings.Join(best.Nodes, " ↔ "), best.Cost, best.Confidence),
+			Detail:         fmt.Sprintf("%s; условная стоимость %.2f, надёжность %.2f. Цепочка не устанавливает направление причины.", strings.Join(best.Nodes, " ↔ "), best.Cost, best.Confidence),
 			Recommendation: "Проверьте эту гипотезу по сырым событиям, трассировке и коду источника. Не считайте источник виновником только по графу.",
 		}}
 	}
@@ -617,22 +743,6 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 		Title:    "Кратчайший путь не найден",
 		Detail:   causalGraphSummary(graph),
 	}}
-}
-
-func compareCausalGraphStatus(deltas []CausalDelta) string {
-	if len(deltas) == 0 {
-		return "ok"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
 }
 
 func compareCausalGraphSummary(deltas []CausalDelta) string {
@@ -673,7 +783,9 @@ func CausalKindLabel(kind string) string {
 	case "route-state":
 		return "маршрут ↔ состояние"
 	case "owner-route":
-		return "источник ↔ маршрут"
+		return "контекст HTTP ↔ маршрут"
+	case "loop-owner-route":
+		return "источник ↔ маршрут цикла"
 	case "route-phase":
 		return "маршрут ↔ фаза"
 	case "phase-symptom":
@@ -707,15 +819,15 @@ func CausalKindLabel(kind string) string {
 	}
 }
 
-func causalEdgeMap(edges []CausalEdge) map[string]CausalEdge {
-	out := make(map[string]CausalEdge, len(edges))
+func causalEdgeMap(edges []CausalEdge) map[causalEdgeKey]CausalEdge {
+	out := make(map[causalEdgeKey]CausalEdge, len(edges))
 	for _, edge := range edges {
 		left := edge.From
 		right := edge.To
 		if left > right {
 			left, right = right, left
 		}
-		key := left + "\x00" + right + "\x00" + edge.Kind
+		key := causalEdgeKey{left, right, edge.Kind}
 		if _, ok := out[key]; ok {
 			continue
 		}
@@ -811,7 +923,7 @@ func causalFallbackLabel(kind, value string) string {
 	case "state":
 		return MarkovStateLabel(value)
 	case "owner":
-		return "источник: " + value
+		return "место запуска: " + analysisOwnerLabel(value)
 	case "route":
 		return "маршрут: " + value
 	case "screen":

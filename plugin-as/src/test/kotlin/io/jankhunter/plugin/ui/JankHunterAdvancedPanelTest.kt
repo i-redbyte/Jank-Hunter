@@ -46,7 +46,7 @@ class JankHunterAdvancedPanelTest : BasePlatformTestCase() {
     fun testSimpleOptionsDoNotContainAdvancedInputs() {
         val options = JankHunterAdvancedOptions.SIMPLE
 
-        assertTrue(options.ownerMap.isBlank())
+        assertTrue(options.artifactsDir.isBlank())
         assertTrue(options.mapping.isBlank())
         assertTrue(options.classGraph.isBlank())
         assertTrue(options.diagnostics.isBlank())
@@ -55,7 +55,6 @@ class JankHunterAdvancedPanelTest : BasePlatformTestCase() {
         assertTrue(options.screen.isBlank())
         assertTrue(options.owner.isBlank())
         assertTrue(options.className.isBlank())
-        assertEquals("modern", options.reportStyle)
         assertFalse(options.presentation)
     }
 

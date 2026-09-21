@@ -22,12 +22,17 @@ cli/coverage.out
 android/.kotlin/
 android/.gradle/
 android/**/.gradle/
+android/build-logic/.kotlin/
+android/jankhunter-gradle-plugin/.kotlin/
 android/build/
 android/**/build/
 android/**/.cxx/
 android/**/.externalNativeBuild/
 android/**/captures/
 android/local.properties
+
+# Local Maven publish output (scripts/publish-to-local-maven.sh default)
+/jankhunter/
 
 # Jank Hunter artifacts
 *.jhlog

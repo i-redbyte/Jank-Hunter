@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import android.os.Handler
 import android.view.View
+import io.jankhunter.runtime.internal.io.Jhlog
 import java.util.concurrent.Callable
 
 /**
@@ -13,19 +14,11 @@ import java.util.concurrent.Callable
  */
 internal object JankHunterHooks {
     @JvmStatic
-    fun enterMethod(methodId: Long): Long {
+    fun enterMethod(methodId: Long, methodName: String): Long {
         return try {
-            JankHunter.enterMethod(methodId)
-        } catch (_: Throwable) {
-            0L
-        }
-    }
-
-    @JvmStatic
-    fun enterMethod(methodId: Long, methodName: String?): Long {
-        return try {
-            JankHunter.enterMethod(methodId, methodName)
-        } catch (_: Throwable) {
+            hooks().enterMethod(methodId, methodName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             0L
         }
     }
@@ -33,48 +26,266 @@ internal object JankHunterHooks {
     @JvmStatic
     fun exitMethod(token: Long, methodId: Long) {
         try {
-            JankHunter.exitMethod(token, methodId)
-        } catch (_: Throwable) {
+            hooks().exitMethod(token, methodId)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
-    fun recordMethodCall(methodId: Long) {
-        try {
-            JankHunter.recordMethodCall(methodId)
-        } catch (_: Throwable) {
+    fun enterSemantic(kind: Int): Long {
+        return try {
+            hooks().enterSemantic(kind)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
         }
     }
 
     @JvmStatic
-    fun recordMethodCall(methodId: Long, methodName: String?) {
+    fun exitSemantic(token: Long, kind: Int, methodId: Long, methodName: String, outcome: Int) {
         try {
-            JankHunter.recordMethodCall(methodId, methodName)
-        } catch (_: Throwable) {
+            hooks().exitSemantic(token, kind, methodId, methodName, outcome)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun enterDatabase(): Long {
+        return try {
+            hooks().enterDatabase()
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun normalizeDatabaseQuery(query: String?): String? {
+        return try {
+            hooks().normalizeDatabaseQuery(query)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            null
+        }
+    }
+
+    @JvmStatic
+    fun databaseQueryOperation(query: String?, fallback: Int): Int {
+        return try {
+            hooks().databaseQueryOperation(query, fallback)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            fallback
+        }
+    }
+
+    @JvmStatic
+    fun databaseStatementFingerprint(query: String?): Long {
+        return try {
+            hooks().databaseStatementFingerprint(query)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun registerPreparedStatement(statement: Any?, query: String?, fingerprint: Long) {
+        try {
+            hooks().registerPreparedStatement(statement, query, fingerprint)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun resolvePreparedStatement(statement: Any?): Any? {
+        return try {
+            hooks().resolvePreparedStatement(statement)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            null
+        }
+    }
+
+    @JvmStatic
+    fun preparedStatementQuery(snapshot: Any?): String? {
+        return try {
+            hooks().preparedStatementQuery(snapshot)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            null
+        }
+    }
+
+    @JvmStatic
+    fun preparedStatementFingerprint(snapshot: Any?): Long {
+        return try {
+            hooks().preparedStatementFingerprint(snapshot)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun preparedStatementToken(snapshot: Any?): Long {
+        return try {
+            hooks().preparedStatementToken(snapshot)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun databaseResultCountBucket(value: Long, capture: Int): Int {
+        return try {
+            hooks().databaseResultCountBucket(value, capture)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            Jhlog.DATABASE_COUNT_UNKNOWN.toInt()
+        }
+    }
+
+    @JvmStatic
+    fun beginDatabaseTransaction(database: Any?, sourceId: Long, sourceName: String, mode: Int) {
+        try {
+            hooks().beginDatabaseTransaction(database, sourceId, sourceName, mode)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun markDatabaseTransactionSuccessful(database: Any?) {
+        try {
+            hooks().markDatabaseTransactionSuccessful(database)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun endDatabaseTransaction(database: Any?, throwable: Throwable?) {
+        try {
+            hooks().endDatabaseTransaction(database, throwable)
+        } catch (hookFailure: Throwable) {
+            recordFailure(hookFailure)
+        }
+    }
+
+    @JvmStatic
+    fun exitDatabase(
+        token: Long,
+        sourceId: Long,
+        sourceName: String,
+        query: String?,
+        statementFingerprint: Long,
+        framework: Int,
+        operation: Int,
+        boundary: Int,
+        resultKnown: Boolean,
+        resultKind: Int,
+        resultCountBucket: Int,
+        statementToken: Long,
+        succeeded: Boolean,
+        throwable: Throwable?,
+    ) {
+        try {
+            hooks().exitDatabase(
+                token, sourceId, sourceName, query, statementFingerprint,
+                framework, operation, boundary, resultKnown, resultKind, resultCountBucket,
+                statementToken, succeeded, throwable,
+            )
+        } catch (hookFailure: Throwable) {
+            recordFailure(hookFailure)
+        }
+    }
+
+    @JvmStatic
+    fun workerInstanceId(value: Any?): Long {
+        return try {
+            if (!hooks().isWorkerTracingActive()) return 0L
+            val id = value as? java.util.UUID ?: return 0L
+            hooks().workerInstanceId(id.mostSignificantBits, id.leastSignificantBits)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun enterWorker(instanceId: Long, workerId: Long, workerName: String, runAttempt: Int): Long {
+        return try {
+            hooks().enterWorker(instanceId, workerId, workerName, runAttempt)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun exitWorker(
+        token: Long,
+        instanceId: Long,
+        workerId: Long,
+        workerName: String,
+        outcome: Int,
+        runAttempt: Int,
+    ) {
+        try {
+            hooks().exitWorker(token, instanceId, workerId, workerName, outcome, runAttempt)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun classifyWorkerOutcome(result: Any?): Int {
+        return try {
+            hooks().classifyWorkerOutcome(result)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            JankHunterWorkerOutcome.UNKNOWN.code
+        }
+    }
+
+    @JvmStatic
+    fun recordMethodCall(methodId: Long, methodName: String) {
+        try {
+            hooks().recordMethodCall(methodId, methodName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
     fun recordCounter(name: String?, value: Long) {
         try {
-            JankHunter.recordCounter(name, value)
-        } catch (_: Throwable) {
+            hooks().recordCounter(name, value)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
         try {
-            JankHunter.recordLogSpam(ownerName, source, level)
-        } catch (_: Throwable) {
+            hooks().recordLogSpam(ownerName, source, level)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         return try {
-            JankHunter.wrapRunnable(runnable, ownerName)
-        } catch (_: Throwable) {
+            hooks().wrapRunnable(runnable, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             runnable
         }
     }
@@ -82,8 +293,9 @@ internal object JankHunterHooks {
     @JvmStatic
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
         return try {
-            JankHunter.wrapCallable(callable, ownerName)
-        } catch (_: Throwable) {
+            hooks().wrapCallable(callable, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             callable
         }
     }
@@ -91,17 +303,38 @@ internal object JankHunterHooks {
     @JvmStatic
     fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
         return try {
-            JankHunter.wrapCoroutineBlock(block, ownerName)
-        } catch (_: Throwable) {
+            hooks().wrapCoroutineBlock(block, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             block
+        }
+    }
+
+    @JvmStatic
+    fun enterCoroutineSegment(continuation: Any?, ownerName: String?): Long {
+        return try {
+            hooks().enterCoroutineSegment(continuation, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun exitCoroutineSegment(token: Long, continuation: Any?, result: Any?, throwable: Throwable?) {
+        try {
+            hooks().exitCoroutineSegment(token, continuation, result, throwable)
+        } catch (hookFailure: Throwable) {
+            recordFailure(hookFailure)
         }
     }
 
     @JvmStatic
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         return try {
-            JankHunter.wrapClickListener(listener, ownerName)
-        } catch (_: Throwable) {
+            hooks().wrapClickListener(listener, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             listener
         }
     }
@@ -114,13 +347,14 @@ internal object JankHunterHooks {
         ownerName: String?,
     ): Runnable? {
         return try {
-            if (handler == null || runnable == null) runnable else JankHunter.wrapHandlerRunnable(
+            if (handler == null || runnable == null) runnable else hooks().wrapHandlerRunnable(
                 handler,
                 runnable,
                 token,
                 ownerName,
             )
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             runnable
         }
     }
@@ -129,21 +363,23 @@ internal object JankHunterHooks {
     fun onHandlerPostResult(original: Runnable?, wrapped: Runnable?, posted: Boolean) {
         try {
             if (original != null && wrapped != null) {
-                JankHunter.onHandlerPostResult(original, wrapped, posted)
+                hooks().onHandlerPostResult(original, wrapped, posted)
             }
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
     fun handlerWrappers(handler: Handler?, runnable: Runnable?, token: Any?): Array<Runnable> {
         return try {
-            if (handler == null || runnable == null) emptyArray() else JankHunter.handlerWrappers(
+            if (handler == null || runnable == null) emptyArray() else hooks().handlerWrappers(
                 handler,
                 runnable,
                 token,
             )
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             emptyArray()
         }
     }
@@ -152,17 +388,19 @@ internal object JankHunterHooks {
     fun clearHandlerWrappers(handler: Handler?, runnable: Runnable?, token: Any?) {
         try {
             if (handler != null && runnable != null) {
-                JankHunter.clearHandlerWrappers(handler, runnable, token)
+                hooks().clearHandlerWrappers(handler, runnable, token)
             }
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
     fun clearHandlerWrappers(handler: Handler?, token: Any?) {
         try {
-            if (handler != null) JankHunter.clearHandlerWrappers(handler, token)
-        } catch (_: Throwable) {
+            if (handler != null) hooks().clearHandlerWrappers(handler, token)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -170,12 +408,11 @@ internal object JankHunterHooks {
     fun enterAnnotatedContext(
         screenName: String?,
         ownerName: String?,
-        flowName: String?,
-        traceName: String?,
     ): Any? {
         return try {
-            JankHunter.enterAnnotatedContext(screenName, ownerName, flowName, traceName)
-        } catch (_: Throwable) {
+            hooks().enterAnnotatedContext(screenName, ownerName)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             null
         }
     }
@@ -183,16 +420,70 @@ internal object JankHunterHooks {
     @JvmStatic
     fun exitAnnotatedContext(token: Any?) {
         try {
-            JankHunter.exitAnnotatedContext(token)
-        } catch (_: Throwable) {
+            hooks().exitAnnotatedContext(token)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
     @JvmStatic
+    fun startAnnotatedOperation(name: String?, kind: Int, budgetMs: Long): Any? {
+        if (name.isNullOrBlank()) return null
+        return try {
+            hooks().startOperation(name, operationKind(kind), budgetMs.coerceAtLeast(0L))
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            null
+        }
+    }
+
+    @JvmStatic
+    fun finishAnnotatedOperation(token: Any?, failed: Boolean) {
+        if (token !is JankHunterOperation) return
+        try {
+            if (failed) token.failure() else token.success()
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    private fun operationKind(value: Int): JankHunterOperationKind {
+        return when (value) {
+            2 -> JankHunterOperationKind.SCREEN
+            3 -> JankHunterOperationKind.BACKGROUND
+            4 -> JankHunterOperationKind.SYSTEM
+            5 -> JankHunterOperationKind.STAGE
+            else -> JankHunterOperationKind.USER
+        }
+    }
+
+    /**
+     * Legacy ABI for previously instrumented bytecode. Without generated V1 accessors,
+     * automatic lifecycle/binding coverage is partial, including under R8. Rebuild with
+     * the current Gradle plugin for the typed instrumentation contract.
+     */
+    @JvmStatic
     fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
         try {
-            JankHunter.watchLifecycleObject(instance, lifecycleEvent, ownerHint)
-        } catch (_: Throwable) {
+            hooks().watchLifecycleObject(instance, lifecycleEvent, ownerHint)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
+    }
+
+    @JvmStatic
+    fun watchLifecycleObject(instance: Any?, targetKind: Int, lifecycleEvent: String?, ownerHint: String?) {
+        try {
+            hooks().watchLifecycleObject(instance, targetKind, lifecycleEvent, ownerHint)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    private fun hooks(): RuntimeInstrumentationHooks = JankHunter.instrumentationHooks()
+
+    private fun recordFailure(throwable: Throwable) {
+        RuntimeHookGuard.rethrowFatal(throwable)
+        RuntimeHookFailureTracker.record(RuntimeHookFailureReason.INSTRUMENTATION_HOOK)
     }
 }

@@ -9,12 +9,14 @@ import io.jankhunter.runtime.internal.saturatingAdd
  * primitive arrays and batching the cold-path queue hand-off prevents a graph flush from filling
  * the writer queue with thousands of individual objects.
  */
-internal class RuntimeCallBatch(capacity: Int) {
+internal class RuntimeCallBatch(
+    capacity: Int,
+    private val pool: RuntimeCallBatchPool? = null,
+) {
     private val screens = arrayOfNulls<String>(capacity)
     private val callers = LongArray(capacity)
     private val callerNames = arrayOfNulls<String>(capacity)
-    private val flows = arrayOfNulls<String>(capacity)
-    private val steps = arrayOfNulls<String>(capacity)
+    private val operationIds = LongArray(capacity)
     private val callees = LongArray(capacity)
     private val calleeNames = arrayOfNulls<String>(capacity)
     private val counts = LongArray(capacity)
@@ -23,26 +25,15 @@ internal class RuntimeCallBatch(capacity: Int) {
 
     var size: Int = 0
         private set
+    private var leased = pool != null
 
     fun add(
         screen: String?,
         callerId: Long,
-        flow: String?,
-        step: String?,
+        callerName: String,
+        operationId: Long,
         calleeId: Long,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) = add(screen, callerId, null, flow, step, calleeId, null, count, totalMs, maxMs)
-
-    fun add(
-        screen: String?,
-        callerId: Long,
-        callerName: String?,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         count: Long,
         totalMs: Long,
         maxMs: Long,
@@ -52,8 +43,7 @@ internal class RuntimeCallBatch(capacity: Int) {
         screens[index] = screen
         callers[index] = callerId
         callerNames[index] = callerName
-        flows[index] = flow
-        steps[index] = step
+        operationIds[index] = operationId
         callees[index] = calleeId
         calleeNames[index] = calleeName
         counts[index] = count
@@ -65,15 +55,13 @@ internal class RuntimeCallBatch(capacity: Int) {
 
     fun callerId(index: Int): Long = callers[index]
 
-    fun callerName(index: Int): String? = callerNames[index]
+    fun callerName(index: Int): String = checkNotNull(callerNames[index])
 
-    fun flow(index: Int): String? = flows[index]
-
-    fun step(index: Int): String? = steps[index]
+    fun operationId(index: Int): Long = operationIds[index]
 
     fun calleeId(index: Int): Long = callees[index]
 
-    fun calleeName(index: Int): String? = calleeNames[index]
+    fun calleeName(index: Int): String = checkNotNull(calleeNames[index])
 
     fun count(index: Int): Long = counts[index]
 
@@ -87,5 +75,23 @@ internal class RuntimeCallBatch(capacity: Int) {
             result = saturatingAdd(result, counts[index])
         }
         return result
+    }
+
+    internal fun recycle() {
+        val target = pool ?: return
+        if (!leased) return
+        for (index in 0 until size) {
+            screens[index] = null
+            callerNames[index] = null
+            calleeNames[index] = null
+        }
+        size = 0
+        leased = false
+        target.release(this)
+    }
+
+    internal fun prepareForReuse() {
+        check(pool != null && !leased) { "Runtime call batch is already leased" }
+        leased = true
     }
 }

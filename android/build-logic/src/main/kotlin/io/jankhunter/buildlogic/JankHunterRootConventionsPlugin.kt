@@ -1,7 +1,7 @@
 package io.jankhunter.buildlogic
 
-import io.gitlab.arturbosch.detekt.Detekt
-import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import dev.detekt.gradle.Detekt
+import dev.detekt.gradle.extensions.DetektExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalogsExtension
@@ -17,6 +17,7 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
         require(this == rootProject)
         configureProjectMetadata()
+        configureAllKotlinImportAnalysis()
     }
 
     private fun Project.configureProjectMetadata() {
@@ -34,7 +35,9 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
                     "Optional bounded ART TI agent based on JVMTI for Jank Hunter diagnostics."
                 }
                 "jankhunter-okhttp3" -> "Optional OkHttp 3 integration for Jank Hunter network telemetry."
+                "jankhunter-workmanager" -> "Optional WorkManager lifecycle integration for Jank Hunter."
                 "jankhunter-gradle-plugin" -> "Gradle/ASM instrumentation plugin for Jank Hunter Android builds."
+                "jankhunter-cli" -> "Command-line tools for inspecting and comparing Jank Hunter logs."
                 else -> "Jank Hunter Android component."
             }
         }
@@ -42,24 +45,38 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
 
 }
 
+private fun Project.configureAllKotlinImportAnalysis() {
+    configureJankHunterDetekt()
+    val repositoryRoot = projectDir.parentFile
+    tasks.named("detekt", Detekt::class.java) {
+        description = "Checks imports in every Jank Hunter Kotlin source set and build script."
+        setSource(
+            fileTree(repositoryRoot) {
+                include("android/**/*.kt", "android/**/*.kts", "plugin-as/**/*.kt", "plugin-as/**/*.kts")
+                exclude("**/build/**", "**/.gradle/**", "**/.kotlin/**", "**/.intellijPlatform/**")
+            },
+        )
+    }
+}
+
 internal fun Project.configureJankHunterDetekt() {
-    pluginManager.apply("io.gitlab.arturbosch.detekt")
+    pluginManager.apply("dev.detekt")
     val catalog = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
-    dependencies.add("detektPlugins", catalog.findLibrary("detekt-formatting").get())
+    dependencies.add("detektPlugins", catalog.findLibrary("detekt-rules-ktlint-wrapper").get())
     extensions.configure<DetektExtension> {
-        buildUponDefaultConfig = false
-        allRules = false
-        autoCorrect = false
+        buildUponDefaultConfig.set(false)
+        allRules.set(false)
+        autoCorrect.set(false)
         config.setFrom(files(jankHunterWorkspaceFile("config/detekt/detekt.yml")))
-        basePath = jankHunterWorkspaceFile("").absolutePath
+        basePath.set(jankHunterWorkspaceFile(""))
     }
     tasks.withType<Detekt>().configureEach {
-        jvmTarget = "17"
+        jvmTarget.set("17")
         reports {
             html.required.set(true)
-            xml.required.set(true)
+            checkstyle.required.set(true)
             sarif.required.set(true)
-            md.required.set(false)
+            markdown.required.set(false)
         }
     }
 }

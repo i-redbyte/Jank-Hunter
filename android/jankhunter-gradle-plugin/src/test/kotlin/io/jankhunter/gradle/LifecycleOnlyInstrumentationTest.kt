@@ -17,9 +17,16 @@ class LifecycleOnlyInstrumentationTest {
         val diagnostics = Files.createTempDirectory("jankhunter-lifecycle-diagnostics").toFile()
 
         val instrumented = instrument(fixture(), diagnostics.absolutePath)
+        val records = InstrumentationArtifactFiles.readJsonlLines(diagnostics)
+        assertTrue(records.single().contains("\"format\":2"))
+        assertTrue(records.single().contains("\"pass\":\"lifecycle\""))
         val calls = collectCalls(instrumented)
 
-        assertEquals(1, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(2, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(
+            "(Ljava/lang/Object;ILjava/lang/String;Ljava/lang/String;)V",
+            calls.first { it.method == "watchLifecycleObject" }.descriptor,
+        )
         assertFalse(calls.any { it.method == "recordMethodCall" })
         assertFalse(calls.any { it.method == "enterMethod" || it.method == "exitMethod" })
         assertEquals(1, countClassAnnotation(instrumented, LifecycleInstrumentationMarker.DESCRIPTOR))
@@ -35,44 +42,61 @@ class LifecycleOnlyInstrumentationTest {
         val once = instrument(fixture())
         val twice = instrument(once)
 
-        assertEquals(1, collectCalls(twice).count { it.method == "watchLifecycleObject" })
+        assertEquals(2, collectCalls(twice).count { it.method == "watchLifecycleObject" })
         assertEquals(1, countClassAnnotation(twice, LifecycleInstrumentationMarker.DESCRIPTOR))
+    }
+
+    @Test
+    fun directFragmentSubclassObservesInheritedCallbacks() {
+        val bytes = instrument(fixture(includeLifecycleMethod = false))
+        val calls = collectCalls(bytes)
+        assertEquals(2, calls.count { it.method == "watchLifecycleObject" })
+        assertEquals(1, collectCalls(bytes, "androidx/fragment/app/Fragment").count { it.method == "onDestroyView" })
+        assertEquals(1, collectCalls(bytes, "androidx/fragment/app/Fragment").count { it.method == "onDestroy" })
+        assertEquals(2, collectCalls(instrument(bytes)).count { it.method == "watchLifecycleObject" })
     }
 
     @Test
     fun classWithoutLifecycleHookGetsNoMarkerOrDiagnosticsShard() {
         val diagnostics = Files.createTempDirectory("jankhunter-no-lifecycle-diagnostics").toFile()
-        val instrumented = instrument(fixture(includeLifecycleMethod = false), diagnostics.absolutePath)
+        val instrumented = instrument(
+            fixture(includeLifecycleMethod = false, parent = "java/lang/Object"),
+            diagnostics.absolutePath,
+            classHierarchy = setOf(CLASS_NAME),
+        )
 
         assertEquals(0, countClassAnnotation(instrumented, LifecycleInstrumentationMarker.DESCRIPTOR))
         assertTrue(InstrumentationArtifactFiles.readJsonlLines(diagnostics).isEmpty())
     }
 
-    private fun instrument(bytes: ByteArray, diagnosticsDirectory: String = ""): ByteArray {
+    @Test
+    fun lifecyclePassDoesNotDuplicateWorkerTracing() {
+        val instrumented = instrument(
+            bytes = workerFixture(),
+            className = WORKER_CLASS_NAME,
+            classHierarchy = setOf(WORKER_CLASS_NAME, "androidx/work/Worker"),
+        )
+
+        val calls = collectCalls(instrumented)
+        assertFalse(calls.any { it.method == "enterWorker" || it.method == "exitWorker" })
+        assertFalse(calls.any { it.method == "enterSemantic" || it.method == "exitSemantic" })
+        assertEquals(0, countClassAnnotation(instrumented, LifecycleInstrumentationMarker.DESCRIPTOR))
+    }
+
+    private fun instrument(
+        bytes: ByteArray,
+        diagnosticsDirectory: String = "",
+        className: String = CLASS_NAME,
+        classHierarchy: Set<String> = setOf(CLASS_NAME, "androidx/fragment/app/Fragment"),
+    ): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
             JankHunterClassVisitor(
                 next = writer,
-                className = CLASS_NAME,
-                config = HookConfig(
-                    embeddedSymbols = false,
-                    methodCounters = false,
-                    okhttp = false,
-                    webSockets = false,
-                    handlers = false,
-                    executors = false,
-                    coroutines = false,
-                    flowInteractions = false,
-                    lifecycleLeaks = true,
-                    logSpam = false,
-                    classGraph = false,
-                    runtimeCallGraph = false,
-                    classGraphDirectory = "",
-                    instrumentationDiagnosticsDirectory = diagnosticsDirectory,
-                    ownerMapEntriesDirectory = "",
-                ),
-                classHierarchy = setOf(CLASS_NAME, "androidx/fragment/app/Fragment"),
+                className = className,
+                config = lifecycleHookConfig(diagnosticsDirectory),
+                classHierarchy = classHierarchy,
                 instrumentationMarkerDescriptor = LifecycleInstrumentationMarker.DESCRIPTOR,
                 markerOnlyWhenHookApplied = true,
                 diagnosticsOnlyWhenHookApplied = true,
@@ -82,14 +106,34 @@ class LifecycleOnlyInstrumentationTest {
         return writer.toByteArray()
     }
 
-    private fun fixture(includeLifecycleMethod: Boolean = true): ByteArray {
+    private fun workerFixture(): ByteArray {
+        val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, WORKER_CLASS_NAME, null, "androidx/work/Worker", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC,
+            "doWork",
+            "()Landroidx/work/ListenableWorker${'$'}Result;",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun fixture(includeLifecycleMethod: Boolean = true, parent: String = "androidx/fragment/app/Fragment"): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(
             Opcodes.V17,
             Opcodes.ACC_PUBLIC,
             CLASS_NAME,
             null,
-            "androidx/fragment/app/Fragment",
+            parent,
             null,
         )
         if (includeLifecycleMethod) {
@@ -110,7 +154,7 @@ class LifecycleOnlyInstrumentationTest {
         return writer.toByteArray()
     }
 
-    private fun collectCalls(bytes: ByteArray): List<Call> {
+    private fun collectCalls(bytes: ByteArray, targetOwner: String = "io/jankhunter/runtime/JankHunterHooks"): List<Call> {
         val calls = mutableListOf<Call>()
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
@@ -129,7 +173,7 @@ class LifecycleOnlyInstrumentationTest {
                             methodDescriptor: String,
                             isInterface: Boolean,
                         ) {
-                            if (owner == "io/jankhunter/runtime/JankHunterHooks") {
+                            if (owner == targetOwner) {
                                 calls += Call(methodName, methodDescriptor)
                             }
                         }
@@ -159,5 +203,6 @@ class LifecycleOnlyInstrumentationTest {
 
     private companion object {
         const val CLASS_NAME = "ru/mail/im/base/ui/fragment/BaseFragment"
+        const val WORKER_CLASS_NAME = "ru/mail/im/background/SyncWorker"
     }
 }

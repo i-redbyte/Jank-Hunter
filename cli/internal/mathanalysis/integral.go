@@ -22,10 +22,6 @@ type integralDefinition struct {
 	value       func([]TimelineBucket, []NetworkLoopFinding) float64
 }
 
-func computeIntegralScores(timeline []TimelineBucket, loops []NetworkLoopFinding) []IntegralScore {
-	return computeIntegralScoresForRuns(timeline, loops, 1)
-}
-
 func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoopFinding, runCount int) []IntegralScore {
 	if len(timeline) == 0 {
 		return nil
@@ -36,7 +32,7 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 			id:          "jank_pressure_area",
 			title:       "Площадь подтормаживаний UI",
 			formula:     "Σ ((janky_frames / frames) * 100) * Δt",
-			explanation: "Суммирует долю медленных UI-кадров по времени: короткий пик и длинная умеренная деградация получают разный вес.",
+			explanation: "Суммирует долю медленных UI-кадров по времени: короткий пик и долгое умеренное ухудшение получают разный вес.",
 			unit:        "%*с",
 			value:       jankPressureArea,
 		},
@@ -52,7 +48,7 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 			id:          "main_thread_stall_burden",
 			title:       "Накопленное превышение пауз главного потока",
 			formula:     "Σ max(0, max_пауза_в_интервале - 100ms)",
-			explanation: "Суммирует превышение максимальной паузы над 100 мс в каждом временном интервале. Это не полная длительность всех пауз: в таймлайне хранится максимум интервала.",
+			explanation: "Суммирует превышение максимальной паузы над 100 мс в каждом временном интервале. Это не полная длительность всех пауз: на временной шкале хранится максимум интервала.",
 			unit:        "мс",
 			value:       mainThreadStallBurden,
 		},
@@ -85,6 +81,9 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 	scores := make([]IntegralScore, 0, len(definitions))
 	durationMS := integralTimelineDurationMS(timeline)
 	for _, definition := range definitions {
+		if definition.id == "network_failure_burn" && !completeHTTPCounts(timeline) {
+			continue
+		}
 		value := definition.value(timeline, loops)
 		if definition.id == "network_failure_burn" {
 			value /= float64(runCount)
@@ -102,9 +101,9 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 		}
 		if definition.id == "network_failure_burn" && runCount > 1 {
 			score.Formula = "(Σ (HTTP_ошибки + 0.25*DNS + 0.25*соединение) * Δt + Σ нагрузка_цикла) / число_прогонов"
-			score.Explanation += " При объединении независимых прогонов сумма делится на их количество, чтобы число повторов само по себе не увеличивало оценку."
+			score.Explanation += " При объединении временных шкал сумма делится на их количество, чтобы число повторов само по себе не увеличивало оценку."
 		}
-		score.Summary = fmt.Sprintf("%s: %.1f %s; независимых прогонов: %d. %s", score.Title, score.Value, score.Unit, score.RunCount, score.Explanation)
+		score.Summary = fmt.Sprintf("%s: %.1f %s; временных шкал: %d. %s", score.Title, score.Value, score.Unit, score.RunCount, score.Explanation)
 		scores = append(scores, score)
 	}
 	return scores
@@ -126,8 +125,11 @@ func compareIntegralScores(baseline, candidate []IntegralScore) []IntegralDelta 
 	}
 	deltas := make([]IntegralDelta, 0, len(ids))
 	for _, id := range ids {
-		base := baselineByID[id]
-		cand := candidateByID[id]
+		base, basePresent := baselineByID[id]
+		cand, candidatePresent := candidateByID[id]
+		if !basePresent || !candidatePresent {
+			continue
+		}
 		delta := cand.Value - base.Value
 		deltaPct := percentDelta(base.Value, cand.Value)
 		baseRunCount := normalizedRunCount(base.RunCount)
@@ -411,24 +413,8 @@ func integralFindings(scores []IntegralScore) []Finding {
 		Severity:       worst.Severity,
 		Title:          "Накопленная нагрузка заметна",
 		Detail:         worst.Summary,
-		Recommendation: "Посмотрите соседние разделы: таймлайн показывает, где накопилась нагрузка, а распределения, точки изменения и сетевые циклы помогают сузить контекст проверки, но сами не доказывают причину.",
+		Recommendation: "Посмотрите соседние разделы: временная шкала показывает, где накопилась нагрузка, а распределения, точки изменения и сетевые циклы помогают сузить контекст проверки, но сами не доказывают причину.",
 	}}
-}
-
-func compareIntegralStatus(deltas []IntegralDelta) string {
-	if len(deltas) == 0 {
-		return "medium"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
 }
 
 func compareIntegralSummary(deltas []IntegralDelta) string {
@@ -447,12 +433,12 @@ func compareIntegralSummary(deltas []IntegralDelta) string {
 		}
 	}
 	if incomparable > 0 {
-		return fmt.Sprintf("Сопоставимо %d из %d накопленных оценок; для %d оценок длительность различается больше чем на 20%% или число независимых прогонов не совпадает. Среди сопоставимых выросло %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
+		return fmt.Sprintf("Сопоставимо %d из %d накопленных оценок; для %d оценок длительность различается больше чем на 20%% или число временных шкал не совпадает. Среди сопоставимых выросло %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
 	}
 	if worse == 0 {
-		return "Кандидат не увеличил интегральную нагрузку относительно базы."
+		return "Проверяемый прогон не увеличил накопленную нагрузку относительно базового."
 	}
-	return fmt.Sprintf("Кандидат увеличил %d из %d интегральных оценок нагрузки.", worse, len(deltas))
+	return fmt.Sprintf("Проверяемый прогон увеличил %d из %d накопленных оценок нагрузки.", worse, len(deltas))
 }
 
 func compareIntegralFindings(deltas []IntegralDelta) []Finding {
@@ -470,7 +456,7 @@ func compareIntegralFindings(deltas []IntegralDelta) []Finding {
 				Severity:       "medium",
 				Title:          "Часть накопленных оценок несопоставима",
 				Detail:         delta.Summary,
-				Recommendation: "Повторите одинаковый сценарий с тем же числом повторов и сопоставимой длительностью или сравнивайте робастные распределения, которые не суммируют нагрузку по всему времени прогона.",
+				Recommendation: "Повторите одинаковый сценарий с тем же числом повторов и сопоставимой длительностью или сравнивайте устойчивые распределения, которые не суммируют нагрузку по всему времени прогона.",
 			})
 			break
 		}
@@ -490,7 +476,7 @@ func compareIntegralFindings(deltas []IntegralDelta) []Finding {
 			Severity:       worst.Severity,
 			Title:          "Интегральная нагрузка выросла",
 			Detail:         worst.Summary,
-			Recommendation: "Сравните эту оценку с таймлайном, точками изменения и сетевыми циклами: накопленная оценка показывает масштаб эффекта, а соседние разделы помогают выбрать следующую проверку.",
+			Recommendation: "Сравните эту оценку с временной шкалой, точками изменения и сетевыми циклами: накопленная оценка показывает масштаб эффекта, а соседние разделы помогают выбрать следующую проверку.",
 		})
 	}
 	if len(findings) > 0 {
@@ -519,13 +505,13 @@ func worstIntegralScore(scores []IntegralScore) IntegralScore {
 
 func integralDeltaSummary(title string, baseline, candidate, delta, deltaPct float64, unit string, comparable bool, baselineDurationMS, candidateDurationMS uint64, baselineRunCount, candidateRunCount int) string {
 	if !comparable {
-		return fmt.Sprintf("%s: база %.1f %s за %.1f с (независимых прогонов: %d), кандидат %.1f %s за %.1f с (независимых прогонов: %d). Длительность различается больше чем на 20%% или число прогонов не совпадает, поэтому изменение не считается регрессией автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
+		return fmt.Sprintf("%s: базовый прогон %.1f %s за %.1f с (временных шкал: %d), проверяемый прогон %.1f %s за %.1f с (временных шкал: %d). Длительность различается больше чем на 20%% или число запусков не совпадает, поэтому изменение не считается ухудшением автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
 	}
 	if delta <= 0 {
 		return fmt.Sprintf("%s улучшилась или не выросла: %.1f -> %.1f %s.", title, baseline, candidate, unit)
 	}
 	if baseline == 0 {
-		return fmt.Sprintf("%s появилась у кандидата: в базе 0, у кандидата %.1f %s. Процент не рассчитывается, потому что база равна нулю.", title, candidate, unit)
+		return fmt.Sprintf("%s появилась в проверяемом прогоне: в базовом 0, в проверяемом %.1f %s. Процент не рассчитывается, потому что базовое значение равно нулю.", title, candidate, unit)
 	}
 	return fmt.Sprintf("%s выросла: %.1f -> %.1f %s, Δ %.1f %s (%+.1f%%).", title, baseline, candidate, unit, delta, unit, deltaPct)
 }

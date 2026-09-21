@@ -15,16 +15,19 @@ internal data class DecisionDiagnosticKey(
     val reason: String,
     val method: String,
     val line: Int?,
+    val detail: String? = null,
 )
 
 internal data class AnnotationDiagnosticKey(
     val owner: String?,
     val screen: String?,
-    val flow: String?,
-    val trace: String?,
+    val operation: String?,
+    val operationKind: String?,
+    val operationBudgetMs: Long,
 )
 
 internal data class InstrumentationDiagnosticsRecord(
+    val pass: String,
     val className: String,
     val methods: Int,
     val skippedMethods: Map<String, Int>,
@@ -40,6 +43,7 @@ internal data class InstrumentationDiagnosticsRecord(
 
 internal class InstrumentationDiagnosticsClassBuilder(
     private val className: String,
+    private val pass: String,
 ) {
     private var methods = 0
     private var ignoredMethods = 0
@@ -134,8 +138,35 @@ internal class InstrumentationDiagnosticsClassBuilder(
         decisions[key] = (decisions[key] ?: 0) + 1
     }
 
+    fun recordHierarchyResolutionFailures(failures: Map<ClassHierarchyResolutionFailure, Int>) {
+        failures.forEach { (failure, count) ->
+            val omitted = failure.errorType == CLASS_HIERARCHY_OMITTED_FAILURE_TYPE
+            val key = DecisionDiagnosticKey(
+                kind = "warning",
+                module = "class_hierarchy",
+                family = "metadata",
+                reason = if (omitted) "metadata_failures_omitted" else "metadata_load_failed",
+                method = failure.className,
+                line = null,
+                detail = if (omitted) {
+                    failure.detail
+                } else {
+                    buildString {
+                        append(failure.errorType)
+                        failure.detail?.takeIf(String::isNotBlank)?.let {
+                            append(": ")
+                            append(it)
+                        }
+                    }
+                },
+            )
+            decisions[key] = (decisions[key] ?: 0) + count
+        }
+    }
+
     fun finish(): InstrumentationDiagnosticsRecord {
         return InstrumentationDiagnosticsRecord(
+            pass = pass,
             className = className.replace('/', '.'),
             methods = methods,
             skippedMethods = skippedMethods.toMap(),
@@ -161,8 +192,11 @@ internal object InstrumentationDiagnosticsWriter {
         return buildString {
             append("{\"format\":")
             append(ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT)
+            append(",\"pass\":\"")
+            append(escapeJsonString(record.pass))
+            append('"')
             append(",\"class\":\"")
-            append(escape(record.className))
+            append(escapeJsonString(record.className))
             append("\",\"methods\":")
             append(record.methods)
             append(",\"ignoredMethods\":")
@@ -193,7 +227,7 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"reason\":\"")
-                append(escape(entry.key))
+                append(escapeJsonString(entry.key))
                 append("\",\"count\":")
                 append(entry.value)
                 append('}')
@@ -211,17 +245,17 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"intent\":\"")
-                append(escape(entry.key.intent))
+                append(escapeJsonString(entry.key.intent))
                 append("\",\"signature\":\"")
-                append(escape(entry.key.signature))
+                append(escapeJsonString(entry.key.signature))
                 append("\",\"count\":")
                 append(entry.value)
                 append(",\"method\":\"")
-                append(escape(entry.key.method))
+                append(escapeJsonString(entry.key.method))
                 append('"')
                 entry.key.bridge?.let {
                     append(",\"bridge\":\"")
-                    append(escape(it))
+                    append(escapeJsonString(it))
                     append('"')
                 }
                 entry.key.line?.let {
@@ -244,21 +278,26 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"kind\":\"")
-                append(escape(entry.key.kind))
+                append(escapeJsonString(entry.key.kind))
                 append("\",\"module\":\"")
-                append(escape(entry.key.module))
+                append(escapeJsonString(entry.key.module))
                 append("\",\"family\":\"")
-                append(escape(entry.key.family))
+                append(escapeJsonString(entry.key.family))
                 append("\",\"reason\":\"")
-                append(escape(entry.key.reason))
+                append(escapeJsonString(entry.key.reason))
                 append("\",\"count\":")
                 append(entry.value)
                 append(",\"method\":\"")
-                append(escape(entry.key.method))
+                append(escapeJsonString(entry.key.method))
                 append('"')
                 entry.key.line?.let {
                     append(",\"line\":")
                     append(it)
+                }
+                entry.key.detail?.let {
+                    append(",\"detail\":\"")
+                    append(escapeJsonString(it))
+                    append('"')
                 }
                 append('}')
             }
@@ -273,8 +312,14 @@ internal object InstrumentationDiagnosticsWriter {
                 var fieldCount = 0
                 fieldCount = appendOptionalString(fieldCount, "owner", entry.key.owner)
                 fieldCount = appendOptionalString(fieldCount, "screen", entry.key.screen)
-                fieldCount = appendOptionalString(fieldCount, "flow", entry.key.flow)
-                fieldCount = appendOptionalString(fieldCount, "trace", entry.key.trace)
+                fieldCount = appendOptionalString(fieldCount, "operation", entry.key.operation)
+                fieldCount = appendOptionalString(fieldCount, "operationKind", entry.key.operationKind)
+                if (entry.key.operationBudgetMs > 0L) {
+                    if (fieldCount > 0) append(',')
+                    append("\"operationBudgetMs\":")
+                    append(entry.key.operationBudgetMs)
+                    fieldCount++
+                }
                 if (fieldCount > 0) append(',')
                 append("\"count\":")
                 append(entry.value)
@@ -288,16 +333,9 @@ internal object InstrumentationDiagnosticsWriter {
         append('"')
         append(name)
         append("\":\"")
-        append(escape(value))
+        append(escapeJsonString(value))
         append('"')
         return fieldCount + 1
     }
 
-    private fun escape(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-    }
 }

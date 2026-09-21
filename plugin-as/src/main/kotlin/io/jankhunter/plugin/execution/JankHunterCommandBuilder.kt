@@ -17,7 +17,7 @@ data class JankHunterRunRequest(
     val candidate: String,
     val candidateLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED,
     val output: String,
-    val ownerMap: String,
+    val artifactsDir: String,
     val mapping: String,
     val classGraph: String,
     val diagnostics: String,
@@ -36,7 +36,6 @@ data class JankHunterRunRequest(
     val format: String,
     val json: Boolean,
     val presentation: Boolean,
-    val reportStyle: String = "modern",
     val animatedBackground: Boolean = false,
 )
 
@@ -82,7 +81,7 @@ object JankHunterCommandBuilder {
         fun addPathFlag(name: String, value: String) = addFlag(name, JankHunterUserPaths.expandHome(value))
 
         fun addAnalysisFlags() {
-            addPathFlag("owner-map", request.ownerMap)
+            addPathFlag("artifacts-dir", request.artifactsDir)
             addPathFlag("mapping", request.mapping)
             addPathFlag("class-graph", request.classGraph)
             addPathFlag("instrumentation-diagnostics", request.diagnostics)
@@ -106,9 +105,6 @@ object JankHunterCommandBuilder {
         }
 
         fun addReportAppearanceFlags() {
-            request.reportStyle.trim()
-                .takeIf { it.isNotEmpty() && !it.equals("modern", ignoreCase = true) }
-                ?.let { addFlag("report-style", it) }
             if (request.presentation) args += "--presentation"
             if (request.animatedBackground) args += "--animated-background"
         }
@@ -229,12 +225,12 @@ object JankHunterCommandBuilder {
         if (parts.isEmpty()) return emptyList()
         return when (scope) {
             JankHunterLogScope.ALL_SELECTED -> parts
-            JankHunterLogScope.LATEST_LOG -> latestExistingLog(project, raw)?.let { listOf(it) } ?: parts.take(1)
+            JankHunterLogScope.LATEST_LOG -> latestExistingRun(project, raw)
         }
     }
 
-    private fun latestExistingLog(project: Project, raw: String): String? =
-        JankHunterSessionLogFiles.latest(
+    private fun latestExistingRun(project: Project, raw: String): List<String> =
+        JankHunterSessionLogFiles.latestRun(
             JankHunterInputPaths.expandExistingFiles(project, raw).map { it.toFile() },
-        )?.toPath()?.normalize()?.toString()
+        ).map { file -> file.toPath().normalize().toString() }
 }

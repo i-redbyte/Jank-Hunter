@@ -14,6 +14,7 @@ import (
 type problemsDataset string
 
 const (
+	datasetProblems     problemsDataset = "problems"
 	datasetCodeProblems problemsDataset = "code-problems"
 	datasetLeaks        problemsDataset = "leaks"
 	datasetInfluence    problemsDataset = "influence"
@@ -22,7 +23,9 @@ const (
 
 func parseProblemsDataset(raw string) (problemsDataset, error) {
 	switch problemsDataset(strings.ToLower(strings.TrimSpace(raw))) {
-	case "", datasetCodeProblems:
+	case "", datasetProblems:
+		return datasetProblems, nil
+	case datasetCodeProblems:
 		return datasetCodeProblems, nil
 	case datasetLeaks:
 		return datasetLeaks, nil
@@ -44,6 +47,15 @@ func writeProblemsDatasetJSON(
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	switch dataset {
+	case datasetProblems:
+		return encoder.Encode(problemExportEnvelope{
+			SchemaVersion:    summary.ProblemSchemaVersion,
+			Summary:          summary.ProblemSummary,
+			Problems:         summary.Problems,
+			Incidents:        summary.ProblemIncidents,
+			CategoryCoverage: summary.CategoryCoverage,
+			Detectors:        summary.Detectors,
+		})
 	case datasetCodeProblems:
 		return encoder.Encode(summary.CodeProblems)
 	case datasetLeaks:
@@ -51,6 +63,9 @@ func writeProblemsDatasetJSON(
 	case datasetInfluence:
 		return encoder.Encode(summary.Influence)
 	case datasetMathFindings:
+		if err := mathFindingExportError(mathReport); err != nil {
+			return err
+		}
 		return encoder.Encode(mathFindingRows(mathReport))
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
@@ -64,6 +79,8 @@ func writeProblemsDatasetCSV(
 	mathReport *mathanalysis.MathReport,
 ) error {
 	switch dataset {
+	case datasetProblems:
+		return writeCSVTable(writer, problemsTable(summary.Problems))
 	case datasetCodeProblems:
 		return writeCSVTable(writer, codeProblemsTable(summary.CodeProblems))
 	case datasetLeaks:
@@ -71,10 +88,89 @@ func writeProblemsDatasetCSV(
 	case datasetInfluence:
 		return writeCSVTable(writer, influenceTable(summary.Influence))
 	case datasetMathFindings:
+		if err := mathFindingExportError(mathReport); err != nil {
+			return err
+		}
 		return writeCSVTable(writer, mathFindingsTable(mathReport))
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
 	}
+}
+
+func mathFindingExportError(report *mathanalysis.MathReport) error {
+	if report == nil || len(report.CollectionLimits) == 0 {
+		return nil
+	}
+	limit := report.CollectionLimits[0]
+	if limit.Work != nil {
+		return fmt.Errorf("math-findings unavailable: spectral work limit %d operations reached; partial findings are not exported", limit.Work.LimitOperations)
+	}
+	return fmt.Errorf("math-findings unavailable: collection memory limit %d bytes reached by %s; partial findings are not exported", limit.LimitBytes, limit.Component)
+}
+
+type problemExportEnvelope struct {
+	SchemaVersion    string                     `json:"schema_version"`
+	Summary          analyze.ProblemSummary     `json:"problem_summary"`
+	Problems         []analyze.ProblemFinding   `json:"problems"`
+	Incidents        []analyze.ProblemFinding   `json:"incidents"`
+	CategoryCoverage []analyze.CategoryCoverage `json:"category_coverage"`
+	Detectors        []analyze.DetectorMetadata `json:"detectors"`
+}
+
+func problemsTable(rows []analyze.ProblemFinding) csvTable {
+	table := csvTable{header: []string{
+		"fingerprint", "detector_id", "detector_version", "category", "subcategory", "severity", "status",
+		"investigation_priority", "confidence", "title", "what_happened", "where", "claim_level", "why", "impact",
+		"evidence", "recommendation", "limitations",
+	}}
+	for _, row := range rows {
+		table.rows = append(table.rows, []string{
+			row.Fingerprint, row.DetectorID, row.DetectorVersion, row.Category, row.Subcategory, row.Severity, row.Status,
+			fmt.Sprint(row.InvestigationPriority), row.Confidence, row.Title, row.WhatHappened, problemLocationsText(row.Where),
+			row.Why.ClaimLevel, row.Why.Summary, strings.Join(row.Impact, " | "), problemEvidenceText(row.Evidence),
+			problemRecommendationText(row.Recommendations), strings.Join(row.Limitations, " | "),
+		})
+	}
+	return table
+}
+
+func problemLocationsText(values []analyze.ProblemLocation) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		fields := []string{}
+		for _, pair := range []struct{ key, value string }{{"process", value.Process}, {"screen", value.Screen}, {"operation", value.Operation}, {"route", value.Route}, {"owner", value.Owner}, {"class", value.Class}, {"method", value.Method}} {
+			if pair.value != "" {
+				fields = append(fields, pair.key+"="+pair.value)
+			}
+		}
+		if len(fields) > 0 {
+			parts = append(parts, strings.Join(fields, ";"))
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func problemEvidenceText(values []analyze.ProblemEvidence) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		item := value.Name + "=" + value.Observed
+		if value.Unit != "" {
+			item += " " + value.Unit
+		}
+		if value.ExpectedOrThreshold != "" {
+			item += " (threshold " + value.ExpectedOrThreshold + ")"
+		}
+		parts = append(parts, item)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func problemRecommendationText(values []analyze.ProblemRecommendation) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, value.Action+"; verify: "+value.Verification)
+	}
+	return strings.Join(parts, " | ")
 }
 
 type csvTable struct {
@@ -96,6 +192,124 @@ func writeCSVTable(output io.Writer, table csvTable) error {
 	return writer.Error()
 }
 
+func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
+	table := csvTable{header: []string{
+		"record_type", "name", "operation", "baseline", "candidate", "change",
+		"severity", "confidence", "comparable", "note",
+	}}
+	beforeTiming, afterTiming := comparison.Baseline.CollectionQuality.HTTPFirstByte, comparison.Candidate.CollectionQuality.HTTPFirstByte
+	if beforeTiming != nil || afterTiming != nil {
+		for _, name := range []string{"known", "unknown", "legacy"} {
+			table.rows = append(table.rows, []string{"http_first_byte_coverage", name, "",
+				httpFirstByteCoverageText(beforeTiming, name), httpFirstByteCoverageText(afterTiming, name),
+				"", "", "", "false", "покрытие замеров; unknown и legacy не участвуют в сравнении задержки; известный ноль сохранён"})
+		}
+	}
+	if comparison.Baseline.CollectionQuality.DiagnosticCompletenessModel != "" || comparison.Candidate.CollectionQuality.DiagnosticCompletenessModel != "" {
+		before, after := comparison.Baseline.CollectionQuality, comparison.Candidate.CollectionQuality
+		comparable := before.DiagnosticCompletenessModel != "" && after.DiagnosticCompletenessModel != "" && before.DiagnosticCompletenessPercent >= 0 && after.DiagnosticCompletenessPercent >= 0
+		note := ""
+		if !comparable {
+			note = "полнота неизвестна; числовое сравнение недоступно"
+		}
+		beforeText, afterText := before.DiagnosticCompletenessText(), after.DiagnosticCompletenessText()
+		table.rows = append(table.rows, []string{"collection_quality", "diagnostic_completeness_percent", "", beforeText, afterText, "", "", "", fmt.Sprint(comparable), note})
+	}
+	if before, after := comparison.Baseline.CollectionQuality.AsyncAttribution, comparison.Candidate.CollectionQuality.AsyncAttribution; before != nil || after != nil {
+		table.rows = append(table.rows, []string{"async_attribution", "handler_posts_without_context", "", asyncAttributionCountText(before), asyncAttributionCountText(after), "", "", "", "false", "связь отправки с выполнением unknown; успешные post могут быть отменены; число post не измеряет потерянные выполнения"})
+	}
+	for _, delta := range comparison.Deltas {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("metric", delta))
+	}
+	for _, delta := range comparison.Database.Metrics {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("database_metric", delta))
+	}
+	for _, delta := range comparison.AndroidComponents.Metrics {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("android_component_metric", delta))
+	}
+	for _, statement := range comparison.Database.Statements {
+		table.rows = append(table.rows, []string{
+			"database_statement",
+			statement.Query,
+			statement.Operation,
+			fmt.Sprint(statement.BaselineCalls),
+			fmt.Sprint(statement.CandidateCalls),
+			fmt.Sprintf(
+				"calls/min %.2f -> %.2f; main p95 us %d -> %d; background p95 us %d -> %d; failure rate %.2f -> %.2f pp; wall ms/operation %.2f -> %.2f",
+				statement.BaselineCallsPerMinute,
+				statement.CandidateCallsPerMinute,
+				statement.BaselineMainP95US,
+				statement.CandidateMainP95US,
+				statement.BaselineBackgroundP95US,
+				statement.CandidateBackgroundP95US,
+				statement.BaselineFailureRatePct,
+				statement.CandidateFailureRatePct,
+				statement.BaselineWallMSPerOperation,
+				statement.CandidateWallMSPerOperation,
+			),
+			statement.Severity,
+			statement.Confidence,
+			fmt.Sprint(statement.Comparable),
+			statement.Note,
+		})
+	}
+	for _, operation := range comparison.OperationDeltas {
+		if !operation.DatabaseComparable {
+			continue
+		}
+		table.rows = append(table.rows, []string{
+			"database_operation",
+			operation.Operation,
+			operation.Screen,
+			fmt.Sprintf("%.2f", operation.BaselineDatabaseCallsPerOperation),
+			fmt.Sprintf("%.2f", operation.CandidateDatabaseCallsPerOperation),
+			fmt.Sprintf(
+				"main rate %.2f -> %.2f pp; failure rate %.2f -> %.2f pp; wall ms/operation %.2f -> %.2f",
+				operation.BaselineDatabaseMainRatePct,
+				operation.CandidateDatabaseMainRatePct,
+				operation.BaselineDatabaseFailureRatePct,
+				operation.CandidateDatabaseFailureRatePct,
+				operation.BaselineDatabaseWallMSPerOperation,
+				operation.CandidateDatabaseWallMSPerOperation,
+			),
+			operation.Severity,
+			operation.Confidence,
+			"true",
+			operation.Note,
+		})
+	}
+	return writeCSVTable(writer, table)
+}
+
+func httpFirstByteCoverageText(quality *analyze.HTTPFirstByteQuality, name string) string {
+	if quality == nil {
+		return ""
+	}
+	switch name {
+	case "known":
+		return fmt.Sprint(quality.Known)
+	case "unknown":
+		return fmt.Sprint(quality.Unknown)
+	default:
+		return fmt.Sprint(quality.Legacy)
+	}
+}
+
+func comparisonDeltaCSVRow(recordType string, delta analyze.Delta) []string {
+	return []string{
+		recordType,
+		delta.Name,
+		"",
+		delta.Baseline,
+		delta.Candidate,
+		delta.Change,
+		delta.Severity,
+		delta.Confidence,
+		fmt.Sprint(delta.Comparable),
+		strings.TrimSpace(strings.Join([]string{delta.ComparisonNote, delta.Interval}, " ")),
+	}
+}
+
 func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 	table := csvTable{
 		header: []string{
@@ -106,8 +320,7 @@ func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 			"categories",
 			"problems",
 			"screen",
-			"flow",
-			"step",
+			"operation",
 			"route",
 			"evidence",
 			"recommendation",
@@ -132,8 +345,7 @@ func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 				strings.Join(row.Categories, "|"),
 				strings.Join(row.Problems, "|"),
 				drill.Screen,
-				drill.Flow,
-				drill.Step,
+				drill.Operation,
 				drill.Route,
 				firstNonEmpty(drill.Evidence, row.Evidence),
 				firstNonEmpty(drill.Recommendation, row.Recommendation),
@@ -149,8 +361,7 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			"class",
 			"holder",
 			"screen",
-			"flow",
-			"step",
+			"operation",
 			"severity",
 			"score",
 			"count",
@@ -168,15 +379,23 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			"verification_steps",
 			"evidence",
 			"recommendation",
+			"heap_class_gc_root",
+			"heap_class_gc_root_category",
+			"heap_class_gc_root_object_id",
+			"heap_class_reference_path_state",
 		},
 	}
 	for _, row := range rows {
+		var candidateRoot, candidateRootCategory, candidateRootID, candidatePathState string
+		if heap := row.HeapClassEvidence; heap != nil {
+			candidateRoot, candidateRootCategory, candidateRootID = heap.GCRoot, heap.GCRootCategory, heap.GCRootObjectID
+			candidatePathState = firstNonEmpty(string(heap.ReferencePathState), string(analyze.HeapPathUnknown))
+		}
 		table.rows = append(table.rows, []string{
 			row.ClassName,
 			row.Holder,
 			row.Screen,
-			row.Flow,
-			row.Step,
+			row.Operation,
 			row.Severity,
 			fmt.Sprintf("%.1f", row.Score),
 			fmt.Sprintf("%d", row.Count),
@@ -194,6 +413,10 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			strings.Join(row.VerificationSteps, " | "),
 			row.Evidence,
 			row.Recommendation,
+			candidateRoot,
+			candidateRootCategory,
+			candidateRootID,
+			candidatePathState,
 		})
 	}
 	return table
@@ -211,7 +434,7 @@ func influenceTable(influence analyze.InfluenceSummary) csvTable {
 			"runtime_confirmed",
 			"count",
 			"screens",
-			"flows",
+			"operations",
 			"routes",
 			"evidence",
 		},
@@ -227,7 +450,7 @@ func influenceTable(influence analyze.InfluenceSummary) csvTable {
 			fmt.Sprintf("%t", node.RuntimeEvidence),
 			fmt.Sprintf("%d", node.Problems),
 			strings.Join(node.Screens, "|"),
-			strings.Join(node.Flows, "|"),
+			strings.Join(node.Operations, "|"),
 			strings.Join(node.Routes, "|"),
 			strings.Join(node.Reasons, "|"),
 		})
@@ -313,6 +536,12 @@ func mathFindingRows(report *mathanalysis.MathReport) []mathFindingExportRow {
 		return nil
 	}
 	rows := make([]mathFindingExportRow, 0, len(report.Findings))
+	if detail := mathanalysis.HTTPCountCoverageExplanation(report.Timeline); detail != "" {
+		rows = append(rows, mathFindingExportRow{Section: "Качество данных", Severity: "medium", Title: "Наблюдение HTTP-счётчиков", Detail: detail})
+	}
+	if detail := mathanalysis.NetworkLoopAttributionExplanation(report.NetworkLoops); detail != "" {
+		rows = append(rows, mathFindingExportRow{Section: "Качество данных", Severity: "medium", Title: "Контекст сетевых циклов", Detail: detail})
+	}
 	for _, finding := range report.Findings {
 		rows = append(rows, mathFindingExportRow{
 			Section:        "итог",
@@ -353,4 +582,11 @@ func mathFindingsTable(report *mathanalysis.MathReport) csvTable {
 		})
 	}
 	return table
+}
+
+func asyncAttributionCountText(quality *analyze.AsyncAttributionQuality) string {
+	if quality == nil {
+		return "нет данных"
+	}
+	return fmt.Sprint(quality.HandlerPostsWithoutContext)
 }

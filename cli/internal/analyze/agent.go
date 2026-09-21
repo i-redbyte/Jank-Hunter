@@ -21,6 +21,10 @@ const (
 
 type agentContext struct{ screen, flow, owner, step string }
 
+func agentContextFromSignal(context SignalContextStats) agentContext {
+	return agentContext{screen: context.Screen, flow: context.Operation, owner: context.Owner}
+}
+
 func (context agentContext) label() string {
 	parts := make([]string, 0, 4)
 	for _, value := range []string{context.screen, context.flow, context.step, context.owner} {
@@ -101,7 +105,7 @@ func newAgentAggregator() *agentAggregator {
 	}
 }
 
-func (a *agentAggregator) add(dict map[uint64]string, event jhlog.Event, flow FlowStats) {
+func (a *agentAggregator) add(dict map[uint64]string, event jhlog.Event, flow SignalContextStats) {
 	payload := event.Agent
 	if payload == nil {
 		return
@@ -114,7 +118,7 @@ func (a *agentAggregator) add(dict map[uint64]string, event jhlog.Event, flow Fl
 		a.sourceCapacityLost = true
 	}
 	a.observeSequence(source, payload.ProducerID, payload.ProducerSequence)
-	context := agentContext{screen: flow.Screen, flow: flow.Flow, owner: flow.Owner, step: flow.Step}
+	context := agentContextFromSignal(flow)
 	if defined, ok := a.contexts[payload.ContextToken]; ok && !context.known() {
 		context = defined
 	}
@@ -267,7 +271,7 @@ func (a *agentAggregator) addStackDefinition(payload *jhlog.AgentEvent) {
 	state.methodIDs[frameIndex] = payload.Payload1
 }
 
-func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow FlowStats) {
+func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow SignalContextStats) {
 	endNS := saturatingMultiply(event.TimeMS, 1_000_000)
 	durationNS := saturatingMultiply(event.Stall.DurationMS, 1_000_000)
 	startNS := uint64(0)
@@ -276,10 +280,10 @@ func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow FlowStats) {
 	}
 	a.addSymptom(agentSymptom{startNS: startNS, endNS: endNS, durationMS: event.Stall.DurationMS,
 		kind: "main_thread_stall", source: firstNonEmpty(event.Source, "unknown"),
-		context: agentContext{screen: flow.Screen, flow: flow.Flow, owner: flow.Owner, step: flow.Step}})
+		context: agentContextFromSignal(flow)})
 }
 
-func (a *agentAggregator) addUISymptom(event jhlog.Event, flow FlowStats) {
+func (a *agentAggregator) addUISymptom(event jhlog.Event, flow SignalContextStats) {
 	if event.UIWindow.JankCount == 0 {
 		return
 	}
@@ -291,7 +295,7 @@ func (a *agentAggregator) addUISymptom(event jhlog.Event, flow FlowStats) {
 	}
 	a.addSymptom(agentSymptom{startNS: startNS, endNS: endNS, durationMS: event.UIWindow.WindowMS,
 		jankFrames: event.UIWindow.JankCount, kind: "ui_jank", source: firstNonEmpty(event.Source, "unknown"),
-		context: agentContext{screen: flow.Screen, flow: flow.Flow, owner: flow.Owner, step: flow.Step}})
+		context: agentContextFromSignal(flow)})
 }
 
 func (a *agentAggregator) addSymptom(symptom agentSymptom) {

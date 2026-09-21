@@ -12,15 +12,18 @@ import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
-import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeCollectorCallbacks
+import io.jankhunter.runtime.RuntimeBooleanSource
 import java.io.File
 import kotlin.math.max
 
 internal class SystemContextSampler(
     context: Context,
     private val intervalMs: Long,
-    private val foreground: () -> Boolean = { true },
+    private val callbacks: RuntimeCollectorCallbacks,
+    private val userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
 ) {
+    private val trafficUid = Process.myUid()
     private val appContext = context.applicationContext
     private val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
     private val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -29,7 +32,7 @@ internal class SystemContextSampler(
         readProcessStat = { readTextFile(PROC_SELF_STAT) },
         readSystemStat = { readFirstLine(PROC_STAT) },
     )
-    private val schedule = ForegroundSamplingSchedule(intervalMs, foreground, ::sampleOnce)
+    private val schedule = UserRelevantSamplingSchedule(intervalMs, userRelevant, ::sampleOnce)
 
     fun start(scheduler: RuntimeMaintenanceScheduler) {
         schedule.start(scheduler)
@@ -39,8 +42,8 @@ internal class SystemContextSampler(
         schedule.stop()
     }
 
-    fun onForegroundChanged() {
-        schedule.onForegroundChanged()
+    fun onUserRelevanceChanged() {
+        schedule.onUserRelevanceChanged()
     }
 
     private fun sampleOnce() {
@@ -51,7 +54,7 @@ internal class SystemContextSampler(
         val storage = readStorage()
         val cpu = cpuSampler.sample()
 
-        JankHunter.recordContext(
+        callbacks.recordContext(
             network.kind,
             battery.percent,
             memory.availKb,
@@ -66,6 +69,8 @@ internal class SystemContextSampler(
             storage.freeKb,
             storage.totalKb,
             network.vpn,
+            traffic.uidPlusOne,
+            traffic.knownFlags,
         )
         recordBatteryPowerMetrics(battery)
         recordCpuMetrics(cpu)
@@ -129,17 +134,11 @@ internal class SystemContextSampler(
         }
     }
 
-    private fun readTraffic(): TrafficSnapshot {
-        val uid = Process.myUid()
-        return TrafficSnapshot(
-            rxBytes = sanitizeTraffic(TrafficStats.getUidRxBytes(uid)),
-            txBytes = sanitizeTraffic(TrafficStats.getUidTxBytes(uid)),
-        )
-    }
-
-    private fun sanitizeTraffic(value: Long): Long {
-        return if (value == TrafficStats.UNSUPPORTED.toLong() || value < 0L) 0L else value
-    }
+    private fun readTraffic(): UidTrafficSample = UidTrafficSample.from(
+        trafficUid,
+        TrafficStats.getUidRxBytes(trafficUid),
+        TrafficStats.getUidTxBytes(trafficUid),
+    )
 
     private fun readStorage(): StorageSnapshot {
         return try {
@@ -154,35 +153,35 @@ internal class SystemContextSampler(
     }
 
     private fun recordBatteryPowerMetrics(battery: BatterySnapshot) {
-        JankHunter.recordGauge("battery.level_pct", battery.percent.toLong())
+        callbacks.recordGauge("battery.level_pct", battery.percent.toLong())
         if (battery.temperatureDeciC >= 0) {
-            JankHunter.recordGauge("battery.temperature_deci_c", battery.temperatureDeciC.toLong())
+            callbacks.recordGauge("battery.temperature_deci_c", battery.temperatureDeciC.toLong())
         } else {
-            JankHunter.recordCounter("battery.temperature.negative.count", 1)
+            callbacks.recordCounter("battery.temperature.negative.count", 1)
         }
-        JankHunter.recordGauge("battery.status", battery.state.toLong())
-        JankHunter.recordGauge("battery.plugged", battery.plugged.toLong())
-        JankHunter.recordGauge("battery.voltage_mv", battery.voltageMv.toLong())
-        JankHunter.recordGauge("battery.health", battery.health.toLong())
+        callbacks.recordGauge("battery.status", battery.state.toLong())
+        callbacks.recordGauge("battery.plugged", battery.plugged.toLong())
+        callbacks.recordGauge("battery.voltage_mv", battery.voltageMv.toLong())
+        callbacks.recordGauge("battery.health", battery.health.toLong())
         val charging = battery.state == BatteryManager.BATTERY_STATUS_CHARGING ||
             battery.state == BatteryManager.BATTERY_STATUS_FULL
-        JankHunter.recordGauge("battery.charging", if (charging) 1L else 0L)
+        callbacks.recordGauge("battery.charging", if (charging) 1L else 0L)
 
         val power = powerManager ?: return
-        JankHunter.recordGauge("device.power_save_mode", if (power.isPowerSaveMode) 1L else 0L)
-        JankHunter.recordGauge("device.interactive", if (power.isInteractive) 1L else 0L)
-        JankHunter.recordGauge("device.idle_mode", if (power.isDeviceIdleMode) 1L else 0L)
+        callbacks.recordGauge("device.power_save_mode", if (power.isPowerSaveMode) 1L else 0L)
+        callbacks.recordGauge("device.interactive", if (power.isInteractive) 1L else 0L)
+        callbacks.recordGauge("device.idle_mode", if (power.isDeviceIdleMode) 1L else 0L)
         if (Build.VERSION.SDK_INT >= 29) {
-            JankHunter.recordGauge("device.thermal.status", power.currentThermalStatus.toLong())
+            callbacks.recordGauge("device.thermal.status", power.currentThermalStatus.toLong())
         }
     }
 
     private fun recordCpuMetrics(cpu: ProcCpuSampler.CpuSample?) {
         if (cpu == null) return
-        JankHunter.recordGauge("process.cpu.device_percent_x100", cpu.processDevicePercentX100)
-        JankHunter.recordGauge("process.cpu.core_percent_x100", cpu.processCorePercentX100)
-        JankHunter.recordGauge("device.cpu.busy_percent_x100", cpu.deviceBusyPercentX100)
-        JankHunter.recordGauge("device.cpu.core_count", cpu.coreCount.toLong())
+        callbacks.recordGauge("process.cpu.device_percent_x100", cpu.processDevicePercentX100)
+        callbacks.recordGauge("process.cpu.core_percent_x100", cpu.processCorePercentX100)
+        callbacks.recordGauge("device.cpu.busy_percent_x100", cpu.deviceBusyPercentX100)
+        callbacks.recordGauge("device.cpu.core_count", cpu.coreCount.toLong())
     }
 
     private fun readTextFile(path: String): String? {
@@ -221,11 +220,6 @@ internal class SystemContextSampler(
         val metered: Boolean,
         val validated: Boolean,
         val vpn: Boolean,
-    )
-
-    private data class TrafficSnapshot(
-        val rxBytes: Long,
-        val txBytes: Long,
     )
 
     private data class StorageSnapshot(

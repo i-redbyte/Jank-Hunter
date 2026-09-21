@@ -22,6 +22,46 @@ const run = (args) => {
   }
 };
 
+const buildGrowthReport = () => {
+  const directory = resolve(outDir, "growth");
+  const reportPath = resolve(directory, "inspect.html");
+  mkdirSync(directory, { recursive: true });
+  const result = spawnSync(
+    "go",
+    ["test", "./internal/report", "-run", "^TestWriteLogGrowthVisualFixture$", "-count=1"],
+    {
+      cwd: cliRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, JH_GROWTH_VISUAL_OUT: reportPath },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Не удалось создать отчет роста журналов\n${result.stdout}\n${result.stderr}`);
+  }
+  return reportPath;
+};
+
+const buildDeferredSearchReport = () => {
+  const directory = resolve(outDir, "deferred-search");
+  const reportPath = resolve(directory, "inspect.html");
+  mkdirSync(directory, { recursive: true });
+  const result = spawnSync(
+    "go",
+    ["test", "./internal/report", "-run", "^TestCodeProblemReportKeepsHighCardinalityRegistryInCompressedArchive$", "-count=1"],
+    {
+      cwd: cliRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, JH_DEFERRED_SEARCH_OUT: reportPath },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Не удалось создать отчет для проверки поиска\n${result.stdout}\n${result.stderr}`);
+  }
+  return reportPath;
+};
+
 const buildReportSet = (name, presentation = false) => {
   const setDir = resolve(outDir, name);
   mkdirSync(setDir, { recursive: true });
@@ -49,7 +89,7 @@ const buildReportSet = (name, presentation = false) => {
         { intent: "logspam.android.util.Log.d", signature: "logspam.android.util.Log.d", count: 9 },
       ],
       decisions: [{ kind: "unsupported", module: "okhttp", family: "okhttp", reason: "unsupported_signature", count: 2 }],
-      annotations: [{ owner: "FeedOwner", screen: "Feed", flow: "feed.open", trace: "refresh", count: 3 }],
+      annotations: [{ owner: "FeedOwner", screen: "Feed", operation: "feed.open", operationKind: "navigation", operationBudgetMs: 800, count: 3 }],
     }),
     JSON.stringify({
       format: 1,
@@ -61,7 +101,7 @@ const buildReportSet = (name, presentation = false) => {
       hooks: [
         { intent: "coroutine.wrap_block.function2_before_continuation", signature: "kotlinx.coroutines.suspend_builders.function2_continuation.v1", bridge: "kotlinx.coroutines.bridge.v1", count: 2 },
       ],
-      annotations: [{ owner: "CheckoutPresenter", screen: "Checkout", flow: "checkout.pay", trace: "submit", count: 2 }],
+      annotations: [{ owner: "CheckoutPresenter", screen: "Checkout", operation: "checkout.pay", operationKind: "submit", operationBudgetMs: 1200, count: 2 }],
     }),
   ].join("\n") + "\n");
   const diagnosticsArgs = ["--instrumentation-diagnostics", diagnosticsPath];
@@ -109,27 +149,11 @@ const buildReportSet = (name, presentation = false) => {
   }, null, 2));
   const heapInspectArgs = ["--heap-evidence", heapEvidencePath];
   const heapCompareArgs = ["--baseline-heap-evidence", heapEvidencePath, "--candidate-heap-evidence", heapEvidencePath];
-  const ownerMapArgs = [];
-  if (presentation) {
-    const ownerMapPath = resolve(setDir, "owner-map.json");
-    writeFileSync(ownerMapPath, JSON.stringify({
-      format: 4,
-      kind: "metadata",
-      symbolNamespace: "00112233445566778899aabbccddeeff",
-      owners: {
-        "stable:0x0000000000001001": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
-        "stable:0x0000000000001002": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
-        "stable:0x0000000000001003": "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
-      },
-    }, null, 2));
-    ownerMapArgs.push("--owner-map", ownerMapPath);
-  }
-  run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
+  run(["inspect", ...logs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
   run([
     "compare",
     "--baseline", logs.join(","),
     "--candidate", candidateLogs.join(","),
-    ...ownerMapArgs,
     ...diagnosticsArgs,
     ...classGraphArgs,
     ...heapCompareArgs,
@@ -165,7 +189,7 @@ const buildReportSet = (name, presentation = false) => {
     reports.push(
       { set: name, type: "readme-inspect-hero", path: inspectPath, page: "overview", readme: true },
       { set: name, type: "readme-inspect-signals", path: inspectPath, page: "overview", section: "overview", readme: true },
-      { set: name, type: "readme-inspect-flows", path: inspectPath, page: "overview", section: "flows", readme: true },
+      { set: name, type: "readme-inspect-operations", path: inspectPath, page: "overview", section: "signal-contexts", readme: true },
       { set: name, type: "readme-leaks-explorer", path: inspectPath, page: "leaks", section: "summary", readme: true },
       { set: name, type: "readme-math-summary", path: inspectPath, page: "math", section: "math-overview", readme: true },
       { set: name, type: "readme-math-network-loops", path: inspectPath, page: "math", section: "network-loops", openDetails: true, readme: true },
@@ -189,6 +213,25 @@ const buildReportSet = (name, presentation = false) => {
 const reportPaths = [
   ...buildReportSet("short"),
   ...buildReportSet("long-presentation", true),
+  {
+    set: "deferred-search",
+    type: "inspect",
+    path: buildDeferredSearchReport(),
+    page: "overview",
+    plain: true,
+    searchQuery: "ArchivedProblem074",
+  },
+  {
+    set: "growth",
+    type: "calendar-month",
+    path: buildGrowthReport(),
+    page: "overview",
+    section: "log-growth",
+    openDetails: true,
+    growthPeriod: "current-month",
+    plain: true,
+    readme: true,
+  },
 ];
 
 const browser = await chromium.launch();
@@ -206,6 +249,94 @@ const visualStabilityCSS = `
 `;
 const failures = [];
 
+const checkCodeProblemEvidence = async (frame) => {
+  const candidates = await frame.$$(".code-problem-details[data-code-problem-evidence-key]");
+  let details = candidates[0];
+  for (const candidate of candidates) {
+    const signalCount = await candidate.evaluate((element) =>
+      Number.parseInt(element.querySelector("summary small")?.textContent || "0", 10) || 0,
+    );
+    if (signalCount > 0) {
+      details = candidate;
+      break;
+    }
+  }
+  if (!details) return { available: false };
+  const expectedSignals = await details.evaluate((element) =>
+    Number.parseInt(element.querySelector("summary small")?.textContent || "0", 10) || 0,
+  );
+  await details.evaluate((element) => { element.open = true; });
+  const loaded = await frame.waitForFunction(
+    () => document.querySelector(".code-problem-details[data-evidence-loaded='true']"),
+    null,
+    { timeout: 2000 },
+  ).then(() => true, () => false);
+  if (!loaded) return { available: true, loaded: false, signals: 0, drilldowns: 0 };
+  const result = await details.evaluate((element, expected) => ({
+    available: true,
+    loaded: true,
+    expectedSignals: expected,
+    signals: element.querySelectorAll(".problem-signal").length,
+    drilldowns: element.querySelectorAll(".problem-drill").length,
+    error: element.textContent.includes("Не удалось прочитать полные доказательства"),
+  }), expectedSignals);
+  await details.evaluate((element) => { element.open = false; });
+  return result;
+};
+
+const checkProblemSearch = async (frame, query) => frame.evaluate(async (searchQuery) => {
+  const search = document.querySelector("[data-problem-search]");
+  const feedback = document.querySelector("[data-problem-search-feedback]");
+  const results = document.querySelector("[data-problem-search-results]");
+  const scope = document.querySelector("[data-problem-card-scope]");
+  if (!search || !feedback || !results || !scope) {
+    return ["элементы поиска отсутствуют"];
+  }
+  const issues = [];
+  const liveRows = Array.from(document.querySelectorAll("[data-code-problem-row]"));
+  if (liveRows.some((row) => row.textContent.includes(searchQuery))) {
+    issues.push("хвостовая строка уже находилась в DOM до поиска");
+  }
+  if (!scope.textContent.includes("все классы и строки подробностей")) {
+    issues.push("область поиска не объясняет охват подробных строк");
+  }
+  search.value = searchQuery;
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  const waitUntil = async (predicate, attempts = 180) => {
+    for (let index = 0; index < attempts; index += 1) {
+      if (predicate()) return true;
+      await new Promise((resolveTick) => requestAnimationFrame(resolveTick));
+    }
+    return false;
+  };
+  const indexed = await waitUntil(() => !feedback.textContent.includes("Ищу по всем строкам"));
+  if (!indexed) {
+    issues.push("индекс отложенных строк не завершился");
+    return issues;
+  }
+  const resultButton = results.querySelector("button");
+  if (!resultButton || !results.textContent.includes(searchQuery)) {
+    issues.push("класс из отложенной строки не появился в результатах");
+    return issues;
+  }
+  resultButton.click();
+  const revealed = await waitUntil(() => {
+    const target = document.querySelector(".report-search-highlight");
+    return target?.textContent.includes(searchQuery);
+  });
+  if (!revealed) {
+    issues.push("переход не материализовал и не подсветил найденную строку");
+  }
+  const target = document.querySelector(".report-search-highlight");
+  let details = target?.closest("details");
+  while (details) {
+    if (!details.open) issues.push("родительский раздел найденной строки остался закрыт");
+    details = details.parentElement?.closest("details");
+  }
+  document.querySelector("[data-problem-search-clear]")?.click();
+  return issues;
+}, query);
+
 const collectLayoutIssues = async (page) => page.evaluate(() => {
   const root = document.documentElement;
   const pageOverflow = Math.max(0, root.scrollWidth - root.clientWidth);
@@ -213,10 +344,14 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     .filter((table) => !table.closest(".table-scroll"))
     .map((table) => table.textContent.trim().slice(0, 120));
   const tallRows = Array.from(document.querySelectorAll("tr"))
+    .filter((row) => !row.classList.contains("leak-card-row"))
     .map((row) => ({
       height: row.getBoundingClientRect().height,
+      top: row.getBoundingClientRect().top,
+      bottom: row.getBoundingClientRect().bottom,
       text: row.textContent.trim().replace(/\s+/g, " ").slice(0, 160),
     }))
+    .filter((row) => row.bottom > -200 && row.top < window.innerHeight + 200)
     .filter((row) => row.height > 180 && row.text.length > 0);
   const looseTableCells = Array.from(document.querySelectorAll("th, td"))
     .filter((cell) => {
@@ -229,6 +364,12 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 120));
   const clippedTooltips = Array.from(document.querySelectorAll("[data-tip]"))
     .filter((node) => {
+      if (node.closest("[hidden], details:not([open])")) return false;
+      if (typeof node.checkVisibility === "function" && !node.checkVisibility({ checkVisibilityCSS: true })) {
+        return false;
+      }
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
       const rect = node.getBoundingClientRect();
       return rect.width === 0 || rect.height === 0;
     })
@@ -256,6 +397,20 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
         });
     })
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
+  const escapedInsightContent = Array.from(document.querySelectorAll(".operation-context-insight-card, .ui-screen-insight, .ui-cause-card"))
+    .flatMap((card) => {
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.width <= 0 || cardRect.height <= 0) return [];
+      return Array.from(card.querySelectorAll("h3, h5, p, dt, dd, strong, small, span"))
+        .filter((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && (
+            rect.left < cardRect.left - 2 ||
+            rect.right > cardRect.right + 2
+          );
+        })
+        .map((node) => node.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
+    });
   const graphEdges = Array.from(document.querySelectorAll(".leak-graph-edge, .influence-edge"));
   const missingArrowMarkers = graphEdges.filter((edge) => {
     const marker = edge.getAttribute("marker-end") || "";
@@ -378,6 +533,7 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     clippedCells,
     nakedOverflowCells,
     escapedProblemCells,
+    escapedInsightContent,
     missingArrowMarkers,
     leakLabelOverlaps,
     influenceTextOverflow,
@@ -420,6 +576,47 @@ const checkZeroToggle = async (page) => page.evaluate(() => {
   const hiddenAfter = rows.length - visibleCount();
   return { available: true, zeroRows: rows.length, hiddenBefore, visibleAfter, hiddenAfter };
 });
+
+const checkGrowthPeriod = async (frame, period) => frame.evaluate(async (selectedPeriod) => {
+  const panel = document.querySelector("[data-log-growth]");
+  if (!panel) return ["раздел роста журналов отсутствует"];
+  const issues = [];
+  const periodButton = panel.querySelector(`[data-growth-period="${selectedPeriod}"]`);
+  const calculateButton = panel.querySelector("[data-growth-calculate]");
+  if (!periodButton || !calculateButton) return ["кнопки расчета периода отсутствуют"];
+  periodButton.click();
+  calculateButton.click();
+  await new Promise((resolveTick) => requestAnimationFrame(() => resolveTick()));
+  const value = (name) => panel.querySelector(`[data-growth-value="${name}"]`)?.textContent.trim() || "";
+  const expected = {
+    sessions: "31",
+    duration: "31 мин",
+    generated: "39,5 МиБ",
+    retained: "1 МиБ",
+    fill: "100% лимита",
+    reached: "6 сессий достигли лимита",
+    "limit-reached": "21",
+    rotations: "42",
+    evicted: "21 МиБ",
+  };
+  for (const [name, expectedValue] of Object.entries(expected)) {
+    if (value(name) !== expectedValue) issues.push(`${name}=${value(name)}, ожидалось ${expectedValue}`);
+  }
+  if (panel.querySelector("[data-growth-from]")?.value !== "01.07.2026" ||
+      panel.querySelector("[data-growth-to]")?.value !== "31.07.2026") {
+    issues.push("границы календарного месяца рассчитаны неверно");
+  }
+  if (panel.querySelectorAll("[data-growth-session-rows] tr").length !== 31) {
+    issues.push("таблица сессий не содержит 31 строку");
+  }
+  if (panel.querySelectorAll("[data-growth-session-rows] tr.has-limit").length !== 6) {
+    issues.push("в таблице неверно отмечены сессии с остановкой по лимиту");
+  }
+  if (panel.querySelector("[data-growth-period-result]")?.hidden) {
+    issues.push("итог выбранного месяца остался скрыт");
+  }
+  return issues;
+}, period);
 
 const exerciseInfluenceScenario = async (frame, scenario) => frame.evaluate(async (selectedScenario) => {
   const root = document.querySelector("[data-influence-workbench]");
@@ -638,12 +835,17 @@ try {
       const reportURL = pathToFileURL(report.path);
       reportURL.hash = `page=${report.page}`;
       await page.goto(reportURL.href, { waitUntil: "load" });
-      const frameElement = await page.waitForSelector(`iframe.report-frame.active[data-page="${report.page}"]`);
-      const reportFrame = await frameElement.contentFrame();
-      if (!reportFrame) {
-        throw new Error(`В snapshot-наборе ${reportName} не загрузилась встроенная страница ${report.page}`);
+      let reportFrame;
+      if (report.plain) {
+        reportFrame = page.mainFrame();
+      } else {
+        const frameElement = await page.waitForSelector(`iframe.report-frame.active[data-page="${report.page}"]`);
+        reportFrame = await frameElement.contentFrame();
+        if (!reportFrame) {
+          throw new Error(`В snapshot-наборе ${reportName} не загрузилась встроенная страница ${report.page}`);
+        }
+        await reportFrame.waitForLoadState("load");
       }
-      await reportFrame.waitForLoadState("load");
       await page.addStyleTag({ content: visualStabilityCSS });
       await reportFrame.addStyleTag({ content: visualStabilityCSS });
       await reportFrame.evaluate(() => document.fonts?.ready);
@@ -659,6 +861,15 @@ try {
         }, { id: report.section, openDetails: Boolean(report.openDetails) });
         await page.waitForTimeout(80);
       }
+      const growthIssues = report.growthPeriod
+        ? await checkGrowthPeriod(reportFrame, report.growthPeriod)
+        : [];
+      const codeEvidence = report.page === "overview" || report.page === "math"
+        ? await checkCodeProblemEvidence(reportFrame)
+        : { available: false };
+      const problemSearchIssues = report.searchQuery
+        ? await checkProblemSearch(reportFrame, report.searchQuery)
+        : [];
       const issues = await collectLayoutIssues(reportFrame);
       const longCellToggle = await checkLongCellToggle(reportFrame);
       const zeroToggle = await checkZeroToggle(reportFrame);
@@ -697,6 +908,9 @@ try {
       if (issues.escapedProblemCells.length > 0) {
         failures.push(`${viewport.name}/${displayName}: содержимое problem/leak таблицы вышло за границы ячейки: ${JSON.stringify(issues.escapedProblemCells.slice(0, 3))}`);
       }
+      if (issues.escapedInsightContent.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: содержимое аналитической карточки вышло за границы: ${JSON.stringify(issues.escapedInsightContent.slice(0, 3))}`);
+      }
       if (issues.missingArrowMarkers > 0) {
         failures.push(`${viewport.name}/${displayName}: у ${issues.missingArrowMarkers} SVG-связей отсутствует рабочий marker-end`);
       }
@@ -732,6 +946,17 @@ try {
       for (const issue of fragmentIssues) {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
+      for (const issue of growthIssues) {
+        failures.push(`${viewport.name}/${displayName}: ${issue}`);
+      }
+      if (codeEvidence.available && (
+        !codeEvidence.loaded || codeEvidence.error || codeEvidence.signals !== codeEvidence.expectedSignals
+      )) {
+        failures.push(`${viewport.name}/${displayName}: полные доказательства строки кода не раскрылись (${JSON.stringify(codeEvidence)})`);
+      }
+      for (const issue of problemSearchIssues) {
+        failures.push(`${viewport.name}/${displayName}: ${issue}`);
+      }
       if (influenceResult) {
         for (const issue of influenceResult.issues) {
           failures.push(`${viewport.name}/${displayName}: ${issue}`);
@@ -753,7 +978,7 @@ try {
         fullPage: !report.section,
       });
 
-      if (report.page === "overview" && !report.readme) {
+      if (report.page === "overview" && !report.readme && !report.plain) {
         const mathLink = await reportFrame.$('a[href$="-math.html"]');
         if (!mathLink) {
           failures.push(`${viewport.name}/${displayName}: в обзоре нет ссылки на математический анализ`);

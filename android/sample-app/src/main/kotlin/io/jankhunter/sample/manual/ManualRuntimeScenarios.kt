@@ -1,5 +1,7 @@
 package io.jankhunter.sample.manual
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.R
 import io.jankhunter.runtime.JankHunter
 
@@ -27,8 +29,8 @@ internal class ManualRuntimeScenarios(
     }
 
     fun recordProbe() {
-        JankHunter.recordCounter("sample.feature_flag.probe.count", 1)
-        JankHunter.recordGauge(
+        JankHunterTelemetry.counter("sample.feature_flag.probe.count", 1)
+        JankHunterTelemetry.gauge(
             "sample.feature_flag.runtime_enabled",
             if (JankHunter.isRuntimeEnabled()) 1 else 0,
         )

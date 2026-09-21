@@ -3,9 +3,10 @@ BIN_DIR ?= bin
 DIST ?= dist
 TOOLS_DIR ?= .tools
 GO_VERSION ?= 1.22.12
-VERSION ?= 1.0.4
+VERSION ?= 1.0.11
 PLATFORMS ?= darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 PREFIX ?= /usr/local
+RETRACE_DIR ?= $(BIN_DIR)/jankhunter-retrace
 
 HOST_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 HOST_ARCH := $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
@@ -18,7 +19,7 @@ SYSTEM_GO := $(shell command -v go 2>/dev/null)
 BOOTSTRAP_GO := $(TOOLS_DIR)/go/bin/go
 GO_CMD := $(if $(SYSTEM_GO),$(SYSTEM_GO),$(BOOTSTRAP_GO))
 
-.PHONY: bootstrap-go deps test build install release checksums clean
+.PHONY: bootstrap-go deps test test-retrace retrace-bundle build install release checksums clean
 
 bootstrap-go:
 	@if command -v go >/dev/null 2>&1; then \
@@ -61,10 +62,16 @@ deps: bootstrap-go
 	"$(GO_CMD)" mod download
 	"$(GO_CMD)" mod verify
 
-test: deps
-	"$(GO_CMD)" test ./...
+retrace-bundle:
+	../scripts/build-retrace-bundle.sh "$(RETRACE_DIR)"
 
-build: deps
+test-retrace: deps retrace-bundle
+	JANK_HUNTER_TEST_R8_JAR="$(abspath $(RETRACE_DIR))/r8lib-9.0.32.jar" JANK_HUNTER_TEST_RETRACE_BRIDGE="$(abspath $(RETRACE_DIR))/jankhunter-retrace.jar" "$(GO_CMD)" test ./internal/retrace
+
+test: deps test-retrace
+	JANK_HUNTER_RETRACE_HOME="$(abspath $(RETRACE_DIR))" JANK_HUNTER_TEST_R8_JAR="$(abspath $(RETRACE_DIR))/r8lib-9.0.32.jar" JANK_HUNTER_TEST_RETRACE_BRIDGE="$(abspath $(RETRACE_DIR))/jankhunter-retrace.jar" "$(GO_CMD)" test ./...
+
+build: deps retrace-bundle
 	mkdir -p "$(BIN_DIR)"
 	CGO_ENABLED=0 GOOS="$(BUILD_OS)" GOARCH="$(BUILD_ARCH)" "$(GO_CMD)" build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o "$(OUT)" ./cmd/jankhunter
 	@echo "built $(OUT)"
@@ -72,9 +79,13 @@ build: deps
 install: build
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 "$(OUT)" "$(DESTDIR)$(PREFIX)/bin/$(BINARY)$(TARGET_EXT)"
+	install -d "$(DESTDIR)$(PREFIX)/lib/jankhunter/retrace"
+	install -m 0644 "$(RETRACE_DIR)"/* "$(DESTDIR)$(PREFIX)/lib/jankhunter/retrace/"
 	@echo "installed $(DESTDIR)$(PREFIX)/bin/$(BINARY)$(TARGET_EXT)"
 
-release: clean test
+release:
+	$(MAKE) clean
+	$(MAKE) test
 	mkdir -p "$(DIST)"
 	@set -eu; \
 	for platform in $(PLATFORMS); do \
@@ -85,7 +96,8 @@ release: clean test
 		out="$(DIST)/$(BINARY)_$(VERSION)_$${GOOS}_$${GOARCH}"; \
 		mkdir -p "$$out"; \
 		CGO_ENABLED=0 GOOS=$$GOOS GOARCH=$$GOARCH "$(GO_CMD)" build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o "$$out/$(BINARY)$$ext" ./cmd/jankhunter; \
-		tar -C "$$out" -czf "$$out.tar.gz" "$(BINARY)$$ext"; \
+		cp -R "$(RETRACE_DIR)" "$$out/jankhunter-retrace"; \
+		tar -C "$$out" -czf "$$out.tar.gz" "$(BINARY)$$ext" jankhunter-retrace; \
 		rm -rf "$$out"; \
 	done
 	$(MAKE) checksums

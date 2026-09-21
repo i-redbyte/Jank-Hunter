@@ -46,5 +46,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".MemoryScenarioActivity" />
+        <activity android:name=".CustomViewJankActivity" />
+        <activity android:name=".ComposeJankActivity" />
     </application>
 </manifest>

@@ -11,7 +11,7 @@ interface JankHunterBinaryStorage {
      */
     val fileSizeLimitBytes: Long
 
-    /** Archive-retention budget owned and enforced by the storage implementation. */
+    /** Total budget for canonical Jank Hunter `.jhlog` files; unrelated artifacts do not consume it. */
     val archivesSizeLimitBytes: Long
 
     /**
@@ -22,6 +22,14 @@ interface JankHunterBinaryStorage {
     fun openWriter(fileName: String): JankHunterBinaryWriter
 
     fun createArtifact(fileName: String): JankHunterBinaryArtifact
+
+    /** Retains an existing path until [JankHunterBinaryArtifact.commit] releases it. */
+    fun protect(fileName: String): JankHunterBinaryArtifact = createArtifact(fileName)
+
+    /** Deletes an existing closed artifact without requiring a storage-specific adapter method. */
+    fun delete(fileName: String) {
+        createArtifact(fileName).abort()
+    }
 
     /** Removes closed artifacts while preserving every path or file name in [protectedPaths]. */
     fun cleanup(protectedPaths: Set<String> = emptySet())

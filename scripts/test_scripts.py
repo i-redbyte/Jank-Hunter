@@ -58,30 +58,32 @@ class AndroidIntegrationScriptTest(unittest.TestCase):
 
     @staticmethod
     def settings_text(existing_integration: bool) -> str:
-        legacy_plugin = ""
-        legacy_dependency = ""
+        managed_plugin = ""
+        managed_dependency = ""
         if existing_integration:
-            legacy_plugin = """    // Jank Hunter plugin repository
+            managed_plugin = """    // Jank Hunter integration managed plugin repository - BEGIN
     repositories {
-        maven { url = uri("legacy/jankhunter-maven") }
+        maven { url = uri("current/jankhunter-maven") }
     }
+    // Jank Hunter integration managed plugin repository - END
 
 """
-            legacy_dependency = """    // Jank Hunter dependency repository
+            managed_dependency = """    // Jank Hunter integration managed dependency repository - BEGIN
     repositories {
-        maven { url = uri("legacy/jankhunter-maven") }
+        maven { url = uri("current/jankhunter-maven") }
     }
+    // Jank Hunter integration managed dependency repository - END
 
 """
         return f"""pluginManagement {{
-{legacy_plugin}    repositories {{
+{managed_plugin}    repositories {{
         google()
         gradlePluginPortal()
     }}
 }}
 
 dependencyResolutionManagement {{
-{legacy_dependency}    repositories {{
+{managed_dependency}    repositories {{
         google()
         mavenCentral()
     }}
@@ -105,11 +107,11 @@ include(":app")
     implementation("com.example:user-owned:1")
 }
 """
-            legacy_helper = """// Jank Hunter optional OkHttp/WebSocket helper
+            managed_helper = """// Jank Hunter optional helper dependencies - BEGIN
 dependencies {
     debugImplementation("io.jankhunter:jankhunter-okhttp3:0.9.0")
-    implementation("com.example:inside-legacy-block:1")
 }
+// Jank Hunter optional helper dependencies - END
 """
         else:
             jh_plugin = (
@@ -123,23 +125,21 @@ dependencies {
     implementation 'com.example:user-owned:1'
 }
 """
-            legacy_helper = """// Jank Hunter optional OkHttp/WebSocket helper
+            managed_helper = """// Jank Hunter optional helper dependencies - BEGIN
 dependencies {
     debugImplementation 'io.jankhunter:jankhunter-okhttp3:0.9.0'
-    implementation 'com.example:inside-legacy-block:1'
 }
+// Jank Hunter optional helper dependencies - END
 """
 
         manual_dsl = """jankHunter {
-    verboseLogs = true
-    retainedHeapDump {
-        privacyApproved = true
-    }
+    growthAnalytics = false
+    deleteObsoleteLogs = true
 }
 """
         if not existing_integration:
             manual_dsl = ""
-            legacy_helper = ""
+            managed_helper = ""
         return f"""plugins {{
     id("com.android.application")
 {jh_plugin}}}
@@ -150,7 +150,7 @@ android {{
 
 {manual_dependencies}
 {manual_dsl}
-{legacy_helper}"""
+{managed_helper}"""
 
     def create_artifacts(self, project: Path, maven_dir: str, cli_dir: str) -> None:
         repository = project / maven_dir
@@ -250,6 +250,14 @@ android {{
         self.run_script(
             project,
             *common_old,
+            "--profile",
+            "full",
+            "--collection",
+            "exact",
+            "--processes",
+            "all",
+            "--scope",
+            "whole-application",
             "--build-type",
             "qa",
             "--build-type",
@@ -262,8 +270,14 @@ android {{
             "--okhttp",
             "--websockets",
             "--analyze-di",
-            "--asm-progress-log",
-            "--max-session-log-size-mib",
+            "--enable-feature",
+            "method-counters",
+            "--disable-feature",
+            "heap-dumps",
+            "--no-auto-init",
+            "--no-growth-analytics",
+            "--delete-obsolete-logs",
+            "--storage-limit-mib",
             "12",
         )
 
@@ -276,6 +290,18 @@ android {{
         self.assertNotIn("0.9.0", first_build)
         self.assertIn(f'jankhunter-android-sdk:{VERSION}', first_build)
         self.assertIn('enabledBuildTypes.set(setOf("qa", "staging"))' if dsl == "kts" else 'enabledBuildTypes.set(["qa", "staging"])', first_build)
+        self.assertIn("profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)", first_build)
+        self.assertIn("collection.set(io.jankhunter.gradle.JankHunterCollection.EXACT)", first_build)
+        self.assertIn("processes.set(io.jankhunter.gradle.JankHunterProcesses.ALL)", first_build)
+        self.assertIn(
+            "scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.WHOLE_APPLICATION)",
+            first_build,
+        )
+        self.assertIn("autoInit.set(false)", first_build)
+        self.assertIn("growthAnalytics.set(false)", first_build)
+        self.assertIn("deleteObsoleteLogs.set(true)", first_build)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS)", first_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS)", first_build)
         self.assertEqual(1, first_build.count("managed configuration - BEGIN"))
         self.assertEqual(1, first_build.count("optional helper dependencies - BEGIN"))
         self.assertEqual(2, first_settings.count(old_maven))
@@ -283,6 +309,14 @@ android {{
         self.run_script(
             project,
             *common_new,
+            "--profile",
+            "targeted",
+            "--collection",
+            "balanced",
+            "--processes",
+            "main_only",
+            "--scope",
+            "packages-only",
             "--build-type",
             "qa",
             "--build-type",
@@ -293,26 +327,44 @@ android {{
             "--no-okhttp",
             "--no-websockets",
             "--no-analyze-di",
-            "--no-session-log-size-limit",
+            "--enable-feature",
+            "ui-all",
+            "--disable-feature",
+            "METHOD_COUNTERS",
+            "--auto-init",
+            "--growth-analytics",
+            "--keep-obsolete-logs",
+            "--unlimited-storage",
         )
         second_build = build_file.read_text(encoding="utf-8")
         second_settings = settings_file.read_text(encoding="utf-8")
 
-        self.assertIn("verboseLogs = true", second_build)
-        self.assertIn("privacyApproved = true", second_build)
+        self.assertIn("growthAnalytics = false", second_build)
+        self.assertIn("deleteObsoleteLogs = true", second_build)
         self.assertIn("jankhunter-runtime:manual-version", second_build)
         self.assertIn("jankhunter-okhttp3:manual-version", second_build)
         self.assertIn("com.example:user-owned:1", second_build)
-        self.assertIn("com.example:inside-legacy-block:1", second_build)
         self.assertNotIn("jankhunter-okhttp3:0.9.0", second_build)
         self.assertEqual(1, second_build.count("optional helper dependencies - BEGIN"))
         self.assertIn(f"jankhunter-android-sdk:{VERSION}", second_build)
         self.assertNotIn(f"jankhunter-okhttp3:{VERSION}", second_build)
-        self.assertIn("dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.DISABLED", second_build)
-        self.assertIn("sessionLogSizeLimitEnabled = false", second_build)
-        self.assertIn("runtimeCallGraph = false", second_build)
-        self.assertIn("okhttp = false", second_build)
-        self.assertIn("webSockets = false", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.DI_ANALYSIS)", second_build)
+        self.assertIn("unlimitedStorage()", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.HTTP)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)", second_build)
+        self.assertIn("profile.set(io.jankhunter.gradle.JankHunterProfile.TARGETED)", second_build)
+        self.assertIn("collection.set(io.jankhunter.gradle.JankHunterCollection.BALANCED)", second_build)
+        self.assertIn("processes.set(io.jankhunter.gradle.JankHunterProcesses.MAIN_ONLY)", second_build)
+        self.assertIn(
+            "scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.PACKAGES_ONLY)",
+            second_build,
+        )
+        self.assertIn("autoInit.set(true)", second_build)
+        self.assertIn("growthAnalytics.set(true)", second_build)
+        self.assertIn("deleteObsoleteLogs.set(false)", second_build)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeatureBundle.UI_ALL)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS)", second_build)
         self.assertIn("com.example.updated", second_build)
         self.assertNotIn("com.example.first", second_build)
         self.assertEqual(1, second_build.count("managed configuration - BEGIN"))
@@ -330,6 +382,14 @@ android {{
         self.run_script(
             project,
             *common_new,
+            "--profile",
+            "targeted",
+            "--collection",
+            "balanced",
+            "--processes",
+            "main-only",
+            "--scope",
+            "packages-only",
             "--build-type",
             "qa",
             "--build-type",
@@ -340,7 +400,14 @@ android {{
             "--no-okhttp",
             "--no-websockets",
             "--no-analyze-di",
-            "--no-session-log-size-limit",
+            "--enable-feature",
+            "ui-all",
+            "--disable-feature",
+            "method-counters",
+            "--auto-init",
+            "--growth-analytics",
+            "--keep-obsolete-logs",
+            "--unlimited-storage",
         )
         self.assertEqual(second_build, build_file.read_text(encoding="utf-8"))
         self.assertEqual(second_settings, settings_file.read_text(encoding="utf-8"))
@@ -350,6 +417,34 @@ android {{
 
     def test_reintegrates_existing_groovy_dsl_project(self) -> None:
         self.assert_reintegration("groovy")
+
+    def test_rejects_conflicting_feature_directives_before_writes(self) -> None:
+        project = self.create_project("kts", existing_integration=False)
+        settings = project / "settings.gradle.kts"
+        build = project / "app/build.gradle.kts"
+        before_settings = settings.read_bytes()
+        before_build = build.read_bytes()
+
+        completed = self.run_script(
+            project,
+            "--module",
+            ":app",
+            "--enable-feature",
+            "HTTP",
+            "--disable-feature",
+            "http",
+            "--dry-run",
+            "--skip-publish",
+            "--skip-cli-build",
+            "--skip-local-properties",
+            "--no-gitignore",
+            expected_status=1,
+        )
+
+        self.assertIn("feature is both enabled and disabled: HTTP", completed.stderr)
+        self.assertEqual(before_settings, settings.read_bytes())
+        self.assertEqual(before_build, build.read_bytes())
+        self.assertFalse((project / ".jankhunter-backups").exists())
 
     def test_reintegrates_groovy_project_with_slashy_literals_idempotently(self) -> None:
         project = self.create_project("groovy", existing_integration=True)
@@ -691,47 +786,6 @@ android {{
         self.assertEqual(before, build.read_bytes())
         self.assertFalse((project / ".jankhunter-backups").exists())
 
-    def test_legacy_helper_migration_ignores_braces_in_comments(self) -> None:
-        for dsl in ("kts", "groovy"):
-            with self.subTest(dsl=dsl):
-                project = self.create_project(dsl, existing_integration=False)
-                suffix = ".kts" if dsl == "kts" else ""
-                build = project / "app" / f"build.gradle{suffix}"
-                dependency = (
-                    '    implementation("com.example:keep:1") // } documentation\n'
-                    '    implementation("com.example:also-keep:1")\n'
-                    '    debugImplementation("io.jankhunter:jankhunter-okhttp3:0.9.0")\n'
-                    if dsl == "kts"
-                    else "    implementation 'com.example:keep:1' // } documentation\n"
-                    "    implementation 'com.example:also-keep:1'\n"
-                    "    debugImplementation 'io.jankhunter:jankhunter-okhttp3:0.9.0'\n"
-                )
-                build.write_text(
-                    'plugins { id("com.android.application") }\n'
-                    '// Jank Hunter optional OkHttp/WebSocket helper\n'
-                    f'dependencies {{\n{dependency}}}\n'
-                    'android { namespace = "com.example.fixture" }\n',
-                    encoding="utf-8",
-                )
-                self.create_artifacts(project, "repo/maven", "repo/bin")
-
-                self.run_script(
-                    project,
-                    *self.integration_arguments("repo/maven", "repo/bin"),
-                    "--no-okhttp",
-                    "--no-websockets",
-                )
-
-                result = build.read_text(encoding="utf-8")
-                self.assertIn("com.example:keep:1", result)
-                self.assertIn("com.example:also-keep:1", result)
-                self.assertNotIn("jankhunter-okhttp3:0.9.0", result)
-                dependencies_start = result.index("dependencies {")
-                dependencies_end = result.index("\n}", dependencies_start)
-                self.assertLess(
-                    result.index("com.example:also-keep:1"), dependencies_end
-                )
-
     def test_reversed_managed_markers_fail_before_writes(self) -> None:
         project = self.create_project("kts", existing_integration=False)
         build = project / "app/build.gradle.kts"
@@ -956,7 +1010,7 @@ android {{
         self.assertEqual(before_build, build.read_bytes())
         self.assertTrue((project / ".jankhunter-backups").is_dir())
 
-    def test_default_overlay_preserves_manual_dsl_and_legacy_helper(self) -> None:
+    def test_default_overlay_preserves_manual_dsl_and_current_helper(self) -> None:
         for dsl in ("kts", "groovy"):
             with self.subTest(dsl=dsl):
                 project = self.create_project(dsl, existing_integration=True)
@@ -964,12 +1018,10 @@ android {{
                 build = project / "app" / f"build.gradle{suffix}"
                 current = build.read_text(encoding="utf-8")
                 current = current.replace(
-                    "    retainedHeapDump {",
-                    "    instrument {\n"
-                    "        okhttp = true\n"
-                    "        runtimeCallGraph = true\n"
-                    "    }\n"
-                    "    retainedHeapDump {",
+                    "    deleteObsoleteLogs = true",
+                    "    enable(io.jankhunter.gradle.JankHunterFeature.HTTP)\n"
+                    "    enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)\n"
+                    "    deleteObsoleteLogs = true",
                 )
                 build.write_text(current, encoding="utf-8")
                 self.create_artifacts(project, "repo/maven", "repo/bin")
@@ -977,12 +1029,11 @@ android {{
 
                 self.run_script(project, *arguments)
                 first = build.read_text(encoding="utf-8")
-                self.assertIn("okhttp = true", first)
-                self.assertIn("runtimeCallGraph = true", first)
+                self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.HTTP)", first)
+                self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", first)
                 self.assertNotIn("managed configuration - BEGIN", first)
                 self.assertIn("optional helper dependencies - BEGIN", first)
                 self.assertIn(f"jankhunter-android-sdk:{VERSION}", first)
-                self.assertIn("com.example:inside-legacy-block:1", first)
 
                 self.run_script(project, *arguments)
                 self.assertEqual(first, build.read_text(encoding="utf-8"))
@@ -1011,9 +1062,9 @@ android {{
         self.assertEqual(configured, build.read_bytes())
         result = configured.decode()
         self.assertIn('enabledBuildTypes.set(setOf("qa"))', result)
-        self.assertIn("runtimeCallGraph = true", result)
-        self.assertIn("okhttp = true", result)
-        self.assertIn("maxSessionLogSizeMiB = 12", result)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", result)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.HTTP)", result)
+        self.assertIn("storageLimitMiB(12)", result)
         self.assertIn(f'implementation("{GROUP}:jankhunter-android-sdk:{VERSION}")', result)
 
 
@@ -1375,11 +1426,13 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         test_apk.write_bytes(b"test-apk")
         generated_artifacts = android / "sample-app/build/generated/jankhunter/debug"
         generated_artifacts.mkdir(parents=True)
-        (generated_artifacts / "owner-map.json").write_text(
+        (generated_artifacts / "artifact-metadata.json").write_text(
             json.dumps(
                 {
-                    "classGraph": True,
-                    "runtimeCallGraph": True,
+                    "format": 1,
+                    "kind": "artifact-metadata",
+                    "symbolNamespace": "00000000000000000000000000000000",
+                    "hooks": {"classGraph": True, "runtimeCallGraph": True},
                     "includePackages": ["io.jankhunter.sample.graph"],
                 },
                 separators=(",", ":"),
@@ -1396,7 +1449,10 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         )
         device_logs = self.root / "device-logs"
         device_logs.mkdir()
-        (device_logs / "jh-session-log.2026-07-14.0.jhlog").write_bytes(b"fixture")
+        (
+            device_logs
+            / "jh-session-log.2026-07-14.01000000000000000000000000000000.0.jhlog"
+        ).write_bytes(b"fixture")
 
         adb = self.bin / "adb-full"
         adb_args = self.root / "adb-args.txt"
@@ -1539,17 +1595,18 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
         self.assertIn("expected screen context is missing", completed.stderr)
         self.assertIn("expected owner is missing", completed.stderr)
 
-    def test_runtime_quality_gate_accepts_screen_context_from_short_flow(self) -> None:
+    def test_runtime_quality_gate_accepts_screen_context_from_operation(self) -> None:
         script, _, environment = self.create_full_fixture()
         summary = self.complete_summary()
         summary["Screens"] = []
-        summary["Flows"] = [
-            {"Screen": "sample.compose.result"}
-        ]
+        summary["OperationAnalysis"] = {
+            "Completed": 1,
+            "Operations": [{"Screen": "sample.compose.result"}],
+        }
         environment["FAKE_INSPECT_JSON"] = json.dumps(summary, ensure_ascii=False)
 
         completed = subprocess.run(
-            [str(script), "--out-dir", str(self.root / "flow-screen-context")],
+            [str(script), "--out-dir", str(self.root / "operation-screen-context")],
             check=False,
             capture_output=True,
             text=True,
@@ -1735,6 +1792,18 @@ class GradlePluginSmokeScriptValidationTest(unittest.TestCase):
         completed = self.run_smoke("--help", "unexpected")
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("unknown or unexpected arguments", completed.stderr)
+
+    def test_external_fixture_uses_the_public_android_sdk_contract(self) -> None:
+        source = GRADLE_SMOKE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'implementation("$group:jankhunter-android-sdk:$version")', source
+        )
+        self.assertNotIn(
+            'implementation("$group:jankhunter-okhttp3:$version")', source
+        )
+        self.assertIn('"module": "jankhunter-runtime"', source)
+        self.assertIn('"module": "jankhunter-annotations"', source)
+        self.assertIn('"module": "jankhunter-okhttp3"', source)
 
 
 if __name__ == "__main__":

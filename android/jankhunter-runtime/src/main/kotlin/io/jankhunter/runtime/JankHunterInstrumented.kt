@@ -9,3 +9,8 @@ internal annotation class JankHunterInstrumented
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
 internal annotation class JankHunterLifecycleInstrumented
+
+/** Identifies validated generated accessors independently of older lifecycle hook markers. */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.BINARY)
+internal annotation class JankHunterLifecycleAccessorsV1

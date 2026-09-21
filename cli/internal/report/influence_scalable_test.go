@@ -15,46 +15,68 @@ import (
 
 func TestInfluenceReportContainsScalableNavigationAndEvidenceModel(t *testing.T) {
 	influence := buildReportInfluenceFixture()
-	for _, style := range []report.ReportStyle{report.ReportStyleModern, report.ReportStyleLegacy} {
-		t.Run(string(style), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "influence.html")
-			if err := report.WriteInfluenceWithOptions(path, influence, "Граф влияния", report.ReportOptions{Style: style}); err != nil {
-				t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
-			}
-			html := readInfluenceHTML(t, path)
-			for _, expected := range []string{
-				`data-influence-view="problems"`,
-				`data-influence-view="runtime"`,
-				`data-influence-view="packages"`,
-				`data-influence-view="neighborhood"`,
-				`data-influence-view="context"`,
-				`data-influence-search`,
-				`data-influence-package-depth`,
-				`data-influence-direction`,
-				`data-influence-depth`,
-				`data-influence-runtime-only`,
-				`data-influence-center`,
-				`data-influence-detail`,
-				`data-influence-legend`,
-				`history.replaceState`,
-				`URLSearchParams`,
-				`buildNeighborhood`,
-				`expandPackage`,
-				`fitSVGText`,
-				`data-ticket-label="Контекст расчёта"`,
-				`prefers-reduced-motion`,
-				`Показано`,
-				`Исключено`,
-				`RuntimeCount`,
-				`StaticCount`,
-				`"ID":"packages:3"`,
-				`"Kind":"connector"`,
-			} {
-				if !strings.Contains(html, expected) {
-					t.Fatalf("influence report style %s does not contain %q", style, expected)
-				}
-			}
-		})
+	path := filepath.Join(t.TempDir(), "influence.html")
+	if err := report.WriteInfluenceWithOptions(path, influence, "Граф влияния", report.ReportOptions{}); err != nil {
+		t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
+	}
+	html := readInfluenceHTML(t, path)
+	for _, expected := range []string{
+		`data-influence-view="problems"`,
+		`data-influence-view="runtime"`,
+		`data-influence-view="packages"`,
+		`data-influence-view="neighborhood"`,
+		`data-influence-view="context"`,
+		`data-influence-search`,
+		`data-influence-package-depth`,
+		`data-influence-direction`,
+		`data-influence-depth`,
+		`data-influence-runtime-only`,
+		`data-influence-center`,
+		`data-influence-detail`,
+		`data-influence-legend`,
+		`history.replaceState`,
+		`URLSearchParams`,
+		`buildNeighborhood`,
+		`expandPackage`,
+		`fitSVGText`,
+		`data-ticket-label="Как получена оценка"`,
+		`prefers-reduced-motion`,
+		`Показано`,
+		`Исключено`,
+		`RuntimeCount`,
+		`StaticCount`,
+		`"ID":"packages:3"`,
+		`"Kind":"connector"`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("influence report does not contain %q", expected)
+		}
+	}
+}
+
+func TestInfluenceGraphUsesVisibleZoomRangeAndWidthFittedViewport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "influence.html")
+	if err := report.WriteInfluenceWithOptions(path, buildReportInfluenceFixture(), "Граф влияния", report.ReportOptions{}); err != nil {
+		t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
+	}
+	html := readInfluenceHTML(t, path)
+	for _, expected := range []string{
+		`data-influence-zoom-value`,
+		`data-influence-min-zoom="45"`,
+		`data-influence-max-zoom="200"`,
+		`preserveAspectRatio="xMinYMin meet"`,
+		`const constrainTransform = () =>`,
+		`const syncViewportFrame = () =>`,
+		`viewHeight = graphWidth * clientHeight / clientWidth`,
+		`new ResizeObserver(syncViewportFrame)`,
+		`const zoomAt = (nextScale, clientX, clientY) =>`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Errorf("influence graph viewport does not contain %q", expected)
+		}
+	}
+	if strings.Contains(html, `0.45, 2.4`) {
+		t.Error("influence graph still exposes the obsolete 240% zoom limit")
 	}
 }
 
@@ -74,24 +96,7 @@ func TestInfluenceReportStaticDOMIDsAreUnique(t *testing.T) {
 	}
 }
 
-func TestInfluenceReportHandlesEmptyGraphAndLegacySummary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty.html")
-	legacy := analyze.InfluenceSummary{Available: true, TopNodes: []analyze.InfluenceNode{{
-		ClassName:       "com.app.Legacy",
-		Label:           "app.Legacy",
-		Score:           5,
-		Severity:        "medium",
-		Status:          "runtime",
-		RuntimeEvidence: true,
-	}}}
-	if err := report.WriteInfluenceWithOptions(path, legacy, "Legacy", report.ReportOptions{}); err != nil {
-		t.Fatalf("WriteInfluenceWithOptions(legacy) error = %v", err)
-	}
-	html := readInfluenceHTML(t, path)
-	if !strings.Contains(html, `"ID":"problems"`) || !strings.Contains(html, "com.app.Legacy") {
-		t.Fatal("legacy influence model was not hydrated into graph views")
-	}
-
+func TestInfluenceReportHandlesEmptyGraph(t *testing.T) {
 	emptyPath := filepath.Join(t.TempDir(), "empty-graph.html")
 	if err := report.WriteInfluenceWithOptions(emptyPath, analyze.InfluenceSummary{}, "Пустой граф", report.ReportOptions{}); err != nil {
 		t.Fatalf("WriteInfluenceWithOptions(empty) error = %v", err)
@@ -131,21 +136,21 @@ func TestLargeInfluenceReportUsesBoundedStandalonePayload(t *testing.T) {
 func buildReportInfluenceFixture() analyze.InfluenceSummary {
 	summary := analyze.Summary{
 		ProblemWindows: []analyze.ProblemWindowStats{
-			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Flow: "checkout.pay", Kind: "ui_jank", Count: 2, MaxMS: 70},
-			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Flow: "checkout.pay", Kind: "http_slow_or_failed", Count: 2, MaxMS: 900},
+			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Operation: "checkout.pay", Kind: "ui_jank", Count: 2, MaxMS: 70},
+			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Operation: "checkout.pay", Kind: "http_slow_or_failed", Count: 2, MaxMS: 900},
 		},
 		RuntimeCalls: []analyze.RuntimeCallStats{{
-			Caller:  "com.app.checkout.Presenter.submit",
-			Callee:  "com.app.checkout.Repository.load",
-			Screen:  "Checkout",
-			Flow:    "checkout.pay",
-			Count:   3,
-			TotalMS: 720,
-			MaxMS:   280,
+			Caller:    "com.app.checkout.Presenter.submit",
+			Callee:    "com.app.checkout.Repository.load",
+			Screen:    "Checkout",
+			Operation: "checkout.pay",
+			Count:     3,
+			TotalMS:   720,
+			MaxMS:     280,
 		}},
-		Flows: []analyze.FlowStats{
-			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Flow: "checkout.pay", RouteSample: "POST /checkout", UIJank: 2},
-			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Flow: "checkout.pay", RouteSample: "POST /checkout", HTTPP95MS: 900},
+		SignalContexts: []analyze.SignalContextStats{
+			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Operation: "checkout.pay", RouteSample: "POST /checkout", UIJank: 2},
+			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Operation: "checkout.pay", RouteSample: "POST /checkout", HTTPP95MS: 900},
 		},
 	}
 	graph := &analyze.ClassGraph{

@@ -1,3 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission
+        android:name="${applicationId}.permission.JANK_HUNTER_SNAPSHOT"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="${applicationId}.permission.JANK_HUNTER_SNAPSHOT" />
 </manifest>

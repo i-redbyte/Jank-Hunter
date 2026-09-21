@@ -8,7 +8,6 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
-import java.nio.file.Files
 
 class RuntimeCallGraphInstrumentationTest {
     @Test
@@ -23,20 +22,16 @@ class RuntimeCallGraphInstrumentationTest {
     }
 
     @Test
-    fun runtimeCallGraphWritesOwnerMapEntries() {
-        val ownerMapEntries = Files.createTempDirectory("jankhunter-owner-map").toFile()
+    fun runtimeCallGraphEmbedsReadableSymbols() {
+        val instrumented = instrumentRuntimeCallGraph(throwingFixture())
 
-        instrumentRuntimeCallGraph(throwingFixture(), ownerMapEntries.absolutePath)
-
-        val text = InstrumentationArtifactFiles.readJsonlLines(ownerMapEntries).joinToString("\n")
-        assertTrue(text.contains("\"kind\":\"entry\""))
-        assertTrue(text.contains("\"id\":\"stable:0x"))
-        assertTrue(text.contains("\"owner\":\"example.Throwing.parent\""))
-        assertTrue(text.contains("\"owner\":\"example.Throwing.child\""))
+        val classBytes = instrumented.toString(Charsets.ISO_8859_1)
+        assertTrue(classBytes.contains("example.Throwing.parent"))
+        assertTrue(classBytes.contains("example.Throwing.child"))
     }
 
     @Test
-    fun embeddedSymbolsAreTheDefaultInjectedAbi() {
+    fun stableHooksAlwaysInjectTheirReadableSymbols() {
         val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture()))
 
         assertTrue(stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
@@ -44,44 +39,68 @@ class RuntimeCallGraphInstrumentationTest {
     }
 
     @Test
-    fun externalSymbolsKeepTheCompactInjectedAbi() {
-        val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture(), embeddedSymbols = false))
+    fun javaEnumScaffoldingIsExcludedWithoutDroppingApplicationMethods() {
+        val instrumented = instrumentRuntimeCallGraph(javaEnumFixture())
 
-        assertTrue(stats.enterDescriptors.contains("(J)J"))
-        assertTrue(!stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
+        assertEquals(setOf("calculate"), collectInstrumentedMethods(instrumented))
     }
 
     private fun instrumentRuntimeCallGraph(
         bytes: ByteArray,
-        ownerMapEntriesDirectory: String = "",
-        embeddedSymbols: Boolean = true,
     ): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
             JankHunterClassVisitor(
                 writer,
-                "example.Throwing",
+                reader.className,
                 HookConfig(
-                    embeddedSymbols = embeddedSymbols,
                     methodCounters = false,
                     okhttp = false,
                     webSockets = false,
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = false,
                     classGraph = false,
                     runtimeCallGraph = true,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = "",
-                    ownerMapEntriesDirectory = ownerMapEntriesDirectory,
                 ),
             ),
             ClassReader.EXPAND_FRAMES,
         )
         return writer.toByteArray()
+    }
+
+    private fun collectInstrumentedMethods(bytes: ByteArray): Set<String> {
+        val methods = linkedSetOf<String>()
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor {
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitMethodInsn(
+                            opcodeAndSource: Int,
+                            owner: String,
+                            methodName: String,
+                            descriptor: String,
+                            isInterface: Boolean,
+                        ) {
+                            if (owner == JANK_HUNTER_HOOKS && methodName == "enterMethod") methods += name
+                        }
+                    }
+                }
+            },
+            0,
+        )
+        return methods
     }
 
     private fun collectMethodStats(bytes: ByteArray): MethodStats {
@@ -158,6 +177,52 @@ class RuntimeCallGraphInstrumentationTest {
 
         writer.visitEnd()
         return writer.toByteArray()
+    }
+
+    private fun javaEnumFixture(): ByteArray {
+        val className = "example/State"
+        val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(
+            Opcodes.V17,
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_FINAL or Opcodes.ACC_SUPER or Opcodes.ACC_ENUM,
+            className,
+            null,
+            "java/lang/Enum",
+            null,
+        )
+        writer.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "values", "()[L$className;", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "valueOf",
+            "(Ljava/lang/String;)L$className;",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitMethod(Opcodes.ACC_PUBLIC, "calculate", "()I", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.ICONST_1)
+            visitInsn(Opcodes.IRETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private companion object {
+        const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
     }
 
     private data class MethodStats(

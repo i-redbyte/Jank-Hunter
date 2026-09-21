@@ -17,12 +17,19 @@ internal class JankHunterLogExporter(
     private val context: Context,
     private val sourceDirectory: File = File(context.filesDir, JANK_HUNTER_DIRECTORY),
     private val exportDirectory: File = File(context.cacheDir, EXPORT_DIRECTORY),
+    private val captureCurrentLogPaths: () -> List<String>? = {
+        JankHunter.captureLogSnapshot()?.logPaths
+    },
 ) {
     fun createArchive(): File? {
+        val snapshotPaths = captureCurrentLogPaths() ?: return null
+        val sealedLogs = snapshotPaths.mapTo(hashSetOf()) { path ->
+            runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+        }
         val artifacts = sourceDirectory
             .walkTopDown()
             .filter(File::isFile)
-            .filter(::isDiagnosticArtifact)
+            .filter { file -> isDiagnosticArtifact(file, sealedLogs) }
             .sortedBy { it.relativeTo(sourceDirectory).invariantSeparatorsPath }
             .toList()
         if (artifacts.isEmpty()) return null
@@ -60,8 +67,12 @@ internal class JankHunterLogExporter(
         )
     }
 
-    private fun isDiagnosticArtifact(file: File): Boolean {
-        return file.extension.lowercase(Locale.US) in DIAGNOSTIC_EXTENSIONS
+    private fun isDiagnosticArtifact(file: File, sealedLogs: Set<String>): Boolean {
+        return when (file.extension.lowercase(Locale.US)) {
+            JHLOG_EXTENSION -> runCatching { file.canonicalPath }.getOrElse { file.absolutePath } in sealedLogs
+            HPROF_EXTENSION -> true
+            else -> false
+        }
     }
 
     private companion object {
@@ -69,7 +80,8 @@ internal class JankHunterLogExporter(
         const val EXPORT_DIRECTORY = "jankhunter-share"
         const val ARCHIVE_MIME_TYPE = "application/zip"
         const val COPY_BUFFER_BYTES = 64 * 1024
-        val DIAGNOSTIC_EXTENSIONS = setOf("jhlog", "hprof")
+        const val JHLOG_EXTENSION = "jhlog"
+        const val HPROF_EXTENSION = "hprof"
     }
 }
 
@@ -77,7 +89,6 @@ internal class JankHunterShareLauncher(
     private val activity: Activity,
 ) {
     fun share() {
-        JankHunter.flush()
         Toast.makeText(activity, R.string.share_preparing, Toast.LENGTH_SHORT).show()
         Thread(
             {

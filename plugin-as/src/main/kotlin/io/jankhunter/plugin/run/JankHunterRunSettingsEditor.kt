@@ -28,7 +28,7 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
     private val candidate = JBTextField()
     private val candidateLogScope = JComboBox(JankHunterLogScope.entries.toTypedArray())
     private val output = JBTextField()
-    private val ownerMap = JBTextField()
+    private val artifactsDir = JBTextField()
     private val mapping = JBTextField()
     private val classGraph = JBTextField()
     private val diagnostics = JBTextField()
@@ -59,7 +59,7 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         add(row++, "Candidate", candidate)
         add(row++, "Candidate scope", candidateLogScope)
         add(row++, "Output", output)
-        add(row++, "Owner map", ownerMap)
+        add(row++, "Artifacts directory", artifactsDir)
         add(row++, "Mapping", mapping)
         add(row++, "Class graph", classGraph)
         add(row++, "Diagnostics", diagnostics)
@@ -98,7 +98,7 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         candidate.text = configuration.candidate
         candidateLogScope.selectedItem = configuration.candidateLogScope
         output.text = configuration.output
-        ownerMap.text = configuration.ownerMap
+        artifactsDir.text = configuration.artifactsDir
         mapping.text = configuration.mapping
         classGraph.text = configuration.classGraph
         diagnostics.text = configuration.diagnostics
@@ -129,7 +129,7 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         configuration.candidate = candidate.text
         configuration.candidateLogScope = candidateLogScope.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
         configuration.output = output.text
-        configuration.ownerMap = ownerMap.text
+        configuration.artifactsDir = artifactsDir.text
         configuration.mapping = mapping.text
         configuration.classGraph = classGraph.text
         configuration.diagnostics = diagnostics.text

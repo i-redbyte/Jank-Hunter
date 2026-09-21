@@ -1,12 +1,20 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
+import io.jankhunter.runtime.internal.io.Jhlog
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import java.util.zip.GZIPInputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,31 +26,61 @@ class RuntimeHookEventTransportTest {
         assertTrue(transport.flushBlocking(5_000L))
         assertEquals(
             transport.acceptedForTest(),
-            transport.emittedForTest() + transport.acceptedLossForTest(),
+            transport.emittedForTest(),
         )
+        assertEquals(0L, transport.acceptedLossForTest())
         assertEquals(10_000L, transport.attemptedForTest())
     }
 
     @Test
-    fun counterAndLogCardinalityLossRemainComplete() = withTransport(
+    fun cardinalityBoundariesFlushPartialAggregatesWithoutLoss() = withTransport(
         maxCounterKeys = 1,
         maxLogSpamKeys = 1,
     ) { transport ->
         assertTrue(transport.recordMethod(1L, "one"))
         assertTrue(transport.recordMethod(2L, "two"))
-        assertTrue(transport.recordLogSpam("screen", "owner", "flow", "step", "source-a", 3))
-        assertTrue(transport.recordLogSpam("screen", "owner", "flow", "step", "source-b", 3))
+        assertTrue(transport.recordLogSpam("screen", "owner", "source-a", 3))
+        assertTrue(transport.recordLogSpam("screen", "owner", "source-b", 3))
 
         assertTrue(transport.flushBlocking(2_000L))
         assertEquals(4L, transport.acceptedForTest())
-        assertEquals(transport.acceptedForTest(), transport.emittedForTest() + transport.acceptedLossForTest())
-        assertTrue(transport.acceptedLossForTest() >= 2L)
+        assertEquals(transport.acceptedForTest(), transport.emittedForTest())
+        assertEquals(0L, transport.acceptedLossForTest())
     }
 
     @Test
-    fun thirtyTwoProducersNeverWaitForConsumer() = withTransport { transport ->
-        val producerCount = 32
-        val eventsPerProducer = 2_000
+    fun methodNameIsEmbeddedWithTheFirstEvent() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-symbol").toFile()
+        val writer = writer(directory)
+        val transport = RuntimeHookEventTransport({ 16 }, { 16 })
+        transport.start(writer)
+        try {
+            assertTrue(transport.recordMethod(42L, "example.Symbol.call"))
+            assertTrue(transport.stopAndFlush(5_000L))
+            assertTrue(writer.close())
+
+            assertEquals(1L, transport.acceptedForTest())
+            assertEquals(1L, transport.emittedForTest())
+            val file = directory.listFiles { candidate -> candidate.extension == "jhlog" }.orEmpty().single()
+            val decoded = decodedChunks(file.readBytes())
+            assertTrue(
+                "stable symbol tokens were not embedded",
+                decoded.containsSubsequence("example".toByteArray()) &&
+                    decoded.containsSubsequence("Symbol".toByteArray()) &&
+                    decoded.containsSubsequence("call".toByteArray()),
+            )
+        } finally {
+            transport.stopAndFlush(5_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun oneHundredSixtyProducersAreRegisteredAndFlushedWithoutLoss() = withTransport { transport ->
+        val producerCount = 160
+        val eventsPerProducer = 400
         val pool = Executors.newFixedThreadPool(producerCount)
         val start = CountDownLatch(1)
         val done = CountDownLatch(producerCount)
@@ -57,10 +95,41 @@ class RuntimeHookEventTransportTest {
                 }
             }
             start.countDown()
-            assertTrue("producer progress timed out", done.await(10, TimeUnit.SECONDS))
+            assertTrue("producer progress timed out", done.await(15, TimeUnit.SECONDS))
             assertEquals((producerCount * eventsPerProducer).toLong(), transport.attemptedForTest())
+            assertTrue(transport.flushBlocking(10_000L))
+            assertEquals(transport.acceptedForTest(), transport.emittedForTest())
+            assertEquals(0L, transport.acceptedLossForTest())
         } finally {
             pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun exactBufferBackpressurePreservesBurst() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-backpressure").toFile()
+        val writer = writer(directory)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            exactAdmission = { true },
+            admissionWaitNanos = { TimeUnit.SECONDS.toNanos(1L) },
+            consumerDelayNanos = TimeUnit.MILLISECONDS.toNanos(10L),
+        )
+        transport.start(writer)
+        try {
+            repeat(10_000) { event -> assertTrue(transport.recordMethod(event.toLong() and 7L, "method")) }
+            val observedBackpressure = transport.backpressureCountForTest()
+            assertTrue(transport.flushBlocking(10_000L))
+            assertEquals(10_000L, transport.acceptedForTest())
+            assertEquals(10_000L, transport.emittedForTest())
+            assertEquals(0L, transport.acceptedLossForTest())
+            assertTrue(observedBackpressure > 0L)
+        } finally {
+            transport.stopAndFlush(5_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
         }
     }
 
@@ -80,6 +149,304 @@ class RuntimeHookEventTransportTest {
         transport.clear()
         writer.close()
         directory.deleteRecursively()
+    }
+
+    @Test
+    fun exactShutdownHonorsTimeoutForConsumerFrontier() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-shutdown-frontier").toFile()
+        val writer = writer(directory)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            exactAdmission = { true },
+            consumerDelayNanos = TimeUnit.MILLISECONDS.toNanos(100L),
+        )
+        transport.start(writer)
+        try {
+            assertTrue(transport.recordMethod(1L, "method"))
+
+            val startedAtNs = System.nanoTime()
+            assertFalse(transport.stopAndFlush(timeoutMs = 1L))
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNs) < 1_000L)
+            assertTrue(transport.stopAndFlush(timeoutMs = 2_000L))
+        } finally {
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun clearDefersSharedStateResetUntilTimedOutConsumerStops() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-deferred-clear").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            exactAdmission = { true },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await()
+            },
+        )
+        transport.start(writer)
+        val consumer = requireNotNull(transport.consumerForTest())
+        try {
+            assertTrue(consumerEntered.await(2L, TimeUnit.SECONDS))
+            assertFalse(transport.stopAndFlush(timeoutMs = 1L))
+
+            transport.clear()
+
+            assertTrue(transport.consumerForTest() === consumer)
+        } finally {
+            releaseConsumer.countDown()
+            consumer.join(2_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+        assertFalse(consumer.isAlive)
+    }
+
+    @Test
+    fun timedOutShutdownEventuallyDrainsPublisherAdmittedAtTheShutdownBoundary() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-admission-frontier").toFile()
+        val writer = writer(directory)
+        val admitted = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            exactAdmission = { true },
+            publisherAdmissionObserver = {
+                admitted.countDown()
+                assertTrue("publisher release timed out", release.await(5L, TimeUnit.SECONDS))
+            },
+        )
+        val executor = Executors.newFixedThreadPool(2)
+        transport.start(writer)
+        try {
+            val publisher = executor.submit<Boolean> { transport.recordMethod(1L, "method") }
+            assertTrue("publisher was not admitted", admitted.await(5L, TimeUnit.SECONDS))
+            val shutdown = executor.submit<Boolean> { transport.stopAndFlush(timeoutMs = 1L) }
+            awaitPublisherGateClosed(transport)
+            assertFalse("blocked publisher unexpectedly completed shutdown", shutdown.get(5L, TimeUnit.SECONDS))
+
+            release.countDown()
+
+            assertTrue("admitted publisher was rejected", publisher.get(5L, TimeUnit.SECONDS))
+            assertTrue("late drain did not finish", transport.stopAndFlush(timeoutMs = 5_000L))
+            assertEquals(1L, transport.acceptedForTest())
+            assertEquals(1L, transport.emittedForTest())
+            assertEquals(0L, transport.acceptedLossForTest())
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerFailureClosesAdmissionAndAccountsForStrandedEvents() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-consumer-failure").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val failConsumer = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            exactAdmission = { true },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                assertTrue("consumer failure trigger timed out", failConsumer.await(5L, TimeUnit.SECONDS))
+                error("injected consumer failure")
+            },
+        )
+        transport.start(writer)
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            assertTrue(transport.recordMethod(1L, "method"))
+
+            failConsumer.countDown()
+            awaitConsumerStopped(transport)
+
+            assertFalse(transport.acceptingPublishersForTest())
+            assertFalse(transport.recordMethod(2L, "after failure"))
+            assertFalse("flush reported success after consumer failure", transport.flushBlocking(1L))
+            assertEquals(1L, transport.acceptedForTest())
+            assertEquals(0L, transport.emittedForTest())
+            assertEquals(1L, transport.acceptedLossForTest())
+            assertEquals(0, transport.registeredProducerCountForTest())
+        } finally {
+            failConsumer.countDown()
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerFailureWithoutAcceptedEventsDoesNotInventLoss() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-empty-failure").toFile()
+        val writer = writer(directory)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            consumerLoopObserver = { error("injected consumer failure") },
+        )
+        transport.start(writer)
+        try {
+            awaitConsumerStopped(transport)
+
+            assertEquals(0L, transport.acceptedForTest())
+            assertEquals(0L, transport.emittedForTest())
+            assertEquals(0L, transport.acceptedLossForTest())
+            assertEquals(0, transport.registeredProducerCountForTest())
+        } finally {
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerReferenceIsPublishedBeforeConsumerCanTerminate() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-start-order").toFile()
+        val writer = writer(directory)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            consumerLoopObserver = { error("injected immediate consumer failure") },
+            consumerThreadFactory = { runnable, name ->
+                object : Thread(runnable, name) {
+                    override fun start() {
+                        super.start()
+                        join(5_000L)
+                    }
+                }
+            },
+        )
+        try {
+            transport.start(writer)
+
+            assertEquals(null, transport.consumerForTest())
+            assertFalse(transport.acceptingPublishersForTest())
+            assertFalse(transport.flushBlocking(1L))
+        } finally {
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerStartFailureAccountsForEventsAdmittedAtStartBoundary() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-start-failure").toFile()
+        val writer = writer(directory)
+        val failure = IllegalStateException("injected thread start failure")
+        lateinit var transport: RuntimeHookEventTransport
+        transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            consumerThreadFactory = { runnable, name ->
+                object : Thread(runnable, name) {
+                    override fun start() {
+                        assertTrue(transport.recordMethod(1L, "admitted-during-start"))
+                        throw failure
+                    }
+                }
+            },
+        )
+        try {
+            assertSame(failure, assertThrows(IllegalStateException::class.java) { transport.start(writer) })
+
+            assertEquals(null, transport.consumerForTest())
+            assertFalse(transport.acceptingPublishersForTest())
+            assertEquals(1L, transport.acceptedForTest())
+            assertEquals(1L, transport.acceptedLossForTest())
+            assertEquals(0, transport.registeredProducerCountForTest())
+        } finally {
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun producerCannotRegisterBufferAfterConcurrentClear() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-late-registration").toFile()
+        val writer = writer(directory)
+        val registrationEntered = CountDownLatch(1)
+        val releaseRegistration = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            producerRegistrationObserver = {
+                registrationEntered.countDown()
+                assertTrue("producer registration release timed out", releaseRegistration.await(5L, TimeUnit.SECONDS))
+            },
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        transport.start(writer)
+        try {
+            val publisher = executor.submit<Boolean> { transport.recordMethod(1L, "method") }
+            assertTrue("producer did not reach registration", registrationEntered.await(5L, TimeUnit.SECONDS))
+
+            transport.clear()
+            awaitConsumerStopped(transport)
+            releaseRegistration.countDown()
+
+            assertFalse(publisher.get(5L, TimeUnit.SECONDS))
+            assertEquals(0, transport.registeredProducerCountForTest())
+        } finally {
+            releaseRegistration.countDown()
+            executor.shutdownNow()
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerDoesNotSwallowFatalVmFailure() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-fatal-consumer").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val uncaught = CountDownLatch(1)
+        val failure = AtomicReference<Throwable>()
+        val fatal = FatalConsumerError()
+        val transport = RuntimeHookEventTransport(
+            maxCounterKeys = { 16 },
+            maxLogSpamKeys = { 16 },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                releaseConsumer.await(5L, TimeUnit.SECONDS)
+                throw fatal
+            },
+        )
+        transport.start(writer)
+        try {
+            assertTrue(consumerEntered.await(5L, TimeUnit.SECONDS))
+            checkNotNull(transport.consumerForTest()).uncaughtExceptionHandler =
+                Thread.UncaughtExceptionHandler { _, throwable ->
+                    failure.set(throwable)
+                    uncaught.countDown()
+                }
+            releaseConsumer.countDown()
+
+            assertTrue("fatal consumer failure was swallowed", uncaught.await(5L, TimeUnit.SECONDS))
+            assertSame(fatal, failure.get())
+        } finally {
+            releaseConsumer.countDown()
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
     }
 
     private fun withTransport(
@@ -102,7 +469,7 @@ class RuntimeHookEventTransportTest {
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {
-        return AsyncLogWriter.open(
+        return AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder()
                 .autoStartCollectors(false)
@@ -111,4 +478,72 @@ class RuntimeHookEventTransportTest {
             "main",
         )
     }
+
+    private fun awaitPublisherGateClosed(transport: RuntimeHookEventTransport) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
+        while (transport.acceptingPublishersForTest()) {
+            assertTrue("publisher gate did not close", System.nanoTime() < deadline)
+            Thread.yield()
+        }
+    }
+
+    private fun awaitConsumerStopped(transport: RuntimeHookEventTransport) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
+        while (transport.consumerForTest()?.isAlive == true) {
+            assertTrue("consumer did not stop", System.nanoTime() < deadline)
+            Thread.yield()
+        }
+    }
+
+    private fun decodedChunks(file: ByteArray): ByteArray {
+        if (file.size < Jhlog.FILE_MAGIC.size + Int.SIZE_BYTES * 2) return ByteArray(0)
+        val headerLength = readUInt32Le(file, Jhlog.FILE_MAGIC.size)
+        var offset = Jhlog.FILE_MAGIC.size + Int.SIZE_BYTES * 2 + headerLength
+        val decoded = ByteArrayOutputStream()
+        while (offset + Jhlog.CHUNK_HEADER_BYTES <= file.size) {
+            val flags = readUInt16Le(file, offset + 6)
+            val storedLength = readUInt32Le(file, offset + 12)
+            val payloadStart = offset + Jhlog.CHUNK_HEADER_BYTES
+            val trailerStart = payloadStart + storedLength
+            val chunkEnd = trailerStart + Jhlog.COMMIT_TRAILER_BYTES
+            if (storedLength < 0 || trailerStart < payloadStart || chunkEnd > file.size) break
+            val stored = file.copyOfRange(payloadStart, trailerStart)
+            if (flags and Jhlog.CHUNK_FLAG_GZIP != 0) {
+                GZIPInputStream(ByteArrayInputStream(stored)).use { input -> input.copyTo(decoded) }
+            } else {
+                decoded.write(stored)
+            }
+            offset = chunkEnd
+        }
+        return decoded.toByteArray()
+    }
+
+    private fun readUInt16Le(bytes: ByteArray, offset: Int): Int {
+        return (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl Byte.SIZE_BITS)
+    }
+
+    private fun readUInt32Le(bytes: ByteArray, offset: Int): Int {
+        var value = 0
+        repeat(Int.SIZE_BYTES) { index ->
+            value = value or ((bytes[offset + index].toInt() and 0xff) shl (index * Byte.SIZE_BITS))
+        }
+        return value
+    }
+
+    private fun ByteArray.containsSubsequence(expected: ByteArray): Boolean {
+        if (expected.isEmpty()) return true
+        for (start in 0..size - expected.size) {
+            var matches = true
+            for (index in expected.indices) {
+                if (this[start + index] != expected[index]) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) return true
+        }
+        return false
+    }
+
+    private class FatalConsumerError : VirtualMachineError()
 }

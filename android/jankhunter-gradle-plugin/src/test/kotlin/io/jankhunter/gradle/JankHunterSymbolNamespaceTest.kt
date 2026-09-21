@@ -14,7 +14,7 @@ class JankHunterSymbolNamespaceTest {
         )
 
         assertEquals(applicationNamespace, libraryNamespace)
-        assertEquals("cc6c2381e34f93b6d6ec77dfc82be37c", applicationNamespace)
+        assertEquals("883f693e017ddfa095fd73c4126020db", applicationNamespace)
         assertTrue(applicationNamespace.matches(Regex("[0-9a-f]{32}")))
     }
 
@@ -25,7 +25,9 @@ class JankHunterSymbolNamespaceTest {
 
         assertNotEquals(
             namespace,
-            JankHunterSymbolNamespace.generate(contract.copy(ownerMapFormat = contract.ownerMapFormat + 1)),
+            JankHunterSymbolNamespace.generate(
+                contract.copy(embeddedSymbolFormat = contract.embeddedSymbolFormat + 1),
+            ),
         )
         assertNotEquals(
             namespace,

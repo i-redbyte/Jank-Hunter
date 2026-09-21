@@ -1,5 +1,7 @@
 package io.jankhunter.sample
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -28,7 +30,6 @@ import io.jankhunter.sample.manual.ManualControlsViewModel
 import io.jankhunter.sample.ui.ManualControlsScreen
 import io.jankhunter.sample.ui.SampleTheme
 import io.jankhunter.sample.ui.ScenarioScreen
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.launch
 
 internal class MainActivity : ComponentActivity() {
@@ -76,6 +77,12 @@ internal class MainActivity : ComponentActivity() {
                                     ManualControlsEffect.ShareDiagnostics -> {
                                         JankHunterShareLauncher(this@MainActivity).share()
                                     }
+                                    ManualControlsEffect.OpenCustomViewLab -> {
+                                        startActivity(Intent(this@MainActivity, CustomViewJankActivity::class.java))
+                                    }
+                                    ManualControlsEffect.OpenComposeLab -> {
+                                        startActivity(Intent(this@MainActivity, ComposeJankActivity::class.java))
+                                    }
                                 }
                             }
                         }
@@ -98,7 +105,7 @@ internal class MainActivity : ComponentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         window.decorView.post {
-            JankHunter.setScreen(scenarioViewModel.currentScreenName())
+            JankHunterTelemetry.setScreen(scenarioViewModel.currentScreenName())
         }
     }
 

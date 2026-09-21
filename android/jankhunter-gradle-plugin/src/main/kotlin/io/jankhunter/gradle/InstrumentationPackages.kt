@@ -2,19 +2,20 @@ package io.jankhunter.gradle
 
 internal object InstrumentationPackages {
     val builtinExcludePrefixes: List<String> = listOf(
-        "android.",
-        "androidx.",
-        "java.",
-        "javax.",
-        "kotlin.",
-        "kotlinx.",
-        "okhttp3.",
-        "okio.",
-        "org.jetbrains.",
-        "io.jankhunter.annotations.",
-        "io.jankhunter.gradle.",
-        "io.jankhunter.okhttp3.",
-        "io.jankhunter.runtime.",
+        "android",
+        "androidx",
+        "java",
+        "javax",
+        "kotlin",
+        "kotlinx",
+        "okhttp3",
+        "okio",
+        "org.jetbrains",
+        "io.jankhunter.annotations",
+        "io.jankhunter.gradle",
+        "io.jankhunter.okhttp3",
+        "io.jankhunter.runtime",
+        "io.jankhunter.workmanager",
     )
 
     fun effectiveIncludes(
@@ -41,7 +42,13 @@ internal object InstrumentationPackages {
 
     fun isBuiltinExcluded(value: String): Boolean {
         val normalized = normalizePackage(value)
-        return builtinExcludePrefixes.any { normalized.startsWith(it) }
+        return builtinExcludePrefixes.any { packageName -> matchesPackageBoundary(normalized, packageName) }
+    }
+
+    fun matchesPackageBoundary(className: String, packageName: String): Boolean {
+        return className == packageName ||
+            className.length > packageName.length && className.startsWith(packageName) &&
+            className[packageName.length] == '.'
     }
 
     fun isGeneratedAndroidClass(value: String): Boolean {

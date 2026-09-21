@@ -36,7 +36,15 @@ internal fun Project.configureJvm17() {
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
+            freeCompilerArgs.add("-Xjdk-release=17")
         }
+    }
+    configureKotlinWarnings()
+}
+
+internal fun Project.configureKotlinWarnings() {
+    tasks.withType<KotlinCompile>().configureEach {
+        compilerOptions.allWarningsAsErrors.set(true)
     }
 }
 
@@ -50,6 +58,7 @@ class JankHunterAndroidLibraryPlugin : Plugin<Project> {
         pluginManager.apply("maven-publish")
         configureJankHunterDetekt()
         configureJankHunterPublishing()
+        configureKotlinWarnings()
 
         extensions.configure<LibraryExtension> {
             compileSdk = catalogVersion("android-compile-sdk").toInt()
@@ -84,6 +93,7 @@ class JankHunterAndroidApplicationPlugin : Plugin<Project> {
         pluginManager.apply("com.android.application")
         pluginManager.apply("org.jetbrains.kotlin.plugin.compose")
         configureJankHunterDetekt()
+        configureKotlinWarnings()
 
         extensions.configure<ApplicationExtension> {
             compileSdk = catalogVersion("android-compile-sdk").toInt()
@@ -134,5 +144,13 @@ class JankHunterKotlinGradlePlugin : Plugin<Project> {
         configureJankHunterDetekt()
         configureJankHunterPublishing()
         configureJvm17()
+    }
+}
+
+class JankHunterCliPackagePlugin : Plugin<Project> {
+    override fun apply(target: Project) = with(target) {
+        pluginManager.apply("base")
+        pluginManager.apply("maven-publish")
+        configureJankHunterPublishing()
     }
 }

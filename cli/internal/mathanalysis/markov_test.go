@@ -40,6 +40,29 @@ func TestBuildMarkovModelClassifiesKnownSequence(t *testing.T) {
 	}
 }
 
+func TestMarkovDurationAggregationsSaturateInsteadOfWrapping(t *testing.T) {
+	states := []MarkovBucketState{
+		{TimeMS: 0, DurationMS: maxUint64Value - 5, State: markovJanky},
+		{TimeMS: maxUint64Value - 5, DurationMS: 10, State: markovJanky},
+		{TimeMS: maxUint64Value, DurationMS: 1, State: markovHealthy},
+	}
+
+	if got := markovTotalDurationMS(states); got != maxUint64Value {
+		t.Fatalf("markovTotalDurationMS() = %d, want saturation at %d", got, uint64(maxUint64Value))
+	}
+	if got := markovBadStateDurationMS(states); got != maxUint64Value {
+		t.Fatalf("markovBadStateDurationMS() = %d, want saturation at %d", got, uint64(maxUint64Value))
+	}
+	exposures := markovStateExposures(states)
+	if len(exposures) != 1 || exposures[0].DurationMS != maxUint64Value {
+		t.Fatalf("markovStateExposures() = %+v, want saturated bad duration", exposures)
+	}
+	recoveryMS, ok := markovExpectedRecoveryMS(states)
+	if !ok || recoveryMS != float64(maxUint64Value) {
+		t.Fatalf("markovExpectedRecoveryMS() = %.0f, %v; want %.0f, true", recoveryMS, ok, float64(maxUint64Value))
+	}
+}
+
 func TestBuildMarkovModelMarksNetworkLoopWindow(t *testing.T) {
 	timeline := []TimelineBucket{
 		{StartMS: 0, EndMS: 1000, HTTPCount: 1},
@@ -58,10 +81,10 @@ func TestBuildMarkovModelMarksNetworkLoopWindow(t *testing.T) {
 func TestBuildMarkovModelDisablesForecastForIndependentRuns(t *testing.T) {
 	model := buildMarkovModelForRuns(markovForecastTimeline(30, func(int) bool { return false }), nil, 3)
 
-	if model.IndependentRunCount != 3 || model.SequenceComparable || len(model.Transitions) != 0 || model.Forecast.Direction != markovForecastInsufficient || model.Forecast.HorizonWindows != 0 {
+	if model.TimelineGroupCount != 3 || model.IndependentRunCount != 0 || model.SequenceComparable || len(model.Transitions) != 0 || model.Forecast.Direction != markovForecastInsufficient || model.Forecast.HorizonWindows != 0 {
 		t.Fatalf("multi-run forecast must be disabled: %+v", model)
 	}
-	if model.Confidence != "low" || !strings.Contains(model.ConfidenceReason, "прогоны: 3") {
+	if model.Confidence != "low" || !strings.Contains(model.ConfidenceReason, "шкалы: 3") {
 		t.Fatalf("multi-run confidence reason is missing: %+v", model)
 	}
 }
@@ -252,7 +275,7 @@ func TestBuildMarkovModelForecastKeepsStableProblemsVisible(t *testing.T) {
 	if model.Forecast.Direction != markovForecastStable {
 		t.Fatalf("Direction = %q, want stable: %+v", model.Forecast.Direction, model.Forecast)
 	}
-	if !strings.Contains(model.Forecast.Label, "не подтверждены") {
+	if !strings.Contains(model.Forecast.Label, "не подтверждено") {
 		t.Fatalf("Label = %q, want no confirmed trajectory", model.Forecast.Label)
 	}
 }

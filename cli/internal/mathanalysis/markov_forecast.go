@@ -72,7 +72,7 @@ func buildMarkovForecast(model MarkovModel) MarkovForecast {
 		ProjectedBadProbability: projectedExposure,
 	}
 	forecast.Summary = fmt.Sprintf(
-		"При сохранении текущего характера переходов на горизонте %d интервалов (около %.1f с) вероятность плохого состояния оценивается в %.1f%%. В первых %d интервалах плохие состояния занимали %.1f%% времени, в последних %d — %.1f%%.",
+		"Проекция внутри наблюдаемого прогона при сохранении эмпирической матрицы переходов на горизонте %d интервалов (около %.1f с) даёт модельную долю плохих состояний %.1f%%. Это не калиброванный прогноз будущего запуска. В первых %d интервалах плохие состояния занимали %.1f%% времени, в последних %d - %.1f%%.",
 		horizonWindows,
 		float64(horizonMS)/1000,
 		projectedExposure*100,
@@ -221,16 +221,16 @@ func markovForecastConfidence(model MarkovModel, direction string, observedDelta
 func markovForecastLabel(model MarkovModel, direction string, recentExposure, projectedExposure float64) string {
 	switch direction {
 	case markovForecastDegrading:
-		return "Есть сигнал возможной деградации"
+		return "Есть признак возможного ухудшения"
 	case markovForecastImproving:
 		return "Есть сигнал возможного улучшения"
 	case markovForecastUncertain:
 		return "Траектория приложения неоднозначна"
 	case markovForecastStable:
 		if markovStatus(model) == "ok" && recentExposure <= 0.10 && projectedExposure <= 0.10 {
-			return "Деградация не подтверждена, состояние в норме"
+			return "Ухудшение не подтверждено, состояние в норме"
 		}
-		return "Устойчивое улучшение или деградация не подтверждены"
+		return "Устойчивое улучшение или ухудшение не подтверждено"
 	default:
 		return "Недостаточно данных"
 	}

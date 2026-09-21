@@ -28,24 +28,6 @@ internal data class DependencyInjectionEdgeRecord(
 )
 
 internal object DependencyInjectionClassMatcher {
-    fun shouldScan(
-        classData: ClassData,
-        includePackages: Iterable<String>,
-        includeWholeApplication: Boolean = false,
-    ): Boolean {
-        if (InstrumentationPackages.isGeneratedAndroidClass(classData.className)) return false
-        if (classData.className.normalizedClassName().startsWith("io.jankhunter.")) return false
-        if (isGeneratedDiClass(classData)) return true
-        val className = classData.className.normalizedClassName()
-        if (includeWholeApplication) {
-            return !InstrumentationPackages.isBuiltinExcluded(className)
-        }
-        return includePackages
-            .map { it.normalizedClassName() }
-            .filter(String::isNotEmpty)
-            .any { include -> className == include || className.startsWith("$include.") }
-    }
-
     fun isGeneratedDiClass(classData: ClassData): Boolean {
         return isGeneratedDiClass(
             className = classData.className,
@@ -142,7 +124,7 @@ internal object DependencyInjectionCatalogWriter {
             append("{\"format\":")
             append(ArtifactSchemas.DEPENDENCY_INJECTION_CATALOG_FORMAT)
             append(",\"kind\":\"metadata\",\"variant\":\"")
-            append(escape(variantName))
+            append(escapeJsonString(variantName))
             append("\",\"semantics\":\"build_time_di\"")
             append(",\"edgeDirection\":\"consumer_to_dependency\"")
             append(",\"runtimeTracing\":false,\"affectsScore\":false}")
@@ -154,7 +136,7 @@ internal object DependencyInjectionCatalogWriter {
             append("{\"format\":")
             append(ArtifactSchemas.DEPENDENCY_INJECTION_CATALOG_FORMAT)
             append(",\"kind\":\"class\",\"name\":\"")
-            append(escape(record.name))
+            append(escapeJsonString(record.name))
             append("\",\"framework\":\"")
             append(record.framework.wireName)
             append("\",\"roles\":")
@@ -174,19 +156,19 @@ internal object DependencyInjectionCatalogWriter {
             append("{\"format\":")
             append(ArtifactSchemas.DEPENDENCY_INJECTION_CATALOG_FORMAT)
             append(",\"kind\":\"edge\",\"consumer\":\"")
-            append(escape(record.consumer))
+            append(escapeJsonString(record.consumer))
             append("\",\"dependency\":\"")
-            append(escape(record.dependency))
+            append(escapeJsonString(record.dependency))
             append("\",\"framework\":\"")
             append(record.framework.wireName)
             append("\",\"injectionKind\":\"")
-            append(escape(record.injectionKind))
+            append(escapeJsonString(record.injectionKind))
             append("\",\"site\":\"")
-            append(escape(record.site))
+            append(escapeJsonString(record.site))
             append("\",\"qualifiers\":")
             append(array(record.qualifiers))
             append(",\"resolution\":\"")
-            append(escape(record.resolution))
+            append(escapeJsonString(record.resolution))
             append("\"}")
         }
     }
@@ -198,15 +180,7 @@ internal object DependencyInjectionCatalogWriter {
             .filter(String::isNotEmpty)
             .distinct()
             .sorted()
-            .joinToString(prefix = "[", postfix = "]") { "\"${escape(it)}\"" }
+            .joinToString(prefix = "[", postfix = "]") { "\"${escapeJsonString(it)}\"" }
     }
 
-    private fun escape(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-    }
 }

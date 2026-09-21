@@ -1,11 +1,9 @@
 plugins {
+    alias(libs.plugins.ksp)
     id("io.jankhunter.android-application")
     id("io.jankhunter.android")
 }
 
-val sampleJankHunterEnabled = providers.gradleProperty("jankhunter.sample.enabled")
-    .map { it.toBooleanStrict() }
-    .orElse(true)
 val sampleArtTiMode = providers.gradleProperty("jankhunter.sample.artTiMode")
     .map { io.jankhunter.gradle.ArtTiMode.valueOf(it.uppercase()) }
     .orElse(io.jankhunter.gradle.ArtTiMode.CAUSAL)
@@ -15,72 +13,43 @@ android {
 
     defaultConfig {
         applicationId = "io.jankhunter.sample"
-        versionCode = 1
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro",
-            )
-        }
+        versionCode = 1yt
     }
 }
 
 jankHunter {
-    // Reproducible performance lanes:
-    //   -Pjankhunter.sample.enabled=false (SDK baseline)
-    //   -Pjankhunter.sample.artTiMode=OFF (SDK with agent disabled)
-    //   default / CAUSAL (recommended agent profile)
-    enabled.set(sampleJankHunterEnabled)
+    enabled.set(true)
     enabledBuildTypes.set(setOf("debug"))
-    autoInit.set(true)
+    profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)
+    packages("io.jankhunter.sample.graph")
+    storageLimitMiB(350)
+    debug {
+        enable(
+            io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS,
+            io.jankhunter.gradle.JankHunterFeature.MAIN_LOOPER,
+            io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+        )
+        privacyReviewed()
+    }
+
     artTi {
         mode.set(sampleArtTiMode)
     }
-    verboseLogs.set(true)
 
-    runtime {
-        mainThreadStallThresholdMs.set(150)
-        ownerBlockThresholdMs.set(100)
-        httpSlowThresholdMs.set(500)
-        jankFrameThresholdMs.set(32)
-        uiWindowP95ThresholdMs.set(32)
-        mainLooperDispatchMonitor.set(true)
-        jankStats.set(true)
-        mainProcessOnly.set(true)
-    }
-
-    instrument {
-        classGraph.set(true)
-        runtimeCallGraph.set(true)
-        methodCounters.set(false)
-        okhttp.set(true)
-        webSockets.set(true)
-        handlers.set(true)
-        executors.set(true)
-        coroutines.set(true)
-        flowInteractions.set(true)
-        lifecycleLeaks.set(true)
-        logSpam.set(true)
-        includeAndroidNamespace.set(false)
-        includePackages("io.jankhunter.sample.graph")
-    }
-
-    retainedHeapDump {
-        enabled.set(true)
-        privacyApproved.set(true)
-        minIntervalMs.set(1_000)
-        maxCount.set(1)
-        minRetainedAgeMs.set(1_000)
-    }
+    autoInit.set(true)
+    tuning.thresholds.mainThreadStallMs.set(150)
+    tuning.thresholds.ownerBlockMs.set(100)
+    tuning.thresholds.slowHttpMs.set(500)
+    tuning.heapDumps.minIntervalMs.set(1_000)
+    tuning.heapDumps.minRetainedAgeMs.set(1_000)
 }
 
 dependencies {
     implementation(project(":jankhunter-runtime"))
     implementation(project(":jankhunter-okhttp3"))
     implementation(libs.okhttp)
+    implementation(libs.androidx.room.runtime)
+    ksp("androidx.room:room-compiler:${libs.versions.room.get()}")
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.bundles.androidx.lifecycle)

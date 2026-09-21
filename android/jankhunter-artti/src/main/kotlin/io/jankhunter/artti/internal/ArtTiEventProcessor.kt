@@ -87,14 +87,14 @@ internal class ArtTiEventProcessor(
     private fun onNativeRecord(record: ArtTiNativeRecordView) {
         when (record.type) {
             JankHunterAgentEventType.AGENT_STATUS -> {
-                JankHunter.recordGauge("jankhunter.artti.agent_status", record.payload0)
+                JankHunter.recordIntegrationGauge("jankhunter.artti.agent_status", record.payload0)
             }
             JankHunterAgentEventType.AGENT_CAPABILITY -> onCapabilityRecord(record)
             JankHunterAgentEventType.AGENT_QUALITY_SNAPSHOT -> {
-                JankHunter.recordGauge("jankhunter.artti.queue.high_watermark", record.payload0)
-                JankHunter.recordGauge("jankhunter.artti.queue.full_total", record.payload1)
-                JankHunter.recordGauge("jankhunter.artti.queue.contention_total", record.payload2)
-                JankHunter.recordGauge("jankhunter.artti.native_other_loss_total", record.payload3)
+                JankHunter.recordIntegrationGauge("jankhunter.artti.queue.high_watermark", record.payload0)
+                JankHunter.recordIntegrationGauge("jankhunter.artti.queue.full_total", record.payload1)
+                JankHunter.recordIntegrationGauge("jankhunter.artti.queue.contention_total", record.payload2)
+                JankHunter.recordIntegrationGauge("jankhunter.artti.native_other_loss_total", record.payload3)
             }
             JankHunterAgentEventType.THREAD_END -> contexts.remove(record.threadToken)
             JankHunterAgentEventType.MONITOR_CONTENTION_INTERVAL -> onLongContention(
@@ -115,10 +115,10 @@ internal class ArtTiEventProcessor(
     private fun onCapabilityRecord(record: ArtTiNativeRecordView) {
         val requested = record.payload0
         val granted = record.payload3
-        JankHunter.recordGauge("jankhunter.artti.capabilities.requested", requested)
-        JankHunter.recordGauge("jankhunter.artti.capabilities.potential", record.payload1)
-        JankHunter.recordGauge("jankhunter.artti.capabilities.granted", record.payload2)
-        JankHunter.recordGauge("jankhunter.artti.capabilities.active", granted)
+        JankHunter.recordIntegrationGauge("jankhunter.artti.capabilities.requested", requested)
+        JankHunter.recordIntegrationGauge("jankhunter.artti.capabilities.potential", record.payload1)
+        JankHunter.recordIntegrationGauge("jankhunter.artti.capabilities.granted", record.payload2)
+        JankHunter.recordIntegrationGauge("jankhunter.artti.capabilities.active", granted)
         if ((granted and requested) != requested) onCapabilityDegraded()
     }
 

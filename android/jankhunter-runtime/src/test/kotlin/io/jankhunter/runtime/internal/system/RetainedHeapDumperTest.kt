@@ -8,9 +8,95 @@ import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RetainedHeapDumperTest {
+    @Test
+    fun fatalDumpFailureIsPropagatedAndReleasesTheReservation() {
+        val directory = tempDir()
+        val fatal = OutOfMemoryError("synthetic dump failure")
+        var failing = true
+        val dumper = RetainedHeapDumper(
+            directory, minIntervalMs = 0L, maxDumpCount = 1,
+            clock = { 1_000L }, wallClock = { 10L },
+            dumpHprof = { path ->
+                if (failing) throw fatal
+                File(path).writeText("recovered")
+            },
+        )
+        try {
+            assertSame(fatal, assertThrows(OutOfMemoryError::class.java) {
+                dumper.maybeDump("Owner", null, 1_000L, 1L)
+            })
+            assertTrue(directory.listFiles().isNullOrEmpty())
+            failing = false
+            assertTrue(dumper.maybeDump("Owner", null, 1_000L, 1L) is RetainedHeapDumper.Result.Dumped)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun boundsManagedHprofFilesAcrossDumperInstancesAndPreservesForeignFiles() {
+        val directory = tempDir()
+        val oldest = File(directory, "retained-10-OldActivity-1.hprof").apply { writeText("oldest") }
+        val previous = File(directory, "retained-20-PreviousActivity-1.hprof").apply { writeText("previous") }
+        val foreign = File(directory, "retained-manual.hprof").apply { writeText("foreign") }
+        val unrelated = File(directory, "memory.hprof").apply { writeText("unrelated") }
+        val dumper = RetainedHeapDumper(
+            directory = directory,
+            minIntervalMs = 0L,
+            maxDumpCount = 2,
+            clock = { 1_000L },
+            wallClock = { 30L },
+            dumpHprof = { path -> File(path).writeText("new") },
+        )
+
+        val result = dumper.maybeDump("NewActivity", "Owner", 5_000L, 1L)
+
+        assertTrue(result is RetainedHeapDumper.Result.Dumped)
+        assertFalse(oldest.exists())
+        assertTrue(previous.exists())
+        assertTrue(foreign.exists())
+        assertTrue(unrelated.exists())
+        assertEquals(
+            2,
+            directory.listFiles().orEmpty().count { file ->
+                file.name.startsWith("retained-") && file.name.endsWith(".hprof") && file != foreign
+            },
+        )
+    }
+
+    @Test
+    fun boundsManagedHprofFilesInExternalStorage() {
+        val root = tempDir()
+        val storage = ArtifactStorage(File(root, "external"))
+        val previous = File(storage.directory, "retained-999-PreviousActivity-1.hprof").apply {
+            parentFile?.mkdirs()
+            writeText("previous")
+        }
+        val foreign = File(storage.directory, "manual.hprof").apply { writeText("foreign") }
+        val dumper = RetainedHeapDumper(
+            directory = File(root, "fallback"),
+            binaryStorage = storage,
+            minIntervalMs = 0L,
+            maxDumpCount = 1,
+            clock = { 1_000L },
+            wallClock = { 20L },
+            dumpHprof = { path -> File(path).writeText("new") },
+        )
+
+        val result = dumper.maybeDump("NewActivity", "Owner", 5_000L, 1L)
+
+        assertTrue(result is RetainedHeapDumper.Result.Dumped)
+        assertTrue((result as RetainedHeapDumper.Result.Dumped).file.exists())
+        assertFalse(previous.exists())
+        assertTrue(foreign.exists())
+        assertEquals(1, storage.directory.listFiles().orEmpty().count { it.name.startsWith("retained-") })
+    }
+
     @Test
     fun writesHprofThroughExternalBinaryArtifactLifecycle() {
         val root = Files.createTempDirectory("jankhunter-heap-external").toFile()
@@ -37,6 +123,34 @@ class RetainedHeapDumperTest {
             assertEquals(0, storage.aborts)
             assertEquals(listOf(dumped.file.absolutePath), storage.retentionProtectedPaths)
             assertFalse("external storage must avoid creating fallback directory", fallbackDirectory.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun storageValveRedirectsFutureHeapArtifactsWithoutRecreatingDumper() {
+        val root = Files.createTempDirectory("jankhunter-heap-storage-switch").toFile()
+        try {
+            val first = ArtifactStorage(File(root, "first"))
+            val second = ArtifactStorage(File(root, "second"))
+            val dumper = RetainedHeapDumper(
+                directory = File(root, "fallback"),
+                binaryStorage = first,
+                minIntervalMs = 0L,
+                maxDumpCount = 1,
+                clock = { 1_000L },
+                wallClock = { 42L },
+                dumpHprof = { path -> File(path).writeText("hprof") },
+            )
+
+            dumper.switchBinaryStorage(second)
+            val result = dumper.maybeDump("Switched", "Owner", 5_000L, 1L)
+
+            assertTrue(result is RetainedHeapDumper.Result.Dumped)
+            assertTrue(first.directory.listFiles().isNullOrEmpty())
+            assertEquals(1, second.commits)
+            assertTrue((result as RetainedHeapDumper.Result.Dumped).file.path.startsWith(second.directory.path))
         } finally {
             root.deleteRecursively()
         }
@@ -122,19 +236,24 @@ class RetainedHeapDumperTest {
 
     @Test
     fun reportsFailureWithoutThrowingIntoRuntimeWatcher() {
+        val directory = tempDir()
         val dumper = RetainedHeapDumper(
-            directory = tempDir(),
+            directory = directory,
             minIntervalMs = 0L,
             maxDumpCount = 1,
             clock = { 1_000L },
             wallClock = { 42L },
-            dumpHprof = { error("boom") },
+            dumpHprof = { path ->
+                File(path).writeText("partial")
+                error("boom")
+            },
         )
 
         assertEquals(
             RetainedHeapDumper.Result.Failed("IllegalStateException"),
             dumper.maybeDump("A", "Owner", 1, 1),
         )
+        assertTrue(directory.listFiles().isNullOrEmpty())
     }
 
     @Test

@@ -49,7 +49,7 @@ class JankHunterDependencyValidatorTest {
     fun unrelatedBundleIsNotAcceptedAsRuntimeOrOkHttpHelper() {
         val components = listOf(
             "project :app",
-            "io.jankhunter:legacy-bundle:1.0.0",
+            "io.jankhunter:unrelated-bundle:1.0.0",
         )
 
         assertFalse(JankHunterDependencyValidator.hasJankHunterOkHttp3(components))

@@ -1,15 +1,7 @@
 package report
 
 import (
-	"fmt"
 	"strings"
-)
-
-type ReportStyle string
-
-const (
-	ReportStyleModern ReportStyle = "modern"
-	ReportStyleLegacy ReportStyle = "legacy"
 )
 
 var (
@@ -18,31 +10,10 @@ var (
 	compactModernCSS = compactStylesheet(modernCSS)
 )
 
-func ParseReportStyle(value string) (ReportStyle, error) {
-	switch ReportStyle(strings.ToLower(strings.TrimSpace(value))) {
-	case "", ReportStyleModern:
-		return ReportStyleModern, nil
-	case ReportStyleLegacy:
-		return ReportStyleLegacy, nil
-	default:
-		return "", fmt.Errorf("unknown report style %q; expected modern or legacy", value)
-	}
-}
-
-func (s ReportStyle) normalized() ReportStyle {
-	if s == ReportStyleLegacy {
-		return ReportStyleLegacy
-	}
-	return ReportStyleModern
-}
-
-func reportStylesheet(style ReportStyle, includeMath bool) string {
-	length := len(compactBaseCSS)
+func reportStylesheet(includeMath bool) string {
+	length := len(compactBaseCSS) + len(compactModernCSS)
 	if includeMath {
 		length += len(compactMathCSS)
-	}
-	if style.normalized() == ReportStyleModern {
-		length += len(compactModernCSS)
 	}
 	var builder strings.Builder
 	builder.Grow(length)
@@ -50,9 +21,7 @@ func reportStylesheet(style ReportStyle, includeMath bool) string {
 	if includeMath {
 		builder.WriteString(compactMathCSS)
 	}
-	if style.normalized() == ReportStyleModern {
-		builder.WriteString(compactModernCSS)
-	}
+	builder.WriteString(compactModernCSS)
 	return builder.String()
 }
 

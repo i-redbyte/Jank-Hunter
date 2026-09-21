@@ -1,8 +1,9 @@
 package io.jankhunter.sample.automatic
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.os.SystemClock
 import io.jankhunter.sample.graph.PerformanceScenarioUseCase
-import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 
@@ -14,7 +15,7 @@ internal class AutomaticUiCpuScenario(
         Thread(runnable, "SampleCpuWorker")
     }
     private val executor by lazy {
-        JankHunter.wrapExecutorService(
+        JankHunterTelemetry.wrapExecutorService(
             executorDelegate,
             "sample_cpu_queue",
             "sample.auto.cpu.executor",
@@ -40,38 +41,34 @@ internal class AutomaticUiCpuScenario(
 
     private fun runExecutorFlows() {
         executor.execute {
-            JankHunter.withFlow("sample.auto.cpu.sustained") {
-                JankHunter.markFlowStep("busy_1200_ms")
+            JankHunterTelemetry.traceOperation("sample.auto.cpu.busy_1200_ms") {
                 val checksum = graphScenario.calculateFor(CPU_WORK_MS)
-                JankHunter.recordGauge("sample.auto.cpu.checksum", checksum)
+                JankHunterTelemetry.gauge("sample.auto.cpu.checksum", checksum)
             }
         }
         repeat(QUEUE_TASK_COUNT) { index ->
             executor.execute {
-                JankHunter.withFlow("sample.auto.executor.queued") {
-                    JankHunter.markFlowStep("queued_task_$index")
+                JankHunterTelemetry.traceOperation("sample.auto.executor.queued_task_$index") {
                     SystemClock.sleep(QUEUE_TASK_MS)
-                    JankHunter.recordCounter("sample.auto.executor.task.completed.count", 1)
+                    JankHunterTelemetry.counter("sample.auto.executor.task.completed.count", 1)
                 }
             }
         }
     }
 
-    private fun runMainThreadStall(flow: String, step: String, durationMs: Long) {
-        JankHunter.withFlow(flow) {
-            JankHunter.markFlowStep(step)
+    private fun runMainThreadStall(operation: String, stage: String, durationMs: Long) {
+        JankHunterTelemetry.traceOperation("$operation.$stage") {
             graphScenario.renderFor(durationMs)
-            JankHunter.recordCounter("sample.auto.ui.stall.completed.count", 1)
+            JankHunterTelemetry.counter("sample.auto.ui.stall.completed.count", 1)
         }
     }
 
     private fun runJvmtiEvidence() {
-        JankHunter.withFlow("sample.auto.jvmti.monitor_contention") {
-            JankHunter.markFlowStep("wait_420_ms_with_gc")
+        JankHunterTelemetry.traceOperation("sample.auto.jvmti.monitor_contention") {
             val result = graphScenario.collectJvmtiEvidence(JVMTI_CONTENTION_MS)
-            JankHunter.recordCounter("sample.auto.jvmti.contention.completed.count", 1)
-            JankHunter.recordGauge("sample.auto.jvmti.contention.wait_ms", result.mainThreadWaitMs)
-            JankHunter.recordGauge("sample.auto.jvmti.allocation_bytes", result.allocatedBytes)
+            JankHunterTelemetry.counter("sample.auto.jvmti.contention.completed.count", 1)
+            JankHunterTelemetry.gauge("sample.auto.jvmti.contention.wait_ms", result.mainThreadWaitMs)
+            JankHunterTelemetry.gauge("sample.auto.jvmti.allocation_bytes", result.allocatedBytes)
         }
     }
 

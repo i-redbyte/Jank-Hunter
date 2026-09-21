@@ -20,13 +20,13 @@ func TestClassifiedBaseEventsRespectRuntimeProblemDecision(t *testing.T) {
 				Type:        jhlog.EventHTTP,
 				Flags:       uint64(jhlog.FlagHTTPClassified),
 				Attribution: attributionForTest(3, 1, 0, 0),
-				HTTP:        &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 5_000, Status: jhlog.Status2xx},
+				HTTP:        &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 5_000, Status: jhlog.Status2xx},
 			},
 			{
 				Type:        jhlog.EventUIWindow,
 				Flags:       uint64(jhlog.FlagUIClassified),
 				Attribution: attributionForTest(3, 1, 0, 0),
-				UIWindow:    &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 1_000, FrameCount: 60, JankCount: 5, P95MS: 80},
+				UIWindow:    &jhlog.UIWindowEvent{WindowMS: 1_000, FrameCount: 60, JankCount: 5, P95MS: 80},
 			},
 		},
 	}})
@@ -41,10 +41,10 @@ func TestUIProblemWindowUsesObservedP99AsMaximum(t *testing.T) {
 	summary := inspectLogsForTest("ui p99", []jhlog.Log{{
 		Dict: dict,
 		Events: []jhlog.Event{{
-			Type:  jhlog.EventUIWindow,
-			Flags: uint64(jhlog.FlagUIClassified | jhlog.FlagUIProblem),
+			Type:        jhlog.EventUIWindow,
+			Flags:       uint64(jhlog.FlagUIClassified | jhlog.FlagUIProblem),
+			Attribution: attributionForTest(1, 0, 0, 0),
 			UIWindow: &jhlog.UIWindowEvent{
-				ScreenID:   1,
 				WindowMS:   1_000,
 				FrameCount: 60,
 				JankCount:  2,
@@ -59,7 +59,7 @@ func TestUIProblemWindowUsesObservedP99AsMaximum(t *testing.T) {
 	}
 }
 
-func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
+func TestHeapDumpPauseIsExcludedFromApplicationStallMetrics(t *testing.T) {
 	dict := map[uint64]string{
 		1: "jankhunter.heap_dump.created.count",
 		2: "android.view.DisplayEventReceiver",
@@ -71,22 +71,19 @@ func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
 			{
 				Type:   jhlog.EventCounter,
 				TimeMS: 1_000,
-				Metric: &jhlog.MetricEvent{MetricID: 1, Value: 1},
+				Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(1), Value: 1},
 			},
 			{
-				Type:   jhlog.EventStall,
-				TimeMS: 1_200,
-				Stall:  &jhlog.StallEvent{OwnerID: 2, StackID: 3, DurationMS: 700},
+				Type:        jhlog.EventStall,
+				TimeMS:      1_200,
+				Attribution: attributionForTest(0, 2, 0, 0),
+				Stall:       &jhlog.StallEvent{StackRef: jhlog.LocalSymbol(3), DurationMS: 700},
 			},
 		},
 	}})
 
-	if len(summary.ProblemWindows) != 1 {
-		t.Fatalf("heap dump stall windows = %+v", summary.ProblemWindows)
-	}
-	window := summary.ProblemWindows[0]
-	if window.Owner != "jankhunter.heap_dump" || window.Flow != "jankhunter.diagnostics" || window.Step != "heap_dump" {
-		t.Fatalf("heap dump stall attribution = %+v", window)
+	if summary.StallCount != 0 || summary.StallMaxMS != 0 || len(summary.ProblemWindows) != 0 {
+		t.Fatalf("heap dump pause leaked into application stall metrics: %+v", summary)
 	}
 }
 
@@ -130,33 +127,6 @@ func TestJankHunterRuntimeClassIsSystemOwned(t *testing.T) {
 	}
 }
 
-func TestLegacyDerivedProblemDoesNotDoubleCanonicalBaseWindow(t *testing.T) {
-	dict := map[uint64]string{
-		1: "com.app.MainThreadOwner.run",
-		2: "main_thread_stall",
-	}
-	attr := attributionForTest(0, 1, 0, 0)
-	summary := inspectLogsForTest("legacy", []jhlog.Log{{
-		Dict: dict,
-		Events: []jhlog.Event{
-			{Type: jhlog.EventStall, Attribution: attr, Stall: &jhlog.StallEvent{OwnerID: 1, DurationMS: 2_000}},
-			{
-				Type:        jhlog.EventProblem,
-				Attribution: attr,
-				Problem:     &jhlog.ProblemEvent{OwnerID: 1, KindID: 2, WindowMS: 2_000, Count: 1, MaxMS: 2_000},
-			},
-		},
-	}})
-
-	if len(summary.ProblemWindows) != 1 {
-		t.Fatalf("problem windows = %+v", summary.ProblemWindows)
-	}
-	window := summary.ProblemWindows[0]
-	if window.Kind != "main_thread_stall" || window.Windows != 1 || window.Count != 1 {
-		t.Fatalf("canonical window was double-counted: %+v", window)
-	}
-}
-
 func TestRetentionEvidenceChangesConfidenceAndSeverity(t *testing.T) {
 	base := memoryLeakStats{
 		className: "com.app.LeakedActivity",
@@ -188,8 +158,62 @@ func TestRetentionEvidenceChangesConfidenceAndSeverity(t *testing.T) {
 	if gcSuspect.EvidenceKind != RetentionEvidenceAfterExplicitGC || gcSuspect.Score <= timeSuspect.Score {
 		t.Fatalf("after_explicit_gc should be stronger than time_only: time=%+v gc=%+v", timeSuspect, gcSuspect)
 	}
-	if !heapSuspect.HeapEvidence || heapSuspect.EvidenceKind != RetentionEvidenceConfirmedHPROFPath || heapSuspect.Score <= gcSuspect.Score {
-		t.Fatalf("confirmed HPROF path should be the strongest evidence: gc=%+v heap=%+v", gcSuspect, heapSuspect)
+	if heapSuspect.HeapEvidence || heapSuspect.EvidenceKind != RetentionEvidenceAfterExplicitGC || heapSuspect.Score != gcSuspect.Score {
+		t.Fatalf("class-only HPROF path must preserve runtime evidence: gc=%+v heap=%+v", gcSuspect, heapSuspect)
+	}
+}
+
+func TestUnreachableHeapClassDoesNotEraseIndependentRuntimeSignal(t *testing.T) {
+	stats := memoryLeakStats{
+		className:     "com.app.LeakedView",
+		holder:        "com.app.Screen",
+		count:         1,
+		maxAgeMs:      5_000,
+		timeOnlyCount: 1,
+	}
+	heap := &HeapLeakEvidence{
+		ClassName:  stats.className,
+		Source:     "sample.hprof",
+		Confidence: "высокое: объект найден, но не достижим от распознанных корней GC",
+	}
+
+	withoutHeap := memoryLeakSuspectFromStats(stats, 0, 0, nil, retentionDataQuality{})
+	withHeap := memoryLeakSuspectFromStats(stats, 0, 0, heap, retentionDataQuality{})
+
+	if withHeap.EvidenceKind != RetentionEvidenceTimeOnly || !withHeap.HeapCandidate || withHeap.HeapEvidence {
+		t.Fatalf("unreachable HPROF target classification = %+v", withHeap)
+	}
+	if withHeap.Score != withoutHeap.Score || withHeap.Severity != withoutHeap.Severity {
+		t.Fatalf("class-level HPROF evidence changed independent runtime priority: without=%+v with=%+v", withoutHeap, withHeap)
+	}
+	if withHeap.HeapClassEvidence == nil || !strings.Contains(withHeap.HeapClassEvidence.Confidence, "не достижим") {
+		t.Fatalf("negative HPROF evidence is not explained: %q", withHeap.Evidence)
+	}
+	if strings.Contains(withHeap.Evidence, heap.Source) || strings.Contains(withHeap.RetainedSizeExplanation, heap.Source) {
+		t.Fatalf("human-readable leak details expose a noisy HPROF path: evidence=%q size=%q", withHeap.Evidence, withHeap.RetainedSizeExplanation)
+	}
+	if strings.Contains(withHeap.Recommendation, "исправление кода не требуется") {
+		t.Fatalf("absence of a class path exonerated runtime code: %+v", withHeap)
+	}
+}
+
+func TestProblemEngineDoesNotReportHeapDumpDiagnosticPauseAsApplicationStall(t *testing.T) {
+	summary := Summary{
+		DurationMS:        60_000,
+		CollectionQuality: CollectionQuality{Complete: true},
+		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
+		ProblemWindows: []ProblemWindowStats{{
+			Screen: "MainActivity", Owner: "jankhunter.heap_dump",
+			Kind: "main_thread_stall", Windows: 1, Count: 1, MaxMS: 2_259, TotalWindowMS: 2_259,
+		}},
+	}
+
+	report, err := BuildProblemReport(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByDetector(report.Problems, "stability.main_thread_stall"); finding != nil {
+		t.Fatalf("Jank Hunter diagnostic pause became an application problem: %+v", finding)
 	}
 }
 
@@ -207,10 +231,10 @@ func TestRetentionQualityLossDowngradesEvidenceConfidence(t *testing.T) {
 		runtimeNotes:           []string{"наблюдатель удержания достиг лимита"},
 	})
 
-	if clean.DataQuality != "complete" || !strings.HasPrefix(clean.EvidenceConfidence, "среднее") {
+	if clean.DataQuality != "complete" || clean.EvidenceConfidence != "средняя" {
 		t.Fatalf("clean confidence = %+v", clean)
 	}
-	if degraded.DataQuality != "degraded" || !strings.HasPrefix(degraded.EvidenceConfidence, "низкое") {
+	if degraded.DataQuality != "degraded" || !strings.HasPrefix(degraded.EvidenceConfidence, "низкая") {
 		t.Fatalf("degraded confidence was not downgraded: %+v", degraded)
 	}
 }
@@ -246,11 +270,13 @@ func TestOpenSegmentWithTailDowngradesRetentionConfidence(t *testing.T) {
 
 func TestDictionaryTruncationOutsideRetainedFieldsDoesNotDowngradeLeakIdentity(t *testing.T) {
 	c := &collector{
-		qualitySnapshots: map[string]segmentQualityState{"main": {
-			snapshot: jhlog.QualitySnapshot{Counters: map[uint64]uint64{
-				jhlog.QualityDictionaryValueTruncated: 1,
+		collectorQualityState: collectorQualityState{
+			qualitySnapshots: map[string]segmentQualityState{"main": {
+				snapshot: jhlog.QualitySnapshot{Counters: map[uint64]uint64{
+					jhlog.QualityDictionaryValueTruncated: 1,
+				}},
 			}},
-		}},
+		},
 	}
 
 	quality := c.retentionDataQuality()

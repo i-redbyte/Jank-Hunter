@@ -2,46 +2,47 @@ package io.jankhunter.runtime
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContextTrackerTest {
     @Test
-    fun concurrentEqualContextsProduceOneTransition() {
+    fun capturedUnknownScreenDoesNotBecomeALaterGlobalScreen() {
         val tracker = ContextTracker()
-        val context = JankHunterContext("screen", "owner", "flow", "step")
-        val start = CountDownLatch(1)
-        val recorded = AtomicInteger()
-        val threads = List(16) {
-            Thread {
-                start.await()
-                if (tracker.shouldRecord(context)) recorded.incrementAndGet()
-            }
+        val captured = tracker.capture()
+        assertNull(captured.screen)
+        tracker.setScreen("LaterScreen")
+
+        tracker.callWithContext(captured, ownerName = null, onContextChanged = {}) {
+            assertNull("unknown enqueue screen inherited a later screen", tracker.capture().screen)
         }
-
-        threads.forEach(Thread::start)
-        start.countDown()
-        threads.forEach(Thread::join)
-
-        assertEquals(1, recorded.get())
+        assertEquals("LaterScreen", tracker.currentScreen())
     }
 
     @Test
-    fun contextSnapshotDeduplicationResetsCleanly() {
-        val tracker = ContextTracker()
-        tracker.setScreen("Home")
-        val first = tracker.capture()
+    fun unchangedContextReusesImmutableSnapshotUntilAttributionChanges() {
+        val tracker = ContextTracker("Home")
 
-        assertTrue(tracker.shouldRecord(first))
-        assertFalse(tracker.shouldRecord(first.copy()))
+        val first = tracker.capture(ownerOverride = "Feed")
+        assertSame(first, tracker.capture(ownerOverride = "Feed"))
 
-        tracker.resetRecordedContext()
-        assertTrue(tracker.shouldRecord(first))
+        tracker.setScreen("Details")
+        val changed = tracker.capture(ownerOverride = "Feed")
+        assertNotSame(first, changed)
+        assertSame(changed, tracker.capture(ownerOverride = "Feed"))
+    }
+
+    @Test
+    fun propagatedOperationIdDoesNotUseBoxedThreadLocal() {
+        val field = ContextTracker::class.java.getDeclaredField("propagatedOperationId")
+
+        assertTrue(field.type != ThreadLocal::class.java)
     }
 
     @Test
@@ -77,30 +78,65 @@ class ContextTrackerTest {
     fun scopedAnnotationContextRestoresPreviousThreadLocalValues() {
         val tracker = ContextTracker()
         tracker.setScreen("Home")
-        val outer = tracker.enterScopedContext("FeedScreen", "FeedOwner", "feed.open", "load")
+        val outer = tracker.enterScopedContext("FeedScreen", "FeedOwner")
 
         assertEquals("FeedScreen", tracker.currentScreen())
         assertEquals("FeedOwner", tracker.currentOwner())
-        assertEquals("feed.open", tracker.currentFlow())
-        assertEquals("load", tracker.currentFlowStep())
 
-        val inner = tracker.enterScopedContext("DetailsScreen", null, null, "render")
+        val inner = tracker.enterScopedContext("DetailsScreen", null)
 
         assertEquals("DetailsScreen", tracker.currentScreen())
         assertEquals("FeedOwner", tracker.currentOwner())
-        assertEquals("feed.open", tracker.currentFlow())
-        assertEquals("render", tracker.currentFlowStep())
 
         tracker.exitScopedContext(inner)
         assertEquals("FeedScreen", tracker.currentScreen())
         assertEquals("FeedOwner", tracker.currentOwner())
-        assertEquals("feed.open", tracker.currentFlow())
-        assertEquals("load", tracker.currentFlowStep())
 
         tracker.exitScopedContext(outer)
         assertEquals("Home", tracker.currentScreen())
         assertEquals("unknown", tracker.currentOwner())
-        assertEquals("unknown", tracker.currentFlow())
-        assertEquals("unknown", tracker.currentFlowStep())
+    }
+
+    @Test
+    fun propagatedOperationIsScopedAndRestored() {
+        val tracker = ContextTracker()
+        val captured = JankHunterContext(null, null, operationId = 42L)
+
+        tracker.callWithContext(captured, ownerName = null, onContextChanged = {}) {
+            assertEquals(42L, tracker.currentOperationId())
+            assertEquals(42L, tracker.capture().operationId)
+        }
+
+        assertEquals(0L, tracker.currentOperationId())
+    }
+
+    @Test
+    fun finishedOperationChainIsDetachedByItsOwningContextTracker() {
+        val tracker = ContextTracker()
+        val active = operation(1L, null)
+        val finishedParent = operation(2L, active).also { it.abandon() }
+        val finishedHead = operation(3L, finishedParent).also { it.abandon() }
+        tracker.activateOperation(finishedHead)
+
+        assertSame(active, tracker.currentOperationOrNull())
+        assertNull(finishedHead.previousOperation)
+        assertNull(finishedParent.previousOperation)
+    }
+
+    private fun operation(id: Long, previous: JankHunterOperation?): JankHunterOperation {
+        return JankHunterOperation(
+            id = id,
+            parentId = previous?.id ?: 0L,
+            name = "operation-$id",
+            kind = JankHunterOperationKind.SYSTEM,
+            startedAtUs = 0L,
+            budgetUs = 0L,
+            screen = null,
+            owner = null,
+            attributes = JankHunterOperationAttributes.EMPTY,
+            previousOperation = previous,
+            sink = null,
+            controller = null,
+        )
     }
 }

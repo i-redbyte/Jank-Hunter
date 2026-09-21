@@ -1,5 +1,7 @@
 package io.jankhunter.runtime.integration
 
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -11,6 +13,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterJankStatsTest {
+    @Test
+    fun uninstalledHandleReleasesTheTrackedInstance() {
+        val fake = FakeJankStats()
+        val handle = JankHunterJankStats.Handle(fake)
+        handle.uninstall()
+        assertTrue("completed handle still owns tracked instance", handle.javaClass.declaredFields.none { field ->
+            field.isAccessible = true
+            field.get(handle) === fake
+        })
+    }
+
     @Test
     fun uninstallDisablesTrackingOnlyOnce() {
         val fake = FakeJankStats()
@@ -63,7 +76,7 @@ class JankHunterJankStatsTest {
     }
 
     @Test
-    fun fatalErrorsFromReflectedJankStatsAreNotSuppressed() {
+    fun fatalErrorsFromJankStatsAreNotSuppressed() {
         val handle = JankHunterJankStats.Handle(FatalFakeJankStats())
 
         assertThrows(FatalTestError::class.java) {
@@ -71,17 +84,34 @@ class JankHunterJankStatsTest {
         }
     }
 
-    class FakeJankStats {
+    @Test
+    fun suppressedControlFailureIsCountedAsTrustEvidence() {
+        val before = RuntimeHookFailureTracker.total()
+        val reasonBefore = RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_CONTROL)
+        val handle = JankHunterJankStats.Handle(ThrowingFakeJankStats())
+
+        handle.setTrackingEnabled(true)
+
+        assertEquals(before + 1L, RuntimeHookFailureTracker.total())
+        assertEquals(
+            reasonBefore + 1L,
+            RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_CONTROL),
+        )
+    }
+
+    class FakeJankStats : JankHunterJankStats.TrackingControl {
+        override fun close() = Unit
         var trackingEnabledState = true
         var setTrackingEnabledCalls = 0
 
-        fun setTrackingEnabled(enabled: Boolean) {
+        override fun setTrackingEnabled(enabled: Boolean) {
             trackingEnabledState = enabled
             setTrackingEnabledCalls++
         }
     }
 
-    class BlockingFakeJankStats {
+    class BlockingFakeJankStats : JankHunterJankStats.TrackingControl {
+        override fun close() = Unit
         val disableEntered = CountDownLatch(1)
         val allowDisable = CountDownLatch(1)
         val setTrackingEnabledCalls = AtomicInteger()
@@ -89,7 +119,7 @@ class JankHunterJankStatsTest {
         @Volatile
         var trackingEnabledState = true
 
-        fun setTrackingEnabled(enabled: Boolean) {
+        override fun setTrackingEnabled(enabled: Boolean) {
             setTrackingEnabledCalls.incrementAndGet()
             if (!enabled) {
                 disableEntered.countDown()
@@ -99,9 +129,17 @@ class JankHunterJankStatsTest {
         }
     }
 
-    class FatalFakeJankStats {
-        fun setTrackingEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
-            throw FatalTestError()
+    class FatalFakeJankStats : JankHunterJankStats.TrackingControl {
+        override fun close() = Unit
+        override fun setTrackingEnabled(enabled: Boolean) {
+            if (enabled) throw FatalTestError()
+        }
+    }
+
+    class ThrowingFakeJankStats : JankHunterJankStats.TrackingControl {
+        override fun close() = Unit
+        override fun setTrackingEnabled(enabled: Boolean) {
+            error("setTrackingEnabled($enabled) failed")
         }
     }
 

@@ -97,6 +97,55 @@ func TestAnalyzeCompareReportsAppearedNetworkLoop(t *testing.T) {
 	t.Fatalf("appeared network loop delta was not reported: %+v", report.NetworkLoopDeltas)
 }
 
+func TestNetworkLoopMissingOwnerActionBelongsToCollectionQuality(t *testing.T) {
+	loop := NetworkLoopFinding{
+		Route: "POST /messages",
+		Owner: "unknown",
+		Path:  networkLoopPath("route", "POST /messages", "unknown", nil, 0.8),
+	}
+	visible := strings.Join(append(
+		[]string{networkLoopProbableCause("route", loop.Route, loop.Owner), causalFallbackLabel("owner", loop.Owner)},
+		networkLoopEvidence(loop)...,
+	), " ")
+	if strings.Contains(strings.ToLower(visible), "unknown") {
+		t.Fatalf("missing owner leaked as unknown: %s", visible)
+	}
+	if !strings.Contains(visible, "место запуска") || strings.Contains(visible, "ASM-хуки") {
+		t.Fatalf("technical collection guidance escaped into a problem explanation: %s", visible)
+	}
+	if !strings.Contains(NetworkLoopAttributionExplanation([]NetworkLoopFinding{loop}), "ASM-хуки") {
+		t.Fatal("missing actionable collection guidance in quality")
+	}
+}
+
+func TestGlobalNetworkLoopDoesNotClaimOneOfSeveralRoutes(t *testing.T) {
+	points := make([]float64, 25)
+	tokens := make(map[int]map[string]int, 7)
+	for bucket := 0; bucket <= 24; bucket += 4 {
+		points[bucket] = 3
+		tokens[bucket] = map[string]int{
+			"dns_high":                  3,
+			"route:GET /events":         2,
+			"route:POST /telemetry":     1,
+			"owner:EventsRepository":    2,
+			"owner:TelemetryRepository": 1,
+		}
+	}
+
+	finding, ok := analyzeNetworkLoopSignal(&networkLoopSignal{
+		name: "DNS всплески", kind: "dns", points: points, tokens: tokens,
+	}, DefaultBucketMS)
+	if !ok {
+		t.Fatal("global network loop was not detected")
+	}
+	if finding.Route != "" || finding.Owner != "" {
+		t.Fatalf("ambiguous global loop claimed route/owner: %+v", finding)
+	}
+	if strings.Contains(finding.ProbableCause, "GET /events") || strings.Contains(finding.ProbableCause, "POST /telemetry") {
+		t.Fatalf("probable cause blamed an arbitrary route: %q", finding.ProbableCause)
+	}
+}
+
 func writeDNSLoopFixture(t *testing.T, loop bool) string {
 	return writeDNSLoopFixtureWithBase(t, loop, 0)
 }
@@ -105,9 +154,12 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dns-loop.jhlog")
-	file, writer, err := jhlog.Create(path)
+	file, writer, err := jhlog.CreateWithHeader(path, completeHTTPTestHeader())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
+	}
+	if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventSession, TimeMS: baseMS + 1, Session: &jhlog.SessionEvent{CollectorFlags: uint64(jhlog.CollectorHTTP)}}); err != nil {
+		t.Fatal(err)
 	}
 	for _, entry := range []jhlog.DictionaryEntry{
 		{Kind: jhlog.DictOwner, ID: 1, Value: "ConfigRepository.refresh"},
@@ -122,11 +174,11 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 		for bucket := uint64(0); bucket <= 24; bucket += 4 {
 			for offset := uint64(0); offset < 3; offset++ {
 				event := jhlog.Event{
-					Type:   jhlog.EventHTTP,
-					TimeMS: baseMS + bucket*DefaultBucketMS + 100 + offset*80,
+					Type:        jhlog.EventHTTP,
+					TimeMS:      baseMS + bucket*DefaultBucketMS + 100 + offset*80,
+					Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
 					HTTP: &jhlog.HTTPEvent{
-						OwnerID:    1,
-						RouteID:    2,
+						RouteRef:   jhlog.LocalSymbol(2),
 						DurationMS: 180,
 						DNSMS:      70,
 						TTFBMS:     80,
@@ -141,11 +193,11 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 	} else {
 		for _, timeMS := range []uint64{100, 11_000, 24_000} {
 			event := jhlog.Event{
-				Type:   jhlog.EventHTTP,
-				TimeMS: baseMS + timeMS,
+				Type:        jhlog.EventHTTP,
+				TimeMS:      baseMS + timeMS,
+				Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
 				HTTP: &jhlog.HTTPEvent{
-					OwnerID:    1,
-					RouteID:    2,
+					RouteRef:   jhlog.LocalSymbol(2),
 					DurationMS: 120,
 					TTFBMS:     70,
 					Status:     jhlog.Status2xx,
@@ -155,6 +207,10 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 				t.Fatalf("WriteEvent(http) error = %v", err)
 			}
 		}
+	}
+	writer.SetQualitySnapshot(jhlog.QualitySnapshot{CapturedElapsedUS: (baseMS + 25001) * 1000, Counters: map[uint64]uint64{jhlog.QualityCollectionWindowStartElapsedMS: baseMS + 1, jhlog.QualityCollectionWindowEndElapsedMS: baseMS + 25001}})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -179,8 +235,8 @@ func writeReconnectLoopFixture(t *testing.T) string {
 			Type:   jhlog.EventCounter,
 			TimeMS: bucket * DefaultBucketMS,
 			Metric: &jhlog.MetricEvent{
-				MetricID: 10,
-				Value:    1,
+				MetricRef: jhlog.LocalSymbol(10),
+				Value:     1,
 			},
 		}
 		if err := writer.WriteEvent(event); err != nil {

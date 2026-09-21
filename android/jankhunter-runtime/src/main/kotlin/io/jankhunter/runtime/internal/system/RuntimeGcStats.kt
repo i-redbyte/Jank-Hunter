@@ -1,13 +1,15 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.RuntimeLongSource
+
 internal class RuntimeGcStats(
     private val readStat: (String) -> String?,
-    private val clockMs: () -> Long,
+    private val clockMs: RuntimeLongSource,
 ) {
     private var last: Snapshot? = null
 
     fun sample(): Delta {
-        val nowMs = clockMs()
+        val nowMs = clockMs.getAsLong()
         val current = Snapshot(
             atMs = nowMs,
             gcCount = statLong("art.gc.gc-count"),

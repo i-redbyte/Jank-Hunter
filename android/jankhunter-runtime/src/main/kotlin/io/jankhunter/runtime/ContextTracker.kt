@@ -1,15 +1,13 @@
 package io.jankhunter.runtime
 
-import java.util.concurrent.atomic.AtomicReference
-
 internal class ContextTracker(
     initialScreen: String = "unknown",
 ) {
     private val screenOverride = ThreadLocal<String>()
     private val owner = ThreadLocal<String>()
-    private val flow = ThreadLocal<String>()
-    private val flowStep = ThreadLocal<String>()
-    private val lastRecordedContext = AtomicReference<JankHunterContext?>()
+    private val operation = ThreadLocal<JankHunterOperation>()
+    private val propagatedOperationId = PrimitiveLongThreadLocal()
+    private val capturedContext = ThreadLocal<CapturedContextCell>()
 
     @Volatile
     private var screen = initialScreen
@@ -18,61 +16,54 @@ internal class ContextTracker(
 
     fun currentScreen(): String = screenOverride.get() ?: screen
 
-    fun currentScreenOrNull(): String? = normalizedContextValue(screenOverride.get() ?: screen)
-
-    fun currentFlow(): String = flow.get() ?: "unknown"
-
-    fun currentFlowOrNull(): String? = flow.get()
-
-    fun currentFlowStep(): String = flowStep.get() ?: "unknown"
-
-    fun currentFlowStepOrNull(): String? = flowStep.get()
+    fun currentScreenOrNull(): String? = capturedScreen(null)
 
     fun ownerOrNull(): String? = owner.get()
+
+    fun currentOperationId(): Long = currentOperationOrNull()?.id ?: propagatedOperationId.get()
+
+    fun currentOperationOrNull(): JankHunterOperation? {
+        var current = operation.get()
+        if (current == null || !current.isFinished) return current
+        val finishedHead = current
+        do {
+            current = current?.previousOperation
+        } while (current?.isFinished == true)
+        setThreadLocal(operation, current)
+        detachFinishedChain(finishedHead, current)
+        return current
+    }
+
+    fun activateOperation(value: JankHunterOperation) {
+        operation.set(value)
+    }
+
+    fun deactivateOperation(value: JankHunterOperation) {
+        if (operation.get() !== value) return
+        var restored = value.previousOperation
+        value.previousOperation = null
+        while (restored != null && restored.isFinished) {
+            val next = restored.previousOperation
+            restored.previousOperation = null
+            restored = next
+        }
+        setThreadLocal(operation, restored)
+    }
 
     fun setScreen(screenName: String?) {
         screen = screenName?.takeIf { it.isNotEmpty() } ?: "unknown"
     }
 
-    fun startFlow(flowName: String?): JankHunterFlow {
-        val token = JankHunterFlow(
-            previousFlow = flow.get(),
-            previousStep = flowStep.get(),
-        )
-        setThreadLocal(flow, normalizedContextValue(flowName))
-        flowStep.remove()
-        return token
-    }
-
-    fun endFlow(token: JankHunterFlow?) {
-        if (token == null) return
-        setThreadLocal(flow, token.previousFlow)
-        setThreadLocal(flowStep, token.previousStep)
-    }
-
-    fun markFlowStep(stepName: String?) {
-        setThreadLocal(flowStep, normalizedContextValue(stepName))
-    }
-
     fun enterScopedContext(
         screenName: String?,
         ownerName: String?,
-        flowName: String?,
-        stepName: String?,
     ): JankHunterAnnotationScope {
         val token = JankHunterAnnotationScope(
             previousScreenOverride = screenOverride.get(),
             previousOwner = owner.get(),
-            previousFlow = flow.get(),
-            previousStep = flowStep.get(),
         )
         normalizedContextValue(screenName)?.let { setThreadLocal(screenOverride, it) }
         normalizedContextValue(ownerName)?.let { setThreadLocal(owner, it) }
-        normalizedContextValue(flowName)?.let {
-            setThreadLocal(flow, it)
-            flowStep.remove()
-        }
-        normalizedContextValue(stepName)?.let { setThreadLocal(flowStep, it) }
         return token
     }
 
@@ -80,23 +71,33 @@ internal class ContextTracker(
         if (token == null) return
         setThreadLocal(screenOverride, token.previousScreenOverride)
         setThreadLocal(owner, token.previousOwner)
-        setThreadLocal(flow, token.previousFlow)
-        setThreadLocal(flowStep, token.previousStep)
     }
 
     fun capture(
         screenOverride: String? = null,
         ownerOverride: String? = null,
     ): JankHunterContext {
-        return JankHunterContext(
-            screen = normalizedContextValue(firstContextValue(screenOverride, currentScreen())),
-            owner = normalizedContextValue(firstContextValue(ownerOverride, owner.get())),
-            flow = normalizedContextValue(flow.get()),
-            step = normalizedContextValue(flowStep.get()),
-        )
+        val screen = capturedScreen(screenOverride)
+        val owner = capturedOwner(ownerOverride)
+        val operationId = currentOperationId()
+        val cell = capturedContext.get()
+        val current = cell?.value
+        if (current != null && current.matches(screen, owner, operationId)) return current
+
+        val created = JankHunterContext(screen, owner, operationId)
+        if (cell == null) capturedContext.set(CapturedContextCell(created)) else cell.value = created
+        return created
     }
 
-    fun <T> callWithContext(
+    fun capturedScreen(override: String?): String? {
+        return normalizedContextValue(firstContextValue(override, currentScreen()))
+    }
+
+    fun capturedOwner(override: String?): String? {
+        return normalizedContextValue(firstContextValue(override, owner.get()))
+    }
+
+    inline fun <T> callWithContext(
         context: JankHunterContext,
         ownerName: String?,
         onContextChanged: () -> Unit,
@@ -104,32 +105,27 @@ internal class ContextTracker(
     ): T {
         val previousScreenOverride = screenOverride.get()
         val previousOwner = owner.get()
-        val previousFlow = flow.get()
-        val previousStep = flowStep.get()
+        val previousOperation = operation.get()
+        val previousPropagatedOperationId = propagatedOperationId.get()
         RuntimeHookGuard.run {
-            setThreadLocal(screenOverride, context.screen)
-            setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
-            setThreadLocal(flow, context.flow)
-            setThreadLocal(flowStep, context.step)
+            // Null in a captured snapshot means unknown, not a later global screen.
+            screenOverride.set(context.screen ?: "unknown")
+            owner.set(normalizedContextValue(firstContextValue(ownerName, context.owner)))
+            // Keep the empty slot: get() after remove() allocates a new ThreadLocal entry.
+            // A null value releases the operation just as remove() does.
+            operation.set(null)
+            propagatedOperationId.set(context.operationId)
         }
         RuntimeHookGuard.run(onContextChanged)
         try {
             return block()
         } finally {
-            RuntimeHookGuard.run { setThreadLocal(screenOverride, previousScreenOverride) }
-            RuntimeHookGuard.run { setThreadLocal(owner, previousOwner) }
-            RuntimeHookGuard.run { setThreadLocal(flow, previousFlow) }
-            RuntimeHookGuard.run { setThreadLocal(flowStep, previousStep) }
+            RuntimeHookGuard.run { screenOverride.set(previousScreenOverride) }
+            RuntimeHookGuard.run { owner.set(previousOwner) }
+            RuntimeHookGuard.run { operation.set(previousOperation) }
+            RuntimeHookGuard.run { propagatedOperationId.set(previousPropagatedOperationId) }
             RuntimeHookGuard.run(onContextChanged)
         }
-    }
-
-    fun shouldRecord(tuple: JankHunterContext): Boolean {
-        return lastRecordedContext.getAndSet(tuple) != tuple
-    }
-
-    fun resetRecordedContext() {
-        lastRecordedContext.set(null)
     }
 
     private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {
@@ -139,13 +135,49 @@ internal class ContextTracker(
             target.set(value)
         }
     }
+
+    private fun detachFinishedChain(
+        head: JankHunterOperation,
+        retained: JankHunterOperation?,
+    ) {
+        var current: JankHunterOperation? = head
+        while (current != null && current !== retained) {
+            val next = current.previousOperation
+            current.previousOperation = null
+            current = next
+        }
+    }
+
+    private fun JankHunterContext.matches(screen: String?, owner: String?, operationId: Long): Boolean {
+        return this.screen == screen && this.owner == owner && this.operationId == operationId
+    }
+
+    private class CapturedContextCell(var value: JankHunterContext)
+}
+
+/** Reuses one mutable cell per participating thread instead of boxing every propagated ID. */
+internal class PrimitiveLongThreadLocal {
+    private val local = ThreadLocal<Cell>()
+
+    fun get(): Long = local.get()?.value ?: 0L
+
+    fun set(value: Long) {
+        val cell = local.get()
+        if (cell == null) {
+            if (value > 0L) local.set(Cell(value))
+        } else {
+            // Retain one primitive cell per participating thread, including between scopes.
+            cell.value = value.coerceAtLeast(0L)
+        }
+    }
+
+    private class Cell(var value: Long)
 }
 
 internal data class JankHunterContext(
     val screen: String?,
     val owner: String?,
-    val flow: String?,
-    val step: String?,
+    val operationId: Long = 0L,
 )
 
 internal fun firstContextValue(primary: String?, fallback: String?): String? {

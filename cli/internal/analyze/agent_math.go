@@ -52,19 +52,3 @@ func signedDifference(left, right uint64) int64 {
 	return -int64(delta)
 }
 
-func saturatingMultiply(value, multiplier uint64) uint64 {
-	if multiplier != 0 && value > ^uint64(0)/multiplier {
-		return ^uint64(0)
-	}
-	return value * multiplier
-}
-
-func clamp(value, minimum, maximum int) int {
-	if value < minimum {
-		return minimum
-	}
-	if value > maximum {
-		return maximum
-	}
-	return value
-}

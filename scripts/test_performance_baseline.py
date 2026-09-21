@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -53,9 +54,10 @@ def complete_result() -> dict:
             "control_records": 2,
             "total_records": 68_002,
             "runtime_call_events": 20_000,
+            "runtime_call_blocks": 200,
             "runtime_unique_edges": 10_000,
-            "flow_events": 30_000,
-            "flow_tuples": 300,
+            "attributed_events": 30_000,
+            "attribution_tuples": 300,
             "signal_events": 10_000,
             "duration_ms": 60_000,
             "compressed_bytes": 2_000_000,
@@ -85,16 +87,42 @@ def complete_result() -> dict:
                 "level": "high",
                 "complete": True,
                 "chain_valid": True,
+                "exact_admission": True,
+                "process_scope": "all_processes",
+                "allowed_process_count": 0,
+                "process_scope_fingerprint": "",
+                "expected_process_count": 1,
+                "expected_process_fingerprint": "ab" * 32,
+                "observed_process_count": 1,
+                "process_roster_declaration_complete": True,
+                "process_roster_complete": True,
+                "run_cohort_count": 1,
+                "run_cohort_consistent": True,
+                "all_processes_configured": True,
+                "process_scope_consistent": True,
+                "counter_invariants_valid": True,
+                "quality_progression_valid": True,
                 "sealed_segments": 1,
                 "unsealed_segments": 0,
                 "segments_with_quality": 1,
                 "segments_without_quality": 0,
                 "accepted_events": 60_000,
                 "written_events": 60_000,
+                "decoded_committed_chunks": 10,
+                "reported_committed_chunks": 10,
                 "known_lost_events": 0,
+                "writer_backpressure_count": 0,
+                "writer_backpressure_nanos": 0,
+                "runtime_hook_failures": 0,
+                "runtime_graph_input_events": 20_000,
+                "runtime_graph_emitted_events": 20_000,
+                "decoded_runtime_graph_calls": 20_000,
+                "runtime_graph_completeness_ratio": 1.0,
                 "dictionary_overflow": 0,
                 "dictionary_truncated": 0,
+                "unknown_quality_counters": [],
                 "chain_issues": [],
+                "notices": [],
                 "reasons": [],
             },
         },
@@ -109,11 +137,14 @@ def complete_result() -> dict:
                 for name in baseline.GO_BENCHMARKS
             },
             "android_runtime": {
-                name: {
-                    "iterations": iterations,
-                    "total_ns": iterations * 100,
-                    "ns_per_op": 100.0,
-                }
+                name: dict(
+                    {
+                        "iterations": iterations,
+                        "total_ns": iterations * 100,
+                        "ns_per_op": 100.0,
+                    },
+                    **({"bytes_per_op": 64.0} if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else {}),
+                )
                 for name, iterations in baseline.android_runtime_expected_iterations(
                     100_000
                 ).items()
@@ -146,6 +177,7 @@ def acceptance_contract() -> dict:
         "required_report_suffixes": list(REQUIRED_PAGES),
         "relative_regression_limits": {
             "android_runtime_ns_per_op": 0.15,
+            "android_runtime_bytes_per_op": 0.10,
             "android_artifact_bytes": 0.03,
             "go_ns_per_op": 0.15,
             "go_bytes_per_op": 0.10,
@@ -178,6 +210,72 @@ class RepositoryAcceptanceContractTest(unittest.TestCase):
             "Качество сбора:",
             acceptance["fixture"]["forbidden_warning_fragments"],
         )
+
+
+class ReportMeasurementTest(unittest.TestCase):
+    def test_single_file_bundle_counts_verified_embedded_pages(self) -> None:
+        manifest = [
+            {
+                "id": "overview",
+                "title": "Обзор",
+                "href": "inspect.html",
+                "payload": "payload-0",
+            },
+            {
+                "id": "math",
+                "title": "Математика",
+                "href": "inspect-math.html",
+                "payload": "payload-1",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            report = directory / "inspect.html"
+            payloads = "".join(
+                f'<script id="{entry["payload"]}" type="application/octet-stream" '
+                'data-jankhunter-report-payload data-encoding="gzip-base64">data</script>'
+                for entry in manifest
+            )
+            report.write_text(
+                '<script id="jankhunter-report-pages" type="application/json">'
+                + json.dumps(manifest)
+                + "</script>"
+                + payloads
+            )
+
+            measurement = baseline.report_measurement(directory, "inspect")
+
+            self.assertEqual(report.stat().st_size, measurement["bundle_bytes"])
+            self.assertEqual([".html", "-math.html"], measurement["pages"])
+
+    def test_single_file_bundle_rejects_a_missing_payload(self) -> None:
+        manifest = [{
+            "id": "overview",
+            "title": "Обзор",
+            "href": "inspect.html",
+            "payload": "payload-0",
+        }]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "inspect.html").write_text(
+                '<script id="jankhunter-report-pages" type="application/json">'
+                + json.dumps(manifest)
+                + "</script>"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "payload .* is missing"):
+                baseline.report_measurement(directory, "inspect")
+
+    def test_multi_file_bundle_still_counts_physical_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "compare.html").write_text("overview")
+            (directory / "compare-math.html").write_text("math")
+
+            measurement = baseline.report_measurement(directory, "compare")
+
+            self.assertEqual(len("overview") + len("math"), measurement["bundle_bytes"])
+            self.assertEqual(["-math.html", ".html"], measurement["pages"])
 
 
 class PerformanceBaselineCheckTest(unittest.TestCase):
@@ -288,12 +386,12 @@ class PerformanceBaselineCheckTest(unittest.TestCase):
     def test_fixture_composition_counts_must_be_positive(self) -> None:
         reference = complete_result()
         candidate = copy.deepcopy(reference)
-        candidate["fixture"]["flow_tuples"] = 0
+        candidate["fixture"]["attribution_tuples"] = 0
 
         status, output = self.check(reference, candidate)
 
         self.assertEqual(1, status)
-        self.assertIn("fixture count is missing or invalid: flow_tuples", output)
+        self.assertIn("fixture count is missing or invalid: attribution_tuples", output)
 
     def test_fixture_metadata_must_match_exactly(self) -> None:
         reference = complete_result()
@@ -309,7 +407,7 @@ class PerformanceBaselineCheckTest(unittest.TestCase):
         for mutate, message in (
             (
                 lambda result: result["fixture"].__setitem__("schema", 1),
-                "fixture schema is 1; expected 2",
+                "fixture schema is 1; expected 4",
             ),
             (
                 lambda result: result["fixture"].__setitem__("profile", "smoke"),
@@ -325,6 +423,17 @@ class PerformanceBaselineCheckTest(unittest.TestCase):
 
                 self.assertEqual(1, status)
                 self.assertIn(message, output)
+
+    def test_fixture_runtime_calls_must_be_columnar_batched(self) -> None:
+        candidate = complete_result()
+        candidate["fixture"]["runtime_call_blocks"] = candidate["fixture"][
+            "runtime_call_events"
+        ]
+
+        status, output = self.check(complete_result(), candidate)
+
+        self.assertEqual(1, status)
+        self.assertIn("runtime calls are not columnar-batched", output)
 
     def test_acceptance_profile_is_checked(self) -> None:
         reference = complete_result()
@@ -437,6 +546,44 @@ class PerformanceBaselineCheckTest(unittest.TestCase):
     def test_structured_collection_quality_must_be_pristine_on_reference(self) -> None:
         reference = complete_result()
         reference["quality"]["collection"]["known_lost_events"] = 1
+
+        status, output = self.check(reference, complete_result())
+
+        self.assertEqual(1, status)
+        self.assertIn("reference collection quality is not pristine", output)
+
+    def test_fail_closed_collection_invariants_are_part_of_the_contract(self) -> None:
+        for field in (
+            "exact_admission",
+            "process_roster_declaration_complete",
+            "process_roster_complete",
+            "run_cohort_consistent",
+            "all_processes_configured",
+            "process_scope_consistent",
+            "counter_invariants_valid",
+            "quality_progression_valid",
+        ):
+            with self.subTest(field=field):
+                reference = complete_result()
+                reference["quality"]["collection"][field] = False
+
+                status, output = self.check(reference, complete_result())
+
+                self.assertEqual(1, status)
+                self.assertIn("reference collection quality is not pristine", output)
+
+    def test_incomplete_process_roster_count_is_not_pristine(self) -> None:
+        reference = complete_result()
+        reference["quality"]["collection"]["expected_process_count"] = 2
+
+        status, output = self.check(reference, complete_result())
+
+        self.assertEqual(1, status)
+        self.assertIn("reference collection quality is not pristine", output)
+
+    def test_runtime_graph_terminal_counter_must_match_decoded_calls(self) -> None:
+        reference = complete_result()
+        reference["quality"]["collection"]["decoded_runtime_graph_calls"] -= 1
 
         status, output = self.check(reference, complete_result())
 
@@ -796,8 +943,12 @@ class AndroidRuntimeBenchmarkCommandTest(unittest.TestCase):
         self.assertIn("-Djankhunter.benchmark=true", command)
         self.assertIn("-Djankhunter.benchmark.iterations=12345", command)
         self.assertEqual(
-            "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
-            command[command.index("--tests") + 1],
+            [
+                "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
+                "io.jankhunter.runtime.RuntimeSqlNormalizerBenchmarkTest",
+                "io.jankhunter.runtime.RuntimeDatabaseBenchmarkTest",
+            ],
+            [command[index + 1] for index, value in enumerate(command) if value == "--tests"],
         )
 
     def test_passes_selected_build_tools_as_gradle_property(self) -> None:
@@ -876,11 +1027,50 @@ class BuildToolsResolutionTest(unittest.TestCase):
 
 
 class BenchmarkParserTest(unittest.TestCase):
+    def test_performance_contract_covers_database_hot_paths(self) -> None:
+        self.assertIn("analyze/BenchmarkInspectDatabaseMillionEvents", baseline.GO_BENCHMARKS)
+        self.assertIn("analyze/BenchmarkDatabaseHeavyStoreHighCardinality", baseline.GO_BENCHMARKS)
+        self.assertIn("analyze/BenchmarkDatabaseCorrelationBoundedJoin", baseline.GO_BENCHMARKS)
+        self.assertIn("report/BenchmarkWriteDatabaseHighCardinality", baseline.GO_BENCHMARKS)
+        self.assertIn("SQL normalize", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("SQL CTE operation", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("SQL CTE operation", baseline.ANDROID_ALLOCATION_BENCHMARKS)
+        self.assertIn("database hook disabled", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database hook active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database prepared lookup active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database writer active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+
+    def test_android_parser_captures_database_allocation_metric(self) -> None:
+        requested = 100_000
+        lines = [
+            "JankHunter benchmark: "
+            f"{name}, iterations={iterations}, total_ns={iterations * 10}, ns_per_op=10.0"
+            + (", bytes_per_op=64.0" if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else "")
+            for name, iterations in baseline.android_runtime_expected_iterations(
+                requested
+            ).items()
+        ]
+
+        result = baseline.parse_android_benchmarks(
+            "\n".join(lines), expected_iterations=requested
+        )
+
+        self.assertEqual(64.0, result["database writer active"]["bytes_per_op"])
+
+    def test_go_benchmark_filter_selects_every_contract_row(self) -> None:
+        for benchmark in baseline.GO_BENCHMARKS:
+            short_name = benchmark.split("/", 1)[1]
+            self.assertIsNotNone(re.fullmatch(baseline.GO_BENCHMARK_PATTERN, short_name))
+        self.assertIsNone(re.fullmatch(baseline.GO_BENCHMARK_PATTERN, "BenchmarkOperationUnbounded"))
+
     def test_go_parser_requires_every_benchmark_and_requested_samples(self) -> None:
         packages = {
-            "jhlog": baseline.GO_BENCHMARKS[:2],
-            "analyze": baseline.GO_BENCHMARKS[2:3],
-            "report": baseline.GO_BENCHMARKS[3:],
+            package: tuple(
+                benchmark
+                for benchmark in baseline.GO_BENCHMARKS
+                if benchmark.startswith(f"{package}/")
+            )
+            for package in ("jhlog", "analyze", "report")
         }
         lines: list[str] = []
         for package, benchmarks in packages.items():
@@ -916,6 +1106,7 @@ class BenchmarkParserTest(unittest.TestCase):
         lines = [
             "JankHunter benchmark: "
             f"{name}, iterations={iterations}, total_ns={iterations * 10}, ns_per_op=10.0"
+            + (", bytes_per_op=64.0" if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else "")
             for name, iterations in baseline.android_runtime_expected_iterations(
                 requested
             ).items()
@@ -973,6 +1164,8 @@ class AndroidArtifactSelectionTest(unittest.TestCase):
                 / "jankhunter-annotations/build/libs/jankhunter-annotations-1.0.0.jar",
                 "okhttp_aar": android
                 / "jankhunter-okhttp3/build/outputs/aar/jankhunter-okhttp3-release.aar",
+                "workmanager_aar": android
+                / "jankhunter-workmanager/build/outputs/aar/jankhunter-workmanager-release.aar",
                 "gradle_plugin_jar": android
                 / "jankhunter-gradle-plugin/build/libs/jankhunter-gradle-plugin-1.0.0.jar",
                 "sample_debug_apk": android

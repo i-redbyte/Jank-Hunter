@@ -8,6 +8,7 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 internal class JankHunterBuildBannerReporter(
     private val versionName: String,
@@ -49,6 +50,7 @@ internal abstract class JankHunterBuildBannerService :
     }
 }
 
+@DisableCachingByDefault(because = "The task intentionally prints a once-per-build diagnostic banner")
 internal abstract class PrintJankHunterBuildBannerTask : DefaultTask() {
     @get:Internal
     abstract val bannerService: Property<JankHunterBuildBannerService>

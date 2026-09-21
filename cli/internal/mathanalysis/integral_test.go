@@ -41,7 +41,7 @@ func TestComputeIntegralScoresUsesKnownAreas(t *testing.T) {
 	}
 	loops := []NetworkLoopFinding{{BurnScore: 10}}
 
-	scores := computeIntegralScores(timeline, loops)
+	scores := computeIntegralScoresForRuns(timeline, loops, 1)
 
 	assertFloat(t, integralScoreValue(scores, "jank_pressure_area"), 30)
 	assertFloat(t, integralScoreValue(scores, "latency_pain_area"), 600)
@@ -52,7 +52,7 @@ func TestComputeIntegralScoresUsesKnownAreas(t *testing.T) {
 }
 
 func TestComputeIntegralScoresReturnsNoSyntheticZerosWithoutTimeline(t *testing.T) {
-	if scores := computeIntegralScores(nil, nil); len(scores) != 0 {
+	if scores := computeIntegralScoresForRuns(nil, nil, 1); len(scores) != 0 {
 		t.Fatalf("empty timeline must not produce synthetic zero scores: %+v", scores)
 	}
 }
@@ -63,7 +63,7 @@ func TestComputeIntegralScoresIncludesMainThreadStalls(t *testing.T) {
 		{StartMS: 1_000, EndMS: 2_000, StallCount: 1, StallMaxMS: 1_100},
 	}
 
-	scores := computeIntegralScores(timeline, nil)
+	scores := computeIntegralScoresForRuns(timeline, nil, 1)
 	assertFloat(t, integralScoreValue(scores, "main_thread_stall_burden"), 1_500)
 	if got := integralScoreByID(scores, "main_thread_stall_burden").Severity; got != "medium" {
 		t.Fatalf("stall burden severity = %q, want medium", got)

@@ -1,17 +1,20 @@
 package io.jankhunter.gradle
 
 internal object ArtifactSchemas {
-    const val OWNER_MAP_FORMAT = 4
+    const val ARTIFACT_METADATA_FORMAT = 1
     const val CLASS_GRAPH_FORMAT = 1
-    const val INSTRUMENTATION_DIAGNOSTICS_FORMAT = 1
+    const val LAMBDA_CAPTURE_FORMAT = 1
+    const val INSTRUMENTATION_DIAGNOSTICS_FORMAT = 2
     const val DEPENDENCY_INJECTION_CATALOG_FORMAT = 1
+    const val ANDROID_COMPONENT_CATALOG_FORMAT = 1
 
     val instrumentationLayoutFingerprint: String
         get() = instrumentationLayoutFingerprint(
-            ownerMapFormat = OWNER_MAP_FORMAT,
             classGraphFormat = CLASS_GRAPH_FORMAT,
+            lambdaCaptureFormat = LAMBDA_CAPTURE_FORMAT,
             instrumentationDiagnosticsFormat = INSTRUMENTATION_DIAGNOSTICS_FORMAT,
             dependencyInjectionCatalogFormat = DEPENDENCY_INJECTION_CATALOG_FORMAT,
+            androidComponentCatalogFormat = ANDROID_COMPONENT_CATALOG_FORMAT,
         )
 
     fun instrumentationArtifactsPath(variantName: String): String {
@@ -20,14 +23,16 @@ internal object ArtifactSchemas {
     }
 
     internal fun instrumentationLayoutFingerprint(
-        ownerMapFormat: Int,
         classGraphFormat: Int,
+        lambdaCaptureFormat: Int,
         instrumentationDiagnosticsFormat: Int,
         dependencyInjectionCatalogFormat: Int,
+        androidComponentCatalogFormat: Int,
     ): String {
-        return "owner-map-v${ownerMapFormat}_" +
-            "class-graph-v${classGraphFormat}_" +
+        return "class-graph-v${classGraphFormat}_" +
+            "lambda-captures-v${lambdaCaptureFormat}_" +
             "diagnostics-v${instrumentationDiagnosticsFormat}_" +
-            "dependency-injection-v$dependencyInjectionCatalogFormat"
+            "dependency-injection-v${dependencyInjectionCatalogFormat}_" +
+            "android-components-v$androidComponentCatalogFormat"
     }
 }

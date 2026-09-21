@@ -12,6 +12,57 @@ import org.junit.Test
 
 class MetricAggregatorTest {
     @Test
+    fun oversizedMetricNameIsRejectedWithExplicitLoss() {
+        val aggregator = MetricAggregator(maxKeys = 2, exactAdmission = true)
+        val counters = linkedMapOf<String, Long>()
+
+        aggregator.counter("x".repeat(1_025), 1L)
+        aggregator.counter("safe", 2L)
+        aggregator.flush(object : MetricAggregator.Sink {
+            override fun counter(name: String, value: Long) {
+                counters[name] = value
+            }
+
+            override fun gauge(
+                name: String,
+                value: Long,
+                count: Long,
+                sum: Long,
+                max: Long,
+                mode: MetricAggregationMode,
+            sumHigh: Long,
+            ) = Unit
+        })
+
+        assertEquals(2L, counters["safe"])
+        assertEquals(1L, counters[MetricAggregator.DROPPED_METRIC_NAME])
+    }
+
+    @Test
+    fun classifiesCanonicalThermalStatusAsState() {
+        assertEquals(
+            MetricAggregationMode.STATE,
+            MetricSemantics.gaugeMode("device.thermal.status"),
+        )
+    }
+
+    @Test
+    fun exactAdmissionRejectsMetricsWhenCapacityIsZero() {
+        val aggregator = MetricAggregator(maxKeys = 0, exactAdmission = true)
+        val sink = RecordingSink()
+
+        aggregator.counter("first", 2L)
+        aggregator.counter("second", 3L)
+        aggregator.gauge("third", 7L)
+        aggregator.flush(sink)
+
+        assertEquals(null, sink.counters["first"])
+        assertEquals(null, sink.counters["second"])
+        assertEquals(null, sink.gauges["third"]?.value)
+        assertEquals(3L, sink.counters[MetricAggregator.DROPPED_METRIC_NAME])
+    }
+
+    @Test
     fun foldsCountersAndGaugesIntoSingleFlush() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val sink = RecordingSink()
@@ -42,6 +93,19 @@ class MetricAggregatorTest {
     }
 
     @Test
+    fun roundsAverageGaugeToNearestInteger() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.gauge("rounded", 1L)
+        aggregator.gauge("rounded", 2L)
+        aggregator.flush(sink)
+
+        assertEquals(2L, sink.gauges["rounded"]?.value)
+        assertEquals(3L, sink.gauges["rounded"]?.sum)
+    }
+
+    @Test
     fun evictsLeastRecentlyUsedKeysWhenHotMetricCardinalityExceedsLimit() {
         val aggregator = MetricAggregator(maxKeys = 2)
         val sink = RecordingSink()
@@ -56,6 +120,18 @@ class MetricAggregatorTest {
         assertEquals(1L, sink.counters["third"])
         assertEquals(null, sink.counters["second"])
         assertEquals(1L, sink.counters["jankhunter.metric_aggregation.dropped.count"])
+    }
+
+    @Test
+    fun exactAdmissionKeepsExistingKeysAndReportsExcessCardinality() {
+        val aggregator = MetricAggregator(maxKeys = 2, exactAdmission = true)
+        val sink = RecordingSink()
+
+        repeat(10_000) { index -> aggregator.counter("metric.$index", 1L) }
+        aggregator.flush(sink)
+
+        assertEquals(2, sink.counters.count { it.key.startsWith("metric.") })
+        assertEquals(9_998L, sink.counters[MetricAggregator.DROPPED_METRIC_NAME])
     }
 
     @Test
@@ -106,7 +182,28 @@ class MetricAggregatorTest {
     }
 
     @Test
-    fun saturatesLongAggregatesInsteadOfWrappingNegative() {
+    fun stateGaugeKeepsPeakWhenLatestValueIsLower() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.gauge("device.thermal.status", 5, MetricAggregationMode.STATE)
+        aggregator.gauge("device.thermal.status", 2, MetricAggregationMode.STATE)
+        aggregator.flush(sink)
+
+        assertEquals(
+            RecordingGauge(
+                value = 2L,
+                count = 2L,
+                sum = 2L,
+                max = 5L,
+                mode = MetricAggregationMode.STATE,
+            ),
+            sink.gauges["device.thermal.status"],
+        )
+    }
+
+    @Test
+    fun countersSaturateAndGaugeSumsRetainUnsignedBits() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val sink = RecordingSink()
 
@@ -117,7 +214,8 @@ class MetricAggregatorTest {
         aggregator.flush(sink)
 
         assertEquals(Long.MAX_VALUE, sink.counters["large.counter"])
-        assertEquals(Long.MAX_VALUE, sink.gauges["large.gauge"]?.sum)
+        assertEquals(Long.MIN_VALUE, sink.gauges["large.gauge"]?.sum)
+        assertEquals(1L shl 62, sink.gauges["large.gauge"]?.value)
         assertTrue((sink.gauges["large.gauge"]?.value ?: -1L) >= 0L)
     }
 
@@ -202,6 +300,7 @@ class MetricAggregatorTest {
                 sum: Long,
                 max: Long,
                 mode: MetricAggregationMode,
+            sumHigh: Long,
             ) = Unit
         }
         val producers = Executors.newFixedThreadPool(workerCount)
@@ -335,6 +434,7 @@ class MetricAggregatorTest {
             sum: Long,
             max: Long,
             mode: MetricAggregationMode,
+            sumHigh: Long,
         ) {
             gauges[name] = RecordingGauge(value, count, sum, max, mode)
         }

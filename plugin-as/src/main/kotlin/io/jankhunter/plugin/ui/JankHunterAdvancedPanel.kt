@@ -26,7 +26,6 @@ import java.util.concurrent.Future
 import javax.swing.BorderFactory
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
-import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -35,7 +34,7 @@ import javax.swing.Scrollable
 import javax.swing.SwingConstants
 
 internal data class JankHunterAdvancedOptions(
-    val ownerMap: String,
+    val artifactsDir: String,
     val mapping: String,
     val classGraph: String,
     val diagnostics: String,
@@ -44,12 +43,11 @@ internal data class JankHunterAdvancedOptions(
     val screen: String,
     val owner: String,
     val className: String,
-    val reportStyle: String,
     val presentation: Boolean,
 ) {
     companion object {
         val SIMPLE = JankHunterAdvancedOptions(
-            ownerMap = "",
+            artifactsDir = "",
             mapping = "",
             classGraph = "",
             diagnostics = "",
@@ -58,7 +56,6 @@ internal data class JankHunterAdvancedOptions(
             screen = "",
             owner = "",
             className = "",
-            reportStyle = "modern",
             presentation = false,
         )
     }
@@ -82,7 +79,7 @@ internal class JankHunterAdvancedPanel(
     private val artifactCombo = JComboBox<String>()
     private val scanArtifactsButton = JButton("Найти")
     private val manualArtifactsCheckBox = JBCheckBox("Настроить отдельные файлы вручную")
-    private val ownerMapField = fileField()
+    private val artifactsDirField = fileField()
     private val mappingField = fileField()
     private val classGraphField = fileField()
     private val diagnosticsField = fileField()
@@ -91,7 +88,6 @@ internal class JankHunterAdvancedPanel(
     private val screenField = JBTextField()
     private val ownerField = JBTextField()
     private val classField = JBTextField()
-    private val reportStyleCombo = JComboBox(arrayOf("modern", "legacy"))
     private val presentationCheckBox = JBCheckBox("Presentation mode")
     private val cliPathField = fileField()
     private val consoleArea = JBTextArea()
@@ -113,7 +109,6 @@ internal class JankHunterAdvancedPanel(
     init {
         val settings = JankHunterSettings.getInstance().state
         cliPathField.text = settings.cliPath
-        reportStyleCombo.selectedItem = settings.reportStyle.ifBlank { "modern" }
         presentationCheckBox.isSelected = settings.presentationMode
 
         reportTaskButton.addActionListener { onSelectReport() }
@@ -143,12 +138,12 @@ internal class JankHunterAdvancedPanel(
             add(scanArtifactsButton, BorderLayout.EAST)
         })
         addWideRow(artifactsForm, artifactsRow++, manualArtifactsCheckBox)
-        addRow(artifactsForm, artifactsRow++, "Owner map", ownerMapField)
+        addRow(artifactsForm, artifactsRow++, "Artifacts directory", artifactsDirField)
         addRow(artifactsForm, artifactsRow++, "R8 mapping", mappingField)
         addRow(artifactsForm, artifactsRow++, "Class graph", classGraphField)
         addRow(artifactsForm, artifactsRow++, "Diagnostics", diagnosticsField)
         addRow(artifactsForm, artifactsRow, "DI catalog", diCatalogField)
-        manualFields = listOf(ownerMapField, mappingField, classGraphField, diagnosticsField, diCatalogField)
+        manualFields = listOf(artifactsDirField, mappingField, classGraphField, diagnosticsField, diCatalogField)
 
         manualArtifactsCheckBox.addActionListener { updateManualFields() }
         artifactCombo.addActionListener { applySelectedArtifactSet() }
@@ -162,8 +157,7 @@ internal class JankHunterAdvancedPanel(
         addRow(filtersForm, 3, "Class", classField)
 
         val appearanceForm = formPanel()
-        addRow(appearanceForm, 0, "Стиль отчёта", reportStyleCombo)
-        addWideRow(appearanceForm, 1, presentationCheckBox)
+        addWideRow(appearanceForm, 0, presentationCheckBox)
 
         val diagnosticsForm = formPanel()
         addRow(diagnosticsForm, 0, "CLI", cliPathField)
@@ -214,7 +208,7 @@ internal class JankHunterAdvancedPanel(
     }
 
     fun options(): JankHunterAdvancedOptions = JankHunterAdvancedOptions(
-        ownerMap = ownerMapField.text.trim(),
+        artifactsDir = artifactsDirField.text.trim(),
         mapping = mappingField.text.trim(),
         classGraph = classGraphField.text.trim(),
         diagnostics = diagnosticsField.text.trim(),
@@ -223,15 +217,10 @@ internal class JankHunterAdvancedPanel(
         screen = screenField.text.trim(),
         owner = ownerField.text.trim(),
         className = classField.text.trim(),
-        reportStyle = reportStyleCombo.selectedItem?.toString().orEmpty().ifBlank { "modern" },
         presentation = presentationCheckBox.isSelected,
     )
 
     fun cliPath(): String = cliPathField.text.trim()
-
-    fun setCliPath(path: String) {
-        cliPathField.text = path
-    }
 
     fun setContext(text: String, compare: Boolean) {
         contextLabel.text = text
@@ -324,7 +313,7 @@ internal class JankHunterAdvancedPanel(
     private fun applySelectedArtifactSet() {
         if (manualArtifactsCheckBox.isSelected) return
         val set = artifactSets.getOrNull(artifactCombo.selectedIndex) ?: return
-        ownerMapField.text = set.ownerMap
+        artifactsDirField.text = set.artifactsDir
         mappingField.text = set.mapping
         classGraphField.text = set.classGraph
         diagnosticsField.text = set.diagnostics

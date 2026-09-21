@@ -1,42 +1,20 @@
 package analyze
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
-func TestClassGraphIndexRelevantEdgesIncludesSelectedAndRuntimeTargets(t *testing.T) {
-	index := NewClassGraphIndex([]ClassGraphEdge{
-		{From: "feature.A", To: "feature.B", CallerMethod: "a()V", CalleeMethod: "b", Count: 2},
-		{From: "feature.C", To: "feature.A", CallerMethod: "c()V", CalleeMethod: "a", Count: 3},
-		{From: "feature.D", To: "feature.Runtime", CallerMethod: "d()V", CalleeMethod: "r", Count: 4},
-		{From: "feature.Noise", To: "feature.Other", CallerMethod: "n()V", CalleeMethod: "o", Count: 5},
-	})
-
-	edges := index.RelevantEdges(
-		map[string]struct{}{"feature.A": {}},
-		map[string]struct{}{"feature.Runtime": {}},
-	)
-
-	if len(edges) != 3 {
-		t.Fatalf("len(edges) = %d, want 3: %+v", len(edges), edges)
-	}
-	assertGraphEdge(t, edges, "feature.A", "feature.B")
-	assertGraphEdge(t, edges, "feature.C", "feature.A")
-	assertGraphEdge(t, edges, "feature.D", "feature.Runtime")
-}
-
-func TestClassGraphIndexDeduplicatesCyclesAndRepeatedLookups(t *testing.T) {
+func TestClassGraphIndexDeduplicatesCycles(t *testing.T) {
 	index := NewClassGraphIndex([]ClassGraphEdge{
 		{From: "feature.A", To: "feature.B", CallerMethod: "a()V", CalleeMethod: "b", Count: 2},
 		{From: "feature.A", To: "feature.B", CallerMethod: "a()V", CalleeMethod: "b", Count: 3},
 		{From: "feature.B", To: "feature.A", CallerMethod: "b()V", CalleeMethod: "a", Count: 4},
 	})
 
-	edges := index.RelevantEdges(
-		map[string]struct{}{"feature.A": {}, "feature.B": {}},
-		nil,
-	)
-
+	edges := append(classGraphOutgoing(index, "feature.A"), classGraphOutgoing(index, "feature.B")...)
 	if len(edges) != 2 {
-		t.Fatalf("len(edges) = %d, want 2: %+v", len(edges), edges)
+		t.Fatalf("len(outgoing edges) = %d, want 2: %+v", len(edges), edges)
 	}
 	for _, edge := range edges {
 		if edge.From == "feature.A" && edge.To == "feature.B" && edge.Count != 5 {
@@ -44,6 +22,35 @@ func TestClassGraphIndexDeduplicatesCyclesAndRepeatedLookups(t *testing.T) {
 		}
 	}
 	assertGraphEdge(t, edges, "feature.B", "feature.A")
+}
+
+func TestGraphIndexesStoreCanonicalEdgesAndCompactAdjacency(t *testing.T) {
+	edges := []ClassGraphEdge{{
+		From: "feature.A", To: "feature.B", CallerMethod: "open()V", CalleeMethod: "load()V", Count: 2,
+	}}
+	classIndex := NewClassGraphIndex(edges)
+	classEdge := classIndex.edges[classIndex.outgoing["feature.A"][0]]
+	if classEdge.To != "feature.B" || classEdge.Count != 2 {
+		t.Fatalf("class adjacency does not resolve into canonical storage: %+v", classEdge)
+	}
+
+	methodIndex := NewMethodGraphIndex(edges)
+	methodKey := methodGraphNodeKey{className: "feature.A", methodName: "open()V"}
+	methodEdge := methodIndex.edges[methodIndex.outgoing[methodKey][0]]
+	if methodEdge.To != "feature.B" || methodEdge.CalleeMethod != "load()V" {
+		t.Fatalf("method adjacency does not resolve into canonical storage: %+v", methodEdge)
+	}
+}
+
+func TestMethodGraphIndexSharesCanonicalClassEdges(t *testing.T) {
+	classIndex := NewClassGraphIndex([]ClassGraphEdge{{
+		From: "feature.A", To: "feature.B", CallerMethod: "open()V", CalleeMethod: "load()V", Count: 2,
+	}})
+	methodIndex := newMethodGraphIndex(classIndex.edges)
+
+	if &methodIndex.edges[0] != &classIndex.edges[0] {
+		t.Fatal("method index copied the canonical class-edge storage")
+	}
 }
 
 func TestClassGraphIndexCycles(t *testing.T) {
@@ -95,11 +102,11 @@ func TestMethodGraphIndexUsesCallerAndCalleeMethods(t *testing.T) {
 		{From: "feature.A", To: "feature.B", CallerMethod: "open()V", CalleeMethod: "load()V", Count: 3},
 	})
 
-	edges := index.Outgoing["feature.A#open()V"]
+	edges := methodGraphOutgoing(index, methodGraphNodeKey{className: "feature.A", methodName: "open()V"})
 	if len(edges) != 1 {
 		t.Fatalf("len(method edges) = %d, want 1: %+v", len(edges), edges)
 	}
-	if edges[0].ToMethod != "load()V" || edges[0].Count != 5 {
+	if edges[0].CalleeMethod != "load()V" || edges[0].Count != 5 {
 		t.Fatalf("unexpected method edge: %+v", edges[0])
 	}
 
@@ -116,67 +123,170 @@ func TestMethodGraphIndexUsesCallerAndCalleeMethods(t *testing.T) {
 	}
 }
 
-func TestClassGraphIndexPrunesLargeSparseGraphByWeight(t *testing.T) {
-	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
-		{From: "feature.LowA", To: "feature.LowB", Count: 1},
-		{From: "feature.HotA", To: "feature.HotB", Count: 50},
-		{From: "feature.MidA", To: "feature.MidB", Count: 20},
-		{From: "feature.ColdA", To: "feature.ColdB", Count: 2},
-	}, GraphIndexBudget{MaxEdges: 2})
+func TestGraphIndexesSaturateCountsInsteadOfWrapping(t *testing.T) {
+	const maximum = ^uint64(0)
+	edges := []ClassGraphEdge{
+		{From: "feature.A", To: "feature.Target", CallerMethod: "a()V", CalleeMethod: "load()V", Count: maximum},
+		{From: "feature.A", To: "feature.Target", CallerMethod: "a()V", CalleeMethod: "load()V", Count: 1},
+		{From: "feature.B", To: "feature.Target", CallerMethod: "b()V", CalleeMethod: "load()V", Count: 1},
+		{From: "feature.Target", To: "feature.A", Count: maximum},
+	}
 
-	if _, ok := index.Outgoing["feature.HotA"]; !ok {
-		t.Fatalf("hot edge was pruned: %+v", index.Outgoing)
+	classIndex := NewClassGraphIndex(edges)
+	if got := classGraphOutgoing(classIndex, "feature.A")[0].Count; got != maximum {
+		t.Fatalf("class edge count wrapped to %d", got)
 	}
-	if _, ok := index.Outgoing["feature.MidA"]; !ok {
-		t.Fatalf("mid edge was pruned: %+v", index.Outgoing)
+	cycles := classIndex.StronglyConnectedComponents(1)
+	if len(cycles) != 1 || cycles[0].Weight != maximum {
+		t.Fatalf("cycle weight did not saturate: %+v", cycles)
 	}
-	if _, ok := index.Outgoing["feature.LowA"]; ok {
-		t.Fatalf("low edge survived pruning: %+v", index.Outgoing)
-	}
-}
 
-func TestClassGraphIndexBudgetsRelevantEdges(t *testing.T) {
-	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
-		{From: "feature.A", To: "feature.B", Count: 10},
-		{From: "feature.B", To: "feature.C", Count: 8},
-		{From: "feature.D", To: "feature.A", Count: 6},
-		{From: "feature.E", To: "feature.A", Count: 4},
-	}, GraphIndexBudget{MaxRelevantEdges: 2})
-
-	edges := index.RelevantEdges(map[string]struct{}{"feature.A": {}}, nil)
-	if len(edges) != 2 {
-		t.Fatalf("len(edges) = %d, want 2: %+v", len(edges), edges)
+	methodIndex := NewMethodGraphIndex(edges)
+	if got := methodGraphOutgoing(methodIndex, methodGraphNodeKey{className: "feature.A", methodName: "a()V"})[0].Count; got != maximum {
+		t.Fatalf("method edge count wrapped to %d", got)
 	}
-	for _, edge := range edges {
-		if edge.Count < 6 {
-			t.Fatalf("low-priority relevant edge survived budget: %+v", edges)
+	methods := methodIndex.HotMethods(map[string]float64{"feature.Target": 1}, nil, 10)
+	for _, method := range methods {
+		if method.ClassName == "feature.Target" && method.Method == "load()V" && method.Role == "callee" {
+			if method.Count != maximum {
+				t.Fatalf("hot method count wrapped to %d", method.Count)
+			}
+			return
 		}
 	}
+	t.Fatalf("target hot method missing: %+v", methods)
 }
 
-func TestClassGraphIndexSkipsCyclesWhenGraphExceedsBudget(t *testing.T) {
-	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
-		{From: "feature.A", To: "feature.B", Count: 1},
-		{From: "feature.B", To: "feature.A", Count: 1},
-		{From: "feature.C", To: "feature.D", Count: 1},
-	}, GraphIndexBudget{MaxSCCNodes: 2})
+func TestGraphIndexRetainsEdgesBeyondFormerGlobalLimit(t *testing.T) {
+	const edgeCount = 150_001
+	edges := make([]ClassGraphEdge, 0, edgeCount)
+	for index := range edgeCount {
+		edges = append(edges, ClassGraphEdge{
+			From:  "feature.Source",
+			To:    fmt.Sprintf("feature.Target%06d", index),
+			Count: 1,
+		})
+	}
 
-	if cycles := index.StronglyConnectedComponents(8); len(cycles) != 0 {
-		t.Fatalf("cycles should be skipped when SCC budget is exceeded: %+v", cycles)
+	index := NewClassGraphIndex(edges)
+	if got := len(index.outgoing["feature.Source"]); got != edgeCount {
+		t.Fatalf("retained edges = %d, want %d", got, edgeCount)
 	}
 }
 
-func TestMethodGraphIndexPrunesByWeight(t *testing.T) {
-	index := NewMethodGraphIndexWithBudget([]ClassGraphEdge{
-		{From: "feature.Low", To: "feature.Target", CallerMethod: "low()V", CalleeMethod: "load()V", Count: 1},
-		{From: "feature.Hot", To: "feature.Target", CallerMethod: "hot()V", CalleeMethod: "load()V", Count: 10},
-	}, GraphIndexBudget{MaxEdges: 1})
-
-	if _, ok := index.Outgoing["feature.Hot#hot()V"]; !ok {
-		t.Fatalf("hot method edge was pruned: %+v", index.Outgoing)
+func classGraphOutgoing(index *ClassGraphIndex, node string) []ClassGraphEdge {
+	edges := make([]ClassGraphEdge, len(index.outgoing[node]))
+	for position, edgeIndex := range index.outgoing[node] {
+		edges[position] = index.edges[edgeIndex]
 	}
-	if _, ok := index.Outgoing["feature.Low#low()V"]; ok {
-		t.Fatalf("low method edge survived pruning: %+v", index.Outgoing)
+	return edges
+}
+
+func methodGraphOutgoing(index *MethodGraphIndex, node methodGraphNodeKey) []ClassGraphEdge {
+	edges := make([]ClassGraphEdge, len(index.outgoing[node]))
+	for position, edgeIndex := range index.outgoing[node] {
+		edges[position] = index.edges[edgeIndex]
+	}
+	return edges
+}
+
+func TestStronglyConnectedComponentsDoesNotStopAtFormerNodeLimit(t *testing.T) {
+	const nodeCount = 10_001
+	edges := make([]ClassGraphEdge, 0, nodeCount)
+	for index := range nodeCount {
+		edges = append(edges, ClassGraphEdge{
+			From:  fmt.Sprintf("feature.Node%05d", index),
+			To:    fmt.Sprintf("feature.Node%05d", (index+1)%nodeCount),
+			Count: 1,
+		})
+	}
+
+	cycles := NewClassGraphIndex(edges).StronglyConnectedComponents(1)
+	if len(cycles) != 1 {
+		t.Fatalf("complete SCC count = %d, want 1", len(cycles))
+	}
+	if len(cycles[0].Nodes) != nodeCount || cycles[0].Weight != nodeCount {
+		t.Fatalf("complete SCC was not retained: %+v", cycles[0])
+	}
+}
+
+func TestHotPathSearchDoesNotStopAtFormerSourceLimit(t *testing.T) {
+	const sourceCount = 81
+	edges := make([]ClassGraphEdge, 0, sourceCount)
+	scores := make(map[string]float64, sourceCount)
+	for index := range sourceCount {
+		source := fmt.Sprintf("feature.Source%02d", index)
+		target := fmt.Sprintf("feature.Leaf%02d", index)
+		if index == sourceCount-1 {
+			target = "feature.RuntimeTarget"
+		}
+		edges = append(edges, ClassGraphEdge{From: source, To: target, Count: 1})
+		scores[source] = float64(sourceCount - index)
+	}
+
+	paths := NewClassGraphIndex(edges).HotPaths(
+		scores,
+		map[string]struct{}{"feature.RuntimeTarget": {}},
+		1,
+	)
+	if len(paths) != 1 || !paths[0].RuntimeTarget || paths[0].Nodes[1] != "feature.RuntimeTarget" {
+		t.Fatalf("late source runtime path was dropped: %+v", paths)
+	}
+}
+
+func TestDefaultHotPathSearchDoesNotStopAtFormerExplorationLimit(t *testing.T) {
+	const branches = 2_100
+	edges := make([]ClassGraphEdge, 0, branches*2)
+	for branch := 0; branch < branches; branch++ {
+		middle := fmt.Sprintf("feature.Middle%04d", branch)
+		edges = append(edges, ClassGraphEdge{From: "feature.Source", To: middle, Count: 1})
+		if branch == branches-1 {
+			edges = append(edges, ClassGraphEdge{From: middle, To: "feature.RuntimeTarget", Count: 1})
+		} else {
+			edges = append(edges, ClassGraphEdge{From: middle, To: fmt.Sprintf("feature.Leaf%04d", branch), Count: 1})
+		}
+	}
+
+	paths := NewClassGraphIndex(edges).HotPaths(
+		map[string]float64{"feature.Source": 10},
+		map[string]struct{}{"feature.RuntimeTarget": {}},
+		8,
+	)
+	if len(paths) != 1 || !paths[0].RuntimeTarget || paths[0].Nodes[len(paths[0].Nodes)-1] != "feature.RuntimeTarget" {
+		t.Fatalf("full hot-path search missed late runtime target: %+v", paths)
+	}
+}
+
+func TestHotPathSearchKeepsOnlyBoundedCandidateStorage(t *testing.T) {
+	const candidateCount = 2_000
+	edges := make([]ClassGraphEdge, 0, candidateCount)
+	runtimeTargets := make(map[string]struct{}, candidateCount)
+	for index := range candidateCount {
+		target := fmt.Sprintf("feature.Target%04d", index)
+		edges = append(edges, ClassGraphEdge{
+			From:  "feature.Source",
+			To:    target,
+			Count: uint64(candidateCount - index),
+		})
+		runtimeTargets[target] = struct{}{}
+	}
+	index := NewClassGraphIndex(edges)
+	scores := map[string]float64{"feature.Source": 10}
+
+	allocations := testing.AllocsPerRun(5, func() {
+		paths := index.HotPaths(scores, runtimeTargets, 8)
+		if len(paths) != 8 {
+			t.Fatalf("hot path count = %d, want 8", len(paths))
+		}
+	})
+	if allocations > 500 {
+		t.Fatalf("HotPaths() allocated %.0f objects for %d candidates; candidate storage must stay bounded", allocations, candidateCount)
+	}
+}
+
+func TestGraphResultCapacityDoesNotTrustUnboundedLimit(t *testing.T) {
+	if capacity := boundedResultCapacity(1_000_000); capacity != maxPreallocatedGraphResults {
+		t.Fatalf("preallocated result capacity = %d, want %d", capacity, maxPreallocatedGraphResults)
 	}
 }
 

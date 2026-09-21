@@ -34,20 +34,23 @@ type LeakReport struct {
 }
 
 type LeakReportStats struct {
-	TotalSuspects       int
-	High                int
-	Medium              int
-	OK                  int
-	HeapConfirmed       int
-	RuntimeOnly         int
-	TimeOnly            int
-	AfterExplicitGC     int
-	UnconfirmedHPROF    int
-	DegradedQuality     int
-	UnknownHolder       int
-	UserOwned           int
-	SystemRetained      int
-	TotalRetained       uint64
+	TotalSuspects    int
+	High             int
+	Medium           int
+	OK               int
+	HeapConfirmed    int
+	HeapClassPaths   int
+	RuntimeOnly      int
+	TimeOnly         int
+	AfterExplicitGC  int
+	UnconfirmedHPROF int
+	DegradedQuality  int
+	UnknownHolder    int
+	UserOwned        int
+	SystemRetained   int
+	TotalRetained    uint64
+	// EstimatedRetainedKB is the largest single retained-size estimate. Retained subtrees can
+	// overlap, so adding their sizes would present a false total.
 	EstimatedRetainedKB uint64
 	MaxAgeMS            uint64
 	UniqueClasses       int
@@ -58,8 +61,6 @@ type LeakReportItem struct {
 	Fingerprint string
 	Suspect     MemoryLeakSuspect
 	Rank        int
-	Graph       LeakGraph
-	PlainText   string
 }
 
 type LeakGraph struct {
@@ -100,21 +101,25 @@ type LeakCompareReport struct {
 }
 
 type LeakCompareStats struct {
-	BaselineTotal        int
-	CandidateTotal       int
-	New                  int
-	Worse                int
-	Same                 int
-	Better               int
-	Resolved             int
-	HeapConfirmedBefore  int
-	HeapConfirmedAfter   int
-	BaselineRetained     uint64
-	CandidateRetained    uint64
-	BaselineEstimatedKB  uint64
-	CandidateEstimatedKB uint64
-	ChangeLabel          string
-	OverallStatus        string
+	BaselineTotal         int
+	CandidateTotal        int
+	New                   int
+	Worse                 int
+	Same                  int
+	Better                int
+	Resolved              int
+	HeapConfirmedBefore   int
+	HeapClassPathsBefore  int
+	HeapClassPathsAfter   int
+	HeapConfirmedAfter    int
+	HeapUnconfirmedBefore int
+	HeapUnconfirmedAfter  int
+	BaselineRetained      uint64
+	CandidateRetained     uint64
+	BaselineEstimatedKB   uint64
+	CandidateEstimatedKB  uint64
+	ChangeLabel           string
+	OverallStatus         string
 }
 
 type LeakDelta struct {
@@ -142,7 +147,6 @@ type LeakDelta struct {
 	MatchConfidence   string
 	Explanation       string
 	Recommendation    string
-	PlainText         string
 }
 
 func BuildLeakReport(summary Summary) LeakReport {
@@ -152,12 +156,12 @@ func BuildLeakReport(summary Summary) LeakReport {
 	holderSeen := map[string]struct{}{}
 	mode := LeakModeLight
 	for index, suspect := range summary.MemoryLeaks {
-		if suspect.HeapEvidence {
+		if suspect.HeapEvidence || suspect.HeapCandidate {
 			mode = LeakModeHeap
 		}
 		stats.TotalSuspects++
-		stats.TotalRetained += suspect.Count
-		stats.EstimatedRetainedKB += suspect.EstimatedRetainedKB
+		stats.TotalRetained = saturatingUint64Sum(stats.TotalRetained, suspect.Count)
+		stats.EstimatedRetainedKB = maxUint64(stats.EstimatedRetainedKB, suspect.EstimatedRetainedKB)
 		if suspect.MaxAgeMS > stats.MaxAgeMS {
 			stats.MaxAgeMS = suspect.MaxAgeMS
 		}
@@ -169,17 +173,22 @@ func BuildLeakReport(summary Summary) LeakReport {
 		default:
 			stats.OK++
 		}
+		if confirmedHeapReferencePath(suspect.HeapClassEvidence) || suspect.HeapEvidence {
+			stats.HeapClassPaths++
+		}
 		if suspect.HeapEvidence {
 			stats.HeapConfirmed++
 		} else {
 			stats.RuntimeOnly++
 		}
-		switch suspect.EvidenceKind {
-		case RetentionEvidenceAfterExplicitGC:
+		if suspect.AfterExplicitGCCount > 0 || suspect.EvidenceKind == RetentionEvidenceAfterExplicitGC {
 			stats.AfterExplicitGC++
-		case RetentionEvidenceUnconfirmedHPROF:
+		}
+		if suspect.HeapCandidate && !suspect.HeapEvidence && !confirmedHeapReferencePath(suspect.HeapClassEvidence) || suspect.EvidenceKind == RetentionEvidenceUnconfirmedHPROF {
 			stats.UnconfirmedHPROF++
-		case RetentionEvidenceTimeOnly, "":
+		}
+		if suspect.TimeOnlyCount > 0 || suspect.EvidenceKind == RetentionEvidenceTimeOnly ||
+			suspect.EvidenceKind == "" && suspect.AfterExplicitGCCount == 0 {
 			stats.TimeOnly++
 		}
 		if suspect.DataQuality == "degraded" {
@@ -204,8 +213,6 @@ func BuildLeakReport(summary Summary) LeakReport {
 			Fingerprint: LeakFingerprint(suspect),
 			Suspect:     suspect,
 			Rank:        index + 1,
-			Graph:       BuildLeakGraph(suspect),
-			PlainText:   leakPlainText(suspect),
 		})
 	}
 	stats.UniqueClasses = len(classSeen)
@@ -213,7 +220,7 @@ func BuildLeakReport(summary Summary) LeakReport {
 	warnings := leakWarnings(summary.Warnings)
 	for _, item := range items {
 		for _, warning := range item.Suspect.QualityWarnings {
-			warnings = append(warnings, fmt.Sprintf("Качество сигнала %s: %s.", item.Suspect.ClassName, warning))
+			warnings = append(warnings, fmt.Sprintf("Качество сбора: удержание %s: %s.", item.Suspect.ClassName, warning))
 		}
 	}
 	warnings = uniqueStrings(warnings)
@@ -225,12 +232,18 @@ func BuildLeakReport(summary Summary) LeakReport {
 		Items:    items,
 		Warnings: warnings,
 	}
-	if mode == LeakModeHeap {
+	if stats.HeapConfirmed > 0 {
 		report.ModeTitle = "Подтвержденные пути HPROF"
 		report.ModeHint = "Для части объектов HPROF подтвердил путь от распознанного корня GC. Это доказательство удержания в момент дампа, но окончательный диагноз утечки требует проверки ожидаемого жизненного цикла."
+	} else if stats.HeapClassPaths > 0 {
+		report.ModeTitle = "HPROF: пути к экземплярам классов"
+		report.ModeHint = "Дамп показывает пути и размеры экземпляров классов. Runtime-наблюдения представлены отдельно и сохраняют собственные оценки."
+	} else if mode == LeakModeHeap {
+		report.ModeTitle = "HPROF проверен: пути не найдены"
+		report.ModeHint = "Для экземпляров наблюдаемых классов путь от GC root не найден. Это отдельное наблюдение дампа, которое не опровергает runtime-удержание."
 	} else {
 		report.ModeTitle = "Сигналы достижимости"
-		report.ModeHint = "Подтвержденного пути HPROF нет. time_only означает только жизнь после задержки; after_explicit_gc — жизнь после запрошенного GC. Оба уровня являются сигналами для проверки, а не доказательством утечки."
+		report.ModeHint = "Подтверждённого пути HPROF нет. Жизнь после задержки и после запрошенного GC является сигналом для проверки, а не доказательством утечки."
 	}
 	return report
 }
@@ -241,14 +254,18 @@ func BuildLeakCompareReport(comparison Comparison) LeakCompareReport {
 	deltas := CompareLeakSuspects(comparison.Baseline.MemoryLeaks, comparison.Candidate.MemoryLeaks)
 	comparisonConfidence := retentionComparisonConfidence(comparison.Confidence(), baseline, candidate)
 	stats := LeakCompareStats{
-		BaselineTotal:        len(comparison.Baseline.MemoryLeaks),
-		CandidateTotal:       len(comparison.Candidate.MemoryLeaks),
-		HeapConfirmedBefore:  baseline.Stats.HeapConfirmed,
-		HeapConfirmedAfter:   candidate.Stats.HeapConfirmed,
-		BaselineRetained:     comparison.Baseline.Retained,
-		CandidateRetained:    comparison.Candidate.Retained,
-		BaselineEstimatedKB:  baseline.Stats.EstimatedRetainedKB,
-		CandidateEstimatedKB: candidate.Stats.EstimatedRetainedKB,
+		BaselineTotal:         len(comparison.Baseline.MemoryLeaks),
+		CandidateTotal:        len(comparison.Candidate.MemoryLeaks),
+		HeapConfirmedBefore:   baseline.Stats.HeapConfirmed,
+		HeapClassPathsBefore:  baseline.Stats.HeapClassPaths,
+		HeapClassPathsAfter:   candidate.Stats.HeapClassPaths,
+		HeapConfirmedAfter:    candidate.Stats.HeapConfirmed,
+		HeapUnconfirmedBefore: baseline.Stats.UnconfirmedHPROF,
+		HeapUnconfirmedAfter:  candidate.Stats.UnconfirmedHPROF,
+		BaselineRetained:      comparison.Baseline.Retained,
+		CandidateRetained:     comparison.Candidate.Retained,
+		BaselineEstimatedKB:   baseline.Stats.EstimatedRetainedKB,
+		CandidateEstimatedKB:  candidate.Stats.EstimatedRetainedKB,
 	}
 	for _, delta := range deltas {
 		switch delta.Status {
@@ -340,6 +357,16 @@ func CompareLeakSuspects(baseline, candidate []MemoryLeakSuspect) []LeakDelta {
 }
 
 func BuildLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
+	if heap := suspect.HeapClassEvidence; confirmedHeapReferencePath(heap) {
+		graph := heapLeakGraph(MemoryLeakSuspect{ClassName: heap.ClassName, ReferencePath: heap.ReferencePath,
+			RetainedClassSample: heap.DominatorTree, GCRootCategory: heap.GCRootCategory})
+		graph.Title = "HPROF: путь к экземпляру класса"
+		if heap.ReferencePathState == HeapPathTruncated || heapReferencePathState(heap.ReferencePath) == HeapPathTruncated {
+			graph.Title = "HPROF: фрагмент пути к экземпляру класса"
+		}
+		graph.Subtitle = "Путь и поддерево относятся к экземпляру в дампе; runtime-контекст показан отдельно."
+		return graph
+	}
 	if len(suspect.ReferencePath) > 0 {
 		return heapLeakGraph(suspect)
 	}
@@ -363,8 +390,7 @@ func LeakFingerprint(suspect MemoryLeakSuspect) string {
 		strings.ToLower(strings.TrimSpace(suspect.ClassName)),
 		strings.ToLower(strings.TrimSpace(suspect.Holder)),
 		strings.ToLower(strings.TrimSpace(suspect.Screen)),
-		strings.ToLower(strings.TrimSpace(suspect.Flow)),
-		strings.ToLower(strings.TrimSpace(suspect.Step)),
+		strings.ToLower(strings.TrimSpace(suspect.Operation)),
 	}
 	return strings.Join(parts, "\x00")
 }
@@ -387,7 +413,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 	ageBefore := uint64(0)
 	sizeAfter := uint64(0)
 	sizeBefore := uint64(0)
-	var graph LeakGraph
 	switch {
 	case hasBefore && !hasAfter:
 		status = LeakDeltaResolved
@@ -396,7 +421,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 		countBefore = before.Count
 		ageBefore = before.MaxAgeMS
 		sizeBefore = before.EstimatedRetainedKB
-		graph = BuildLeakGraph(before)
 	case !hasBefore && hasAfter:
 		status = LeakDeltaNew
 		severity = maxLeakSeverity(after.Severity, "medium")
@@ -404,7 +428,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 		countAfter = after.Count
 		ageAfter = after.MaxAgeMS
 		sizeAfter = after.EstimatedRetainedKB
-		graph = BuildLeakGraph(after)
 	default:
 		scoreBefore = before.Score
 		scoreAfter = after.Score
@@ -429,7 +452,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 			status = LeakDeltaSame
 			severity = after.Severity
 		}
-		graph = BuildLeakGraph(after)
 	}
 	if hasAfter && severity == "high" &&
 		(after.EvidenceKind == RetentionEvidenceTimeOnly || after.EvidenceKind == RetentionEvidenceUnconfirmedHPROF) {
@@ -444,7 +466,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 		HasCandidate:      hasAfter,
 		Baseline:          before,
 		Candidate:         after,
-		Graph:             graph,
 		ScoreBefore:       scoreBefore,
 		ScoreAfter:        scoreAfter,
 		DeltaScore:        math.Round((scoreAfter-scoreBefore)*10) / 10,
@@ -461,7 +482,6 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 	}
 	delta.Explanation = leakDeltaExplanation(delta)
 	delta.Recommendation = leakDeltaRecommendation(delta)
-	delta.PlainText = leakDeltaPlainText(delta)
 	return delta
 }
 
@@ -483,10 +503,10 @@ func saturatingSignedUint64Delta(before, after uint64) int64 {
 
 func leakMatchConfidence(before MemoryLeakSuspect, hasBefore bool, after MemoryLeakSuspect, hasAfter bool) string {
 	if (hasBefore && before.DataQuality == "degraded") || (hasAfter && after.DataQuality == "degraded") {
-		return "низкое: часть retained/HPROF-данных потеряна или усечена"
+		return "низкая: часть данных об удержании объектов или дампа памяти потеряна"
 	}
 	if hasBefore && hasAfter && before.EvidenceKind != after.EvidenceKind {
-		return "низкое: уровни evidence базы и кандидата различаются (" + before.EvidenceKind + " → " + after.EvidenceKind + ")"
+		return "низкая: база и проверяемый прогон подтверждены разными источниками данных"
 	}
 	if !hasBefore || !hasAfter {
 		if (hasBefore && before.HeapEvidence) || (hasAfter && after.HeapEvidence) {
@@ -517,13 +537,19 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 	rootID := ""
 	targetID := ""
 	for index, step := range suspect.ReferencePath {
+		if step.Kind == "truncated" {
+			// The ellipsis is a display marker, not a heap object or a reference.
+			nodes = append(nodes, LeakGraphNode{ID: fmt.Sprintf("gap-%d", index), Label: "…", Kind: "gap", Depth: index})
+			prevID = ""
+			continue
+		}
 		id := step.ObjectID
 		if id == "" {
 			id = fmt.Sprintf("path-%d", index)
 		}
 		kind := leakGraphKind(step.Kind, step.ClassName, suspect.ClassName)
 		label := firstNonEmpty(step.ClassName, "object")
-		detail := step.FieldName
+		detail := step.FieldLabel()
 		if detail == "" {
 			detail = step.Kind
 		}
@@ -540,11 +566,11 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		if strings.TrimPrefix(step.ClassName, "GC root: ") == suspect.ClassName || step.ClassName == suspect.ClassName {
 			targetID = id
 		}
-		if prevID != "" {
+		if prevID != "" && prevID != id {
 			edges = append(edges, LeakGraphEdge{
 				From:  prevID,
 				To:    id,
-				Label: firstNonEmpty(step.FieldName, step.Kind, "ref"),
+				Label: firstNonEmpty(step.FieldLabel(), step.Kind, "ref"),
 				Kind:  step.Kind,
 			})
 		}
@@ -558,7 +584,7 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		nodes = append(nodes, LeakGraphNode{
 			ID:     id,
 			Label:  retained,
-			Detail: "объект удерживается доминатором",
+			Detail: "объект входит в удерживаемую цепочку",
 			Kind:   "retained",
 			Depth:  len(suspect.ReferencePath) + 1,
 		})
@@ -619,10 +645,8 @@ func runtimeLeakNodeKind(label string) string {
 	switch {
 	case strings.HasPrefix(label, "экран:"):
 		return "screen"
-	case strings.HasPrefix(label, "сценарий:"), strings.HasPrefix(label, "флоу:"):
-		return "flow"
-	case strings.HasPrefix(label, "шаг:"):
-		return "step"
+	case strings.HasPrefix(label, "операция:"):
+		return "operation"
 	case strings.HasPrefix(label, "держатель:"):
 		return "holder"
 	case strings.HasPrefix(label, "метод:"):
@@ -638,10 +662,8 @@ func runtimeLeakNodeDetail(kind string) string {
 	switch kind {
 	case "screen":
 		return "экран во время наблюдения"
-	case "flow":
-		return "пользовательский сценарий"
-	case "step":
-		return "шаг пользовательского сценария"
+	case "operation":
+		return "измеряемая операция"
 	case "holder":
 		return "вероятный владелец ссылки"
 	case "method":
@@ -655,12 +677,10 @@ func runtimeLeakNodeDetail(kind string) string {
 
 func runtimeLeakRelation(fromKind, toKind string) string {
 	switch {
-	case fromKind == "screen" && toKind == "flow":
-		return "сценарий на экране"
-	case (fromKind == "flow" || fromKind == "screen" || fromKind == "context") && toKind == "step":
-		return "шаг сценария"
-	case (fromKind == "step" || fromKind == "flow" || fromKind == "screen" || fromKind == "context") && toKind == "holder":
-		return "атрибутировано вероятному владельцу"
+	case fromKind == "screen" && toKind == "operation":
+		return "операция на экране"
+	case (fromKind == "operation" || fromKind == "screen" || fromKind == "context") && toKind == "holder":
+		return "связано с вероятным владельцем"
 	case fromKind == "holder" && toKind == "method":
 		return "место наблюдения"
 	case (fromKind == "holder" || fromKind == "method") && toKind == "target":
@@ -690,9 +710,9 @@ func leakReportVerdict(stats LeakReportStats) string {
 	case stats.TotalSuspects == 0:
 		return "Сигналов неожиданной достижимости объектов нет."
 	case stats.High > 0:
-		return fmt.Sprintf("Найдено %s; с высоким риском — %d. Сначала проверьте строки с подтвержденным HPROF-путем; runtime-сигналы без пути не являются доказательством утечки.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"), stats.High)
+		return fmt.Sprintf("Найдено %s; с высоким риском - %d. Сначала проверьте строки, где дамп памяти подтвердил путь до GC root. Наблюдение во время выполнения без такого пути не доказывает утечку.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"), stats.High)
 	case stats.Medium > 0:
-		return fmt.Sprintf("Найдено %s. Проверьте повторяемость и уровень evidence; для точной цепочки нужен HPROF-путь от корня GC.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
+		return fmt.Sprintf("Найдено %s. Проверьте повторяемость и силу данных; для точной цепочки нужен HPROF-путь от корня GC.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	default:
 		return fmt.Sprintf("Найдено %s с низким приоритетом. Это стоит мониторить, но без роста возраста или количества риск низкий.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	}
@@ -741,11 +761,11 @@ func leakWarnings(warnings []string) []string {
 func leakCompareChangeLabel(stats LeakCompareStats) string {
 	switch {
 	case stats.BaselineTotal == 0 && stats.CandidateTotal == 0:
-		return "сигналов удержания нет ни в базе, ни в кандидате"
+		return "сигналов удержания нет ни в базе, ни в проверяемом прогоне"
 	case stats.CandidateTotal > stats.BaselineTotal:
-		return "в данных кандидата больше сигналов удержания"
+		return "в проверяемом прогоне больше сигналов удержания"
 	case stats.CandidateTotal < stats.BaselineTotal:
-		return "в данных кандидата меньше сигналов удержания"
+		return "в проверяемом прогоне меньше сигналов удержания"
 	default:
 		return "количество сигналов удержания не изменилось"
 	}
@@ -767,15 +787,15 @@ func leakCompareOverallStatus(stats LeakCompareStats) string {
 }
 
 func leakCompareVerdict(stats LeakCompareStats, confidence string) string {
-	base := fmt.Sprintf("%s: база %d, кандидат %d.", stats.ChangeLabel, stats.BaselineTotal, stats.CandidateTotal)
+	base := fmt.Sprintf("%s: база %d, проверяемый прогон %d.", stats.ChangeLabel, stats.BaselineTotal, stats.CandidateTotal)
 	if stats.New > 0 || stats.Worse > 0 {
-		base += fmt.Sprintf(" Сигналы возможного ухудшения: только в кандидате %d, усилившихся %d.", stats.New, stats.Worse)
+		base += fmt.Sprintf(" Возможное ухудшение: новых сигналов %d, усилившихся %d.", stats.New, stats.Worse)
 	}
 	if stats.Resolved > 0 || stats.Better > 0 {
-		base += fmt.Sprintf(" Признаки ослабления: не найдены в кандидате %d, стали слабее %d.", stats.Resolved, stats.Better)
+		base += fmt.Sprintf(" Возможное улучшение: больше не найдены %d, стали слабее %d.", stats.Resolved, stats.Better)
 	}
 	if confidence != "" {
-		base += " Доверие сравнения: " + comparisonConfidenceLabel(confidence) + "."
+		base += " Надёжность сравнения: " + comparisonConfidenceLabel(confidence) + "."
 	}
 	if confidence == "low" {
 		base += " Вывод предварительный: повторите одинаковый сценарий в сопоставимых условиях."
@@ -799,13 +819,13 @@ func comparisonConfidenceLabel(value string) string {
 func leakDeltaStatusLabel(status string) string {
 	switch status {
 	case LeakDeltaNew:
-		return "только в кандидате"
+		return "новый в проверяемом прогоне"
 	case LeakDeltaWorse:
 		return "сигнал усилился"
 	case LeakDeltaBetter:
 		return "сигнал ослаб"
 	case LeakDeltaResolved:
-		return "не найден в кандидате"
+		return "больше не найден"
 	default:
 		return "без сильного изменения"
 	}
@@ -829,13 +849,13 @@ func leakDeltaStatusRank(status string) int {
 func leakDeltaExplanation(delta LeakDelta) string {
 	switch delta.Status {
 	case LeakDeltaNew:
-		return fmt.Sprintf("В базовом прогоне такой отпечаток не встречался, а в проверяемом появился сигнал для %s. Уровень evidence: %s; без HPROF-пути это не доказательство утечки.", delta.Candidate.ClassName, delta.Candidate.EvidenceKind)
+		return fmt.Sprintf("В базовом прогоне такого пути не было, а в проверяемом появился сигнал для %s. %s. Без подтверждённого пути до GC root это ещё не доказательство утечки.", delta.Candidate.ClassName, delta.Candidate.EvidenceLabel)
 	case LeakDeltaWorse:
 		return fmt.Sprintf("Подозрение уже было в базовом прогоне, но стало сильнее: оценка %+0.1f, количество %+d, возраст %+d мс, размер %+d КБ.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
 	case LeakDeltaBetter:
 		return fmt.Sprintf("Сигнал стал слабее: оценка %+0.1f, количество %+d, возраст %+d мс, размер %+d КБ.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
 	case LeakDeltaResolved:
-		return fmt.Sprintf("В проверяемом прогоне этот отпечаток не найден. Если сценарий, evidence и когорты совпадают, сигнал удержания %s, вероятно, устранен.", delta.Baseline.ClassName)
+		return fmt.Sprintf("В проверяемом прогоне этот сигнал не найден. Если сценарий и точность данных совпадают, удержание %s, вероятно, устранено.", delta.Baseline.ClassName)
 	default:
 		return "Сигнал остался примерно на том же уровне: проверьте, что сценарии базового и проверяемого прогонов действительно одинаковые."
 	}
@@ -846,43 +866,6 @@ func leakDeltaRecommendation(delta LeakDelta) string {
 		return delta.Candidate.Recommendation
 	}
 	return "Сохраните этот отпечаток в списке отслеживания регрессий: если он вернется в проверяемом прогоне, проверяйте тот же держатель, сценарий и очистку жизненного цикла."
-}
-
-func leakPlainText(suspect MemoryLeakSuspect) string {
-	return strings.Join([]string{
-		suspect.ClassName,
-		suspect.Holder,
-		suspect.Screen,
-		suspect.Flow,
-		suspect.Step,
-		suspect.GCRoot,
-		suspect.GCRootCategory,
-		suspect.HolderField,
-		suspect.EvidenceKind,
-		suspect.EvidenceLabel,
-		suspect.EvidenceConfidence,
-		suspect.DataQuality,
-		strings.Join(suspect.QualityWarnings, " "),
-		suspect.ChainFingerprint,
-		suspect.Impact,
-		suspect.Recommendation,
-		suspect.Evidence,
-		strings.Join(suspect.AlternativePathSummaries, " "),
-		strings.Join(suspect.InvestigationSteps, " "),
-		strings.Join(suspect.FixExamples, " "),
-		strings.Join(suspect.VerificationSteps, " "),
-	}, " ")
-}
-
-func leakDeltaPlainText(delta LeakDelta) string {
-	return strings.Join([]string{
-		delta.StatusLabel,
-		leakPlainText(delta.Baseline),
-		leakPlainText(delta.Candidate),
-		delta.Explanation,
-		delta.Recommendation,
-		delta.MatchConfidence,
-	}, " ")
 }
 
 func leakSeverityRank(value string) int {

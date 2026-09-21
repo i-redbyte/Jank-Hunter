@@ -22,6 +22,8 @@ internal enum class ManualAction(val requiresActivityReference: Boolean = false)
     MEMORY_PRESSURE,
     LOG_SPAM,
     CUSTOM_METRICS,
+    OPEN_CUSTOM_VIEW_LAB,
+    OPEN_COMPOSE_LAB,
     CLEAN_OBJECT,
     ACTIVITY_REFERENCE(true),
     VIEW_BINDING(true),
@@ -39,6 +41,8 @@ internal enum class ManualAction(val requiresActivityReference: Boolean = false)
 
 internal sealed interface ManualControlsEffect {
     data object ShareDiagnostics : ManualControlsEffect
+    data object OpenCustomViewLab : ManualControlsEffect
+    data object OpenComposeLab : ManualControlsEffect
 }
 
 internal sealed interface ManualStateUpdate {
@@ -46,6 +50,8 @@ internal sealed interface ManualStateUpdate {
     data class Runtime(val value: String, val reason: String) : ManualStateUpdate
     data class LeakCanary(val value: String) : ManualStateUpdate
     data object ShareDiagnostics : ManualStateUpdate
+    data object OpenCustomViewLab : ManualStateUpdate
+    data object OpenComposeLab : ManualStateUpdate
 }
 
 internal fun interface ManualStateSink {

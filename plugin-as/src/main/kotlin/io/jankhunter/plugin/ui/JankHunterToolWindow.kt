@@ -260,10 +260,6 @@ class JankHunterToolWindow(
         runMode(if (currentTask == UserTask.REPORT) JankHunterMode.INSPECT else JankHunterMode.COMPARE)
     }
 
-    private fun exportProblems() {
-        runMode(JankHunterMode.PROBLEMS)
-    }
-
     private fun runScorecard() {
         if (currentTask != UserTask.COMPARE) {
             Messages.showInfoMessage(project, "Scorecard доступен для сравнения baseline и candidate.", "Jank Hunter")
@@ -339,7 +335,7 @@ class JankHunterToolWindow(
             candidate = paths(candidateLogs),
             candidateLogScope = JankHunterLogScope.ALL_SELECTED,
             output = output.path,
-            ownerMap = advanced.ownerMap,
+            artifactsDir = advanced.artifactsDir,
             mapping = advanced.mapping,
             classGraph = advanced.classGraph,
             diagnostics = advanced.diagnostics,
@@ -358,7 +354,6 @@ class JankHunterToolWindow(
             format = "csv",
             json = false,
             presentation = advanced.presentation,
-            reportStyle = advanced.reportStyle,
             animatedBackground = false,
         )
     }
@@ -463,9 +458,7 @@ class JankHunterToolWindow(
             JankHunterNotifications.reportReady(
                 project,
                 output.path,
-                problemCount = null,
                 openReport = { BrowserUtil.browse(output.toURI()) },
-                openProblems = null,
                 rerun = { runMode(request.mode) },
             )
         }
@@ -503,7 +496,6 @@ class JankHunterToolWindow(
         settings.cliPath = advancedPanel.cliPath()
         if (includeAdvanced) {
             settings.presentationMode = advanced.presentation
-            settings.reportStyle = advanced.reportStyle
         }
     }
 

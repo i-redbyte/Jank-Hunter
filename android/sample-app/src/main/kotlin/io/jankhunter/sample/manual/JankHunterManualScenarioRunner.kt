@@ -1,5 +1,7 @@
 package io.jankhunter.sample.manual
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.LeakCanaryBridge
 import io.jankhunter.sample.R
 import io.jankhunter.sample.SampleApplication
@@ -22,6 +24,8 @@ internal class JankHunterManualScenarioRunner(
             ManualAction.RUN_NOISY_CANDIDATE to { runNoisyCandidate(requireNotNull(it)) },
             ManualAction.FLUSH_DIAGNOSTICS to { flushDiagnostics() },
             ManualAction.SHARE_DIAGNOSTICS to { stateSink.emit(ManualStateUpdate.ShareDiagnostics) },
+            ManualAction.OPEN_CUSTOM_VIEW_LAB to { stateSink.emit(ManualStateUpdate.OpenCustomViewLab) },
+            ManualAction.OPEN_COMPOSE_LAB to { stateSink.emit(ManualStateUpdate.OpenComposeLab) },
             ManualAction.BOTH_CLEAN_OBJECT to { runCleanLeakCanaryBenchmark() },
             ManualAction.BOTH_RETAINED_OBJECT to { runRetainedLeakCanaryBenchmark(requireNotNull(it)) },
             ManualAction.BOTH_CACHE_BURST to { runCacheLeakCanaryBenchmark() },
@@ -47,8 +51,7 @@ internal class JankHunterManualScenarioRunner(
 
     private fun runCleanBaseline() {
         application.resetScenario()
-        JankHunter.withFlow("sample.guided.baseline") {
-            JankHunter.markFlowStep("clean_probe")
+        JankHunterTelemetry.traceOperation("sample.guided.baseline.clean_probe") {
             performance.recordCustomMetrics()
             retention.recordCleanObject()
         }
@@ -57,8 +60,7 @@ internal class JankHunterManualScenarioRunner(
     }
 
     private fun runNoisyCandidate(activityReference: Any) {
-        JankHunter.withFlow("sample.guided.candidate") {
-            JankHunter.markFlowStep("regression_pack")
+        JankHunterTelemetry.traceOperation("sample.guided.candidate.regression_pack") {
             performance.recordUiStall()
             performance.recordMemoryPressure()
             retention.recordCacheEntries()

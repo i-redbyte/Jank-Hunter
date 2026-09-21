@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import com.sun.management.ThreadMXBean
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.lang.management.ManagementFactory
 import java.nio.file.Files
 import java.util.Locale
@@ -22,23 +23,23 @@ class RuntimeGraphBenchmarkTest {
 
         withGraph { graph ->
             report("enter", measure(iterations) {
-                val token = graph.enter(1L, enabled = true)
+                val token = graph.enter(1L, METHOD_NAMES[1], enabled = true)
                 graph.exit(token, 1L)
             })
             report("exit_publish", measure(iterations) {
-                graph.recordEdge(1L, 2L)
+                recordEdge(graph, 1L, METHOD_NAMES[1], 2L, METHOD_NAMES[2])
             })
         }
         withGraph(consumerDelayNanos = 100_000_000L) { graph ->
-            repeat(2_000) { graph.recordEdge(1L, 2L) }
+            repeat(2_000) { recordEdge(graph, 1L, METHOD_NAMES[1], 2L, METHOD_NAMES[2]) }
             report("buffer_full_or_breaker", measure(iterations) {
-                graph.recordEdge(1L, 2L)
+                recordEdge(graph, 1L, METHOD_NAMES[1], 2L, METHOD_NAMES[2])
             })
         }
         withMutableContextGraph { graph, context ->
             report("context_change", measure(iterations) { index ->
                 context.set(index)
-                graph.recordEdge(1L, 2L)
+                recordEdge(graph, 1L, METHOD_NAMES[1], 2L, METHOD_NAMES[2])
             })
         }
         listOf(1, 8, 32).forEach { producers ->
@@ -95,13 +96,22 @@ class RuntimeGraphBenchmarkTest {
         val done = CountDownLatch(producers)
         val threads = List(producers) { producer ->
             Thread({
-                repeat(WARMUP_ITERATIONS / producers + 1) { graph.recordEdge(producer.toLong(), 2L) }
+                repeat(WARMUP_ITERATIONS / producers + 1) {
+                    recordEdge(graph, producer.toLong(), METHOD_NAMES[producer], 2L, METHOD_NAMES[2])
+                }
                 start.await()
                 val readOverhead = allocationReadOverhead(Thread.currentThread().id)
                 val before = allocatedBytes(Thread.currentThread().id)
                 repeat(perProducer) { index ->
                     val started = System.nanoTime()
-                    graph.recordEdge(producer.toLong(), (index and 31).toLong())
+                    val child = index and 31
+                    recordEdge(
+                        graph,
+                        producer.toLong(),
+                        METHOD_NAMES[producer],
+                        child.toLong(),
+                        METHOD_NAMES[child],
+                    )
                     allSamples[producer][index] = System.nanoTime() - started
                 }
                 allocations.set(producer, allocatedBytes(Thread.currentThread().id) - before - readOverhead)
@@ -168,6 +178,19 @@ class RuntimeGraphBenchmarkTest {
         return (after - before - overhead).coerceAtLeast(0L).toDouble() / operations.toDouble()
     }
 
+    private fun recordEdge(
+        graph: RuntimeCallGraph,
+        parentId: Long,
+        parentName: String,
+        childId: Long,
+        childName: String,
+    ) {
+        val parent = graph.enter(parentId, parentName, enabled = true)
+        val child = graph.enter(childId, childName, enabled = true)
+        graph.exit(child, childId)
+        graph.exit(parent, parentId)
+    }
+
     private fun withGraph(
         consumerDelayNanos: Long = 0L,
         block: (RuntimeCallGraph) -> Unit,
@@ -195,8 +218,7 @@ class RuntimeGraphBenchmarkTest {
         val graph = RuntimeCallGraph(
             nowMs = { System.nanoTime() / 1_000_000L },
             captureScreen = { context.screen },
-            captureFlow = { context.flow },
-            captureStep = { context.step },
+            captureOperationId = { context.operationId },
             maxKeys = { 4_096 },
         )
         graph.resetFlushState(writer)
@@ -214,15 +236,14 @@ class RuntimeGraphBenchmarkTest {
         return RuntimeCallGraph(
             nowMs = { System.nanoTime() / 1_000_000L },
             captureScreen = { "screen" },
-            captureFlow = { "flow" },
-            captureStep = { "step" },
+            captureOperationId = { 1L },
             maxKeys = { 4_096 },
             consumerDelayNanos = consumerDelayNanos,
         )
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {
-        return AsyncLogWriter.open(
+        return AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000).build(),
             "main",
@@ -231,13 +252,11 @@ class RuntimeGraphBenchmarkTest {
 
     private class MutableContext {
         @Volatile var screen = "screen-0"
-        @Volatile var flow = "flow-0"
-        @Volatile var step = "step-0"
+        @Volatile var operationId = 10_000L
 
         fun set(index: Int) {
             screen = if (index and 1 == 0) "screen-0" else "screen-1"
-            flow = if (index and 2 == 0) "flow-0" else "flow-1"
-            step = if (index and 4 == 0) "step-0" else "step-1"
+            operationId = (index and 7).toLong() + 10_000L
         }
     }
 
@@ -247,6 +266,7 @@ class RuntimeGraphBenchmarkTest {
         const val WARMUP_ITERATIONS = 10_000
         const val HOT_PATH_P999_BUDGET_NS = 1_000_000L
         const val HOT_PATH_ALLOCATION_BUDGET_BYTES = 8.0
+        val METHOD_NAMES = Array(32) { index -> "method-$index" }
         val allocationBean = ManagementFactory.getThreadMXBean() as? ThreadMXBean
     }
 }

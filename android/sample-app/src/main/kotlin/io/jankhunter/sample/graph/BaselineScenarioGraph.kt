@@ -1,7 +1,8 @@
 package io.jankhunter.sample.graph
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.os.SystemClock
-import io.jankhunter.runtime.JankHunter
 
 internal class BaselineScenarioUseCase(
     private val repository: CheckoutBaselineRepository,
@@ -9,7 +10,7 @@ internal class BaselineScenarioUseCase(
 ) {
     fun execute(): Long {
         var itemCount = 0L
-        JankHunter.withOwner(CheckoutBaselineDataSource::class.java.name) {
+        JankHunterTelemetry.withOwner(CheckoutBaselineDataSource::class.java.name) {
             itemCount = repository.loadItemCount()
         }
         return observerRegistry.publish(itemCount)

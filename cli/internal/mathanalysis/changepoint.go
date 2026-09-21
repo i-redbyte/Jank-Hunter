@@ -65,7 +65,7 @@ func detectChangePoints(timeline []TimelineBucket) []ChangePoint {
 			noiseFloor: 1,
 			badWhenUp:  true,
 			value: func(bucket TimelineBucket) (float64, bool) {
-				return float64(bucket.HTTPFailed), true
+				return float64(bucket.HTTPFailed), httpCountPresent(bucket)
 			},
 		},
 	}
@@ -93,6 +93,9 @@ func detectSignalChangePoints(timeline []TimelineBucket, signal changeSignal) []
 	}
 	var candidates []changePointCandidate
 	for split := changeWindowBuckets; split <= len(points)-changeWindowBuckets; split++ {
+		if points[split+changeWindowBuckets-1].index-points[split-changeWindowBuckets].index != 2*changeWindowBuckets-1 {
+			continue
+		}
 		before := pointValues(points[split-changeWindowBuckets : split])
 		after := pointValues(points[split : split+changeWindowBuckets])
 		beforeMedian := medianSorted(sortedFloatCopy(before))
@@ -263,7 +266,7 @@ func appearedChangeDelta(point ChangePoint) ChangePointDelta {
 		CandidateTime:  point.TimeMS,
 		CandidateScore: point.Score,
 		Severity:       point.Severity,
-		Summary:        fmt.Sprintf("У кандидата появилась точка изменения %s на %.1fs: %s %.1f %s, оценка %.2f.", point.Signal, seconds(point.TimeMS), point.Direction, point.Delta, point.Unit, point.Score),
+		Summary:        fmt.Sprintf("В проверяемом прогоне появилась точка изменения %s на %.1f сек: %s %.1f %s, оценка %.2f.", point.Signal, seconds(point.TimeMS), point.Direction, point.Delta, point.Unit, point.Score),
 	}
 }
 
@@ -275,7 +278,7 @@ func disappearedChangeDelta(point ChangePoint) ChangePointDelta {
 		BaselineTime:  point.TimeMS,
 		BaselineScore: point.Score,
 		Severity:      "ok",
-		Summary:       fmt.Sprintf("У кандидата исчезла точка изменения %s, которая была в базе на %.1fs с оценкой %.2f.", point.Signal, seconds(point.TimeMS), point.Score),
+		Summary:       fmt.Sprintf("В проверяемом прогоне исчезла точка изменения %s, которая была в базовом на %.1f сек с оценкой %.2f.", point.Signal, seconds(point.TimeMS), point.Score),
 	}
 }
 
@@ -372,9 +375,9 @@ func compareChangePointSummary(baselineTimeline, candidateTimeline []TimelineBuc
 		return "Недостаточно данных для сравнения точек изменения."
 	}
 	if len(deltas) == 0 {
-		return "Новых, исчезнувших или заметно усилившихся точек изменения у кандидата не найдено."
+		return "Новых, исчезнувших или заметно усилившихся точек изменения в проверяемом прогоне не найдено."
 	}
-	return fmt.Sprintf("Найдено %d изменений в карте точек изменения кандидата относительно базы.", len(deltas))
+	return fmt.Sprintf("Найдено %d изменений в карте точек проверяемого прогона относительно базового.", len(deltas))
 }
 
 func compareChangePointFindings(deltas []ChangePointDelta) []Finding {
@@ -384,14 +387,14 @@ func compareChangePointFindings(deltas []ChangePointDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменилась точка изменения",
 				Detail:         delta.Summary,
-				Recommendation: "Сопоставьте этот момент с таймлайном, маршрутом, источником и событиями жизненного цикла рядом с точкой.",
+				Recommendation: "Сопоставьте этот момент с временной шкалой, маршрутом, местом запуска и событиями жизненного цикла рядом с точкой.",
 			}}
 		}
 	}
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Регрессий по точкам изменения не найдено",
-		Detail:   "Кандидат не добавил новых сильных сдвигов распределения относительно базы.",
+		Detail:   "Проверяемый прогон не добавил новых сильных сдвигов распределения относительно базового.",
 	}}
 }
 
@@ -404,7 +407,7 @@ func changePointEvidence(point ChangePoint) []string {
 		evidence = append(evidence, "маршрут: "+point.NearbyRoute)
 	}
 	if point.NearbyOwner != "" {
-		evidence = append(evidence, "источник: "+point.NearbyOwner)
+		evidence = append(evidence, "место запуска: "+analysisOwnerLabel(point.NearbyOwner))
 	}
 	if point.NearbyNetwork != "" {
 		evidence = append(evidence, "сеть: "+point.NearbyNetwork)

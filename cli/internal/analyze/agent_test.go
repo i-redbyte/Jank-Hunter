@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,35 +10,26 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-type fixtureEventStream struct {
-	source string
-	events []jhlog.Event
-	open   bool
-}
-
-func (stream fixtureEventStream) Stream(handle jhlog.EventHandler) (jhlog.StreamResult, error) {
-	dict := map[uint64]string{}
-	for _, input := range stream.events {
-		event := input
-		event.Source = stream.source
-		if event.Dictionary != nil {
-			dict[event.Dictionary.ID] = event.Dictionary.Value
-		}
-		if err := handle(event, dict); err != nil {
-			return jhlog.StreamResult{}, err
+func inspectAgentEvents(t *testing.T, title string, events []jhlog.Event) (Summary, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "agent.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatal(err)
 		}
 	}
-	status := jhlog.SegmentStatusClosedClean
-	if stream.open {
-		status = jhlog.SegmentStatusOpenWithTail
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
-	return jhlog.StreamResult{Source: stream.source, Version: jhlog.FormatVersion, Status: status, Sealed: !stream.open, Events: uint64(len(stream.events))}, nil
+	return InspectFilesWithOptions(title, []string{path}, Options{})
 }
 
 func TestAgentImageDecodeGCStallEvidence(t *testing.T) {
-	summary, err := InspectEventStreamsWithOptions("image", []jhlog.CanonicalEventStream{
-		fixtureEventStream{source: "current-v9", events: agentImageFixture(false)},
-	}, Options{})
+	summary, err := inspectAgentEvents(t, "image", agentImageFixture(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +54,7 @@ func TestAgentImageDecodeGCStallEvidence(t *testing.T) {
 
 func TestAgentNoDataPreservesCoreSummary(t *testing.T) {
 	events := []jhlog.Event{{Type: jhlog.EventStall, TimeMS: 500, Stall: &jhlog.StallEvent{DurationMS: 200}}}
-	summary, err := InspectEventStreamsWithOptions("old", []jhlog.CanonicalEventStream{fixtureEventStream{source: "old", events: events}}, Options{})
+	summary, err := inspectAgentEvents(t, "old", events)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +64,11 @@ func TestAgentNoDataPreservesCoreSummary(t *testing.T) {
 }
 
 func TestAgentSequenceGapMarksIncompleteAndLowersConfidence(t *testing.T) {
-	complete, err := InspectEventStreamsWithOptions("fixture", []jhlog.CanonicalEventStream{fixtureEventStream{source: "ring", events: agentImageFixture(false)}}, Options{})
+	complete, err := inspectAgentEvents(t, "fixture", agentImageFixture(false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	incomplete, err := InspectEventStreamsWithOptions("fixture", []jhlog.CanonicalEventStream{fixtureEventStream{source: "ring", events: agentImageFixture(true), open: true}}, Options{})
+	incomplete, err := inspectAgentEvents(t, "fixture", agentImageFixture(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +82,11 @@ func TestAgentSequenceGapMarksIncompleteAndLowersConfidence(t *testing.T) {
 
 func TestCanonicalCurrentAndRingAdaptersProduceEquivalentAgentSummary(t *testing.T) {
 	events := agentImageFixture(false)
-	current, err := InspectEventStreamsWithOptions("same", []jhlog.CanonicalEventStream{fixtureEventStream{source: "adapter", events: events}}, Options{})
+	current, err := inspectAgentEvents(t, "same", events)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ring, err := InspectEventStreamsWithOptions("same", []jhlog.CanonicalEventStream{fixtureEventStream{source: "adapter", events: append([]jhlog.Event(nil), events...)}}, Options{})
+	ring, err := inspectAgentEvents(t, "same", append([]jhlog.Event(nil), events...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +107,11 @@ func TestAgentAggregatorChunkMergeIsOrderIndependentForAdditiveEvidence(t *testi
 	left := newAgentAggregator()
 	right := newAgentAggregator()
 	for index, event := range events {
-		onePass.add(nil, event, FlowStats{})
+		onePass.add(nil, event, SignalContextStats{})
 		if index%2 == 0 {
-			left.add(nil, event, FlowStats{})
+			left.add(nil, event, SignalContextStats{})
 		} else {
-			right.add(nil, event, FlowStats{})
+			right.add(nil, event, SignalContextStats{})
 		}
 	}
 	mergedA := newAgentAggregator()
@@ -166,7 +158,7 @@ func TestAgentAggregatorCardinalityIsBounded(t *testing.T) {
 		source := "source-" + strings.Repeat("x", index%31) + string(rune(index+1))
 		event := agentEvent(source, uint64(index+1), jhlog.AgentThreadStackSample, uint64(index+1), uint64(index+1), 0)
 		event.Agent.Payload0 = uint64(index + 1)
-		aggregator.add(nil, event, FlowStats{})
+		aggregator.add(nil, event, SignalContextStats{})
 	}
 	if len(aggregator.sources) > maxAgentSources || len(aggregator.sequences) > maxAgentSources ||
 		len(aggregator.stacks) > maxAgentFingerprints || len(aggregator.stackSamples) > maxAgentTimelineItems {
@@ -184,7 +176,7 @@ func BenchmarkAgentAggregatorBoundedStreaming(b *testing.B) {
 		aggregator := newAgentAggregator()
 		for sequence := uint64(1); sequence <= 10_000; sequence++ {
 			event.Agent.ProducerSequence = sequence
-			aggregator.add(nil, event, FlowStats{})
+			aggregator.add(nil, event, SignalContextStats{})
 		}
 		if len(aggregator.gc.Top) > maxAgentTopIntervals || len(aggregator.sequences) != 1 {
 			b.Fatal("bounded state invariant failed")
@@ -193,7 +185,7 @@ func BenchmarkAgentAggregatorBoundedStreaming(b *testing.B) {
 }
 
 func agentImageFixture(dropGCSequence bool) []jhlog.Event {
-	context := jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(1), Owner: jhlog.LocalSymbol(2), Flow: jhlog.LocalSymbol(3)}
+	context := jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(1), Owner: jhlog.LocalSymbol(2), OperationID: 3}
 	events := []jhlog.Event{
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{ID: 1, Kind: jhlog.DictScreen, Value: "Feed"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{ID: 2, Kind: jhlog.DictOwner, Value: "FeedImages"}},

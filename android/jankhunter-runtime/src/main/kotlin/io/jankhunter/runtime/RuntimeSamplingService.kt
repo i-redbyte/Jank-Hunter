@@ -16,6 +16,8 @@ internal interface RuntimeSamplingStrategy {
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ): Boolean
 }
 
@@ -33,6 +35,8 @@ internal data object AlwaysRecordRuntimeSamplingStrategy : RuntimeSamplingStrate
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long,
+        trafficKnownFlags: Int,
     ): Boolean = true
 }
 
@@ -57,6 +61,8 @@ internal class AdaptiveRuntimeSamplingStrategy(
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long,
+        trafficKnownFlags: Int,
     ): Boolean {
         return sampler.shouldRecordContext(
             nowMs,
@@ -69,18 +75,20 @@ internal class AdaptiveRuntimeSamplingStrategy(
             rxBytes,
             txBytes,
             networkVpn,
+            trafficUidPlusOne,
+            trafficKnownFlags,
         )
     }
 }
 
 internal class RuntimeSamplingService(
-    private val nowMs: () -> Long,
+    private val nowMs: RuntimeLongSource,
 ) {
     @Volatile
     private var strategy: RuntimeSamplingStrategy = AlwaysRecordRuntimeSamplingStrategy
 
     fun configure(config: JankHunterConfig) {
-        strategy = if (config.adaptiveSamplingEnabled()) {
+        strategy = if (!config.exactEventCollectionEnabled() && config.adaptiveSamplingEnabled()) {
             AdaptiveRuntimeSamplingStrategy(
                 config.adaptiveMemoryStableIntervalMs(),
                 config.adaptiveContextStableIntervalMs(),
@@ -95,7 +103,7 @@ internal class RuntimeSamplingService(
     }
 
     fun shouldRecordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long): Boolean {
-        return strategy.shouldRecordMemory(nowMs(), pssKb, javaHeapKb, nativeHeapKb)
+        return strategy.shouldRecordMemory(nowMs.getAsLong(), pssKb, javaHeapKb, nativeHeapKb)
     }
 
     fun shouldRecordContext(
@@ -108,9 +116,11 @@ internal class RuntimeSamplingService(
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ): Boolean {
         return strategy.shouldRecordContext(
-            nowMs(),
+            nowMs.getAsLong(),
             networkKind,
             batteryPct,
             availMemoryKb,
@@ -120,6 +130,8 @@ internal class RuntimeSamplingService(
             rxBytes,
             txBytes,
             networkVpn,
+            trafficUidPlusOne,
+            trafficKnownFlags,
         )
     }
 }

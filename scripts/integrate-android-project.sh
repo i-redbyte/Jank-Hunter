@@ -23,13 +23,19 @@ SKIP_LOCAL_PROPERTIES=0
 VERIFY=0
 ADD_GITIGNORE=1
 RUNTIME_CALL_GRAPH=-1
-ASM_PROGRESS_LOG=-1
 OKHTTP_HOOKS=-1
 WEBSOCKET_HOOKS=-1
 DI_ANALYSIS=-1
 SESSION_LOG_SIZE_LIMIT=-1
 MAX_SESSION_LOG_SIZE_MIB=""
 BUILD_TYPES_EXPLICIT=0
+PROFILE=""
+COLLECTION=""
+PROCESSES=""
+INSTRUMENTATION_SCOPE=""
+AUTO_INIT=-1
+GROWTH_ANALYTICS=-1
+DELETE_OBSOLETE_LOGS=-1
 TRANSACTION_ACTIVE=0
 TRANSACTION_COMMITTED=0
 ROLLBACK_RUNNING=0
@@ -46,10 +52,11 @@ MODULES=()
 INCLUDE_PACKAGES=()
 EXCLUDE_PACKAGES=()
 BUILD_TYPES=("debug")
+ENABLED_FEATURES=()
+DISABLED_FEATURES=()
 MODULE_BUILD_FILES=()
 MODULE_USES_JH_ALIAS=()
 MODULE_ADD_LITERAL_VERSION=()
-MODULE_LEGACY_HELPER=()
 MODULE_MANAGED_HELPER=()
 MODULE_CURRENT_SDK_DEPENDENCY=()
 MODULE_MANAGED_CONFIGURATION=()
@@ -59,63 +66,81 @@ TEMP_FILES=()
 
 usage() {
   cat <<'EOF'
-Usage:
+Использование:
   scripts/integrate-android-project.sh /path/to/android/project
   scripts/integrate-android-project.sh --target /path/to/android/project [options]
 
-Required:
-  PATH or --target PATH         Root of the target Android project.
+Обязательный параметр:
+  PATH или --target PATH        Корень подключаемого Android-проекта.
 
-Common options:
-  --jankhunter PATH             Path to Jank Hunter clone. Defaults to current directory when it
-                                contains cli/ and android/, otherwise to this script's repository.
-  --module :app                 Android module to patch. Can be repeated. If omitted, the script
-                                ranks application modules and prefers the real launchable app.
-  --include-package com.myapp   ASM include package. Can be repeated.
-  --include-packages a,b,c      Comma-separated ASM include packages.
+Основные параметры:
+  --jankhunter PATH             Путь к Jank Hunter. По умолчанию используется текущий каталог,
+                                если в нём есть cli/ и android/, иначе репозиторий скрипта.
+  --module :app                 Изменяемый Android-модуль. Можно повторять. Без параметра скрипт
+                                ранжирует application-модули и выбирает запускаемое приложение.
+  --profile balanced            Профиль: minimal, balanced, full, release-safe или targeted.
+  --collection balanced         Режим сбора: balanced или exact.
+  --processes main-only         Процессы: main-only или all.
+  --scope namespace-and-packages
+                                Область: namespace-and-packages, packages-only или
+                                whole-application.
+  --enable-feature FEATURE      Включить возможность или набор. Можно повторять.
+  --disable-feature FEATURE     Выключить возможность или набор. Можно повторять.
+  --include-package com.myapp   Пакет для ASM-инструментации. Можно повторять.
+  --include-packages a,b,c      Пакеты для ASM через запятую.
   --exclude-package com.myapp.generated
-                                ASM exclude package. Can be repeated.
-  --exclude-packages a,b,c      Comma-separated ASM exclude packages.
-  --runtime-call-graph          Enable runtime caller -> callee graph hooks.
-  --okhttp                     Enable OkHttp hooks.
-  --websockets                 Enable WebSocket hooks.
-  --analyze-di                 Add build-time Dagger/Hilt/Koin analysis to generated artifacts.
-  --build-type debug            Enabled build type. Can be repeated or comma-separated.
-  --max-session-log-size-mib N Enable the physical .jhlog limiter and set its size in MiB.
-  --no-session-log-size-limit  Disable the physical .jhlog size limiter.
-  --maven-dir PATH              Local Maven repo inside target project. Default: .jankhunter/maven.
-  --cli-dir PATH                Target directory for CLI binary. Default: .jankhunter/bin.
-  --android-sdk PATH            Android SDK path for target local.properties. If omitted, the
-                                script uses ANDROID_HOME, ANDROID_SDK_ROOT, or ~/Library/Android/sdk.
-  --android-build-tools VERSION Android Build Tools version to use while publishing Jank Hunter.
-                                If omitted, the highest installed SDK build-tools version is used.
-  --verify                      Run target Gradle task resolution after patching.
-  --dry-run                     Print what would be changed without writing files.
+                                Исключаемый пакет. Можно повторять.
+  --exclude-packages a,b,c      Исключаемые пакеты через запятую.
+  --auto-init / --no-auto-init  Включить или выключить автоматическую инициализацию.
+  --growth-analytics / --no-growth-analytics
+                                Включить или выключить аналитику роста журналов.
+  --delete-obsolete-logs / --keep-obsolete-logs
+                                Удалять или сохранять журналы старых форматов.
+  --runtime-call-graph          Краткая форма --enable-feature call-graph.
+  --okhttp                      Краткая форма --enable-feature http.
+  --websockets                  Краткая форма --enable-feature websockets.
+  --analyze-di                  Краткая форма --enable-feature di-analysis.
+  --build-type debug            Включённый тип сборки. Можно повторять или перечислять через запятую.
+  --storage-limit-mib N         Ограничить один сеанс указанным числом МиБ.
+  --unlimited-storage           Снять внутренний предел размера сеанса.
+  --maven-dir PATH              Локальный Maven-репозиторий внутри проекта; .jankhunter/maven.
+  --cli-dir PATH                Каталог для CLI; .jankhunter/bin.
+  --android-sdk PATH            Путь к Android SDK для local.properties. Иначе используются
+                                ANDROID_HOME, ANDROID_SDK_ROOT или ~/Library/Android/sdk.
+  --android-build-tools VERSION Версия Android Build Tools для публикации Jank Hunter. Иначе
+                                выбирается наибольшая установленная версия.
+  --verify                      Проверить разрешение Gradle-задач после изменения файлов.
+  --dry-run                     Показать изменения, не записывая файлы.
 
-Advanced:
-  --skip-publish                Do not publish/copy Jank Hunter Android artifacts.
-  --skip-cli-build              Do not build/copy the jankhunter CLI binary.
-  --skip-local-properties       Do not create or update target local.properties. Gradle still gets
-                                the resolved SDK path through ANDROID_HOME during publishing.
-  --asm-progress-log            Enable the one-line ASM build progress indicator.
-  --no-gitignore                Do not update target .gitignore.
+Дополнительные параметры:
+  --skip-publish                Не публиковать и не копировать Android-артефакты.
+  --skip-cli-build              Не собирать и не копировать jankhunter CLI.
+  --skip-local-properties       Не создавать и не менять local.properties целевого проекта.
+  --no-gitignore                Не менять .gitignore целевого проекта.
 
-Overlay ownership:
-  Existing user-owned jankHunter/dependencies blocks are preserved. Options omitted on a rerun
-  preserve the script-managed overlay. Supplying any managed DSL option replaces that managed
-  overlay with the explicitly supplied values; user-owned blocks still remain untouched.
+Поддерживаемые возможности:
+  jank-stats, main-looper, sqlite, room, http, websockets, runtime-io, bytecode-io,
+  di-analysis, handlers, executors, coroutines, interactions, lifecycle-leaks, logging,
+  class-graph, call-graph, compose, workers, android-components, binder-ipc,
+  method-counters, heap-dumps. Наборы: ui-all, network-all, database-all, io-all,
+  concurrency-all, android-system-all.
 
-Example:
+Владение вставками:
+  Пользовательские блоки jankHunter/dependencies сохраняются. Повторный запуск без параметров DSL
+  сохраняет вставку скрипта. Явные параметры целиком заменяют только вставку скрипта.
+
+Пример:
   scripts/integrate-android-project.sh \
     --target ~/work/MyApp \
     --module :app \
+    --profile balanced \
     --include-package com.myapp.feature \
     --include-package com.myapp.data \
     --exclude-packages com.myapp.generated,com.myapp.di \
-    --runtime-call-graph \
+    --enable-feature call-graph \
     --verify
 
-Minimal:
+Минимальный запуск:
   cd /path/to/Jank-Hunter
   scripts/integrate-android-project.sh ~/work/MyApp
 EOF
@@ -158,6 +183,27 @@ trim() {
   printf '%s' "$value"
 }
 
+normalize_option_value() {
+  printf '%s' "$1" | tr '[:upper:]_' '[:lower:]-'
+}
+
+normalize_feature_selection() {
+  local raw="$1"
+  local normalized
+  normalized="$(normalize_option_value "$raw")"
+  case "$normalized" in
+    jank-stats|main-looper|sqlite|room|http|websockets|runtime-io|bytecode-io|di-analysis|handlers|executors|coroutines|interactions|lifecycle-leaks|logging|class-graph|call-graph|compose|workers|android-components|binder-ipc|method-counters|heap-dumps)
+      printf 'JankHunterFeature.%s\n' "$(printf '%s' "$normalized" | tr '[:lower:]-' '[:upper:]_')"
+      ;;
+    ui-all|network-all|database-all|io-all|concurrency-all|android-system-all)
+      printf 'JankHunterFeatureBundle.%s\n' "$(printf '%s' "$normalized" | tr '[:lower:]-' '[:upper:]_')"
+      ;;
+    *)
+      fail "unsupported Jank Hunter feature: $raw"
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)
@@ -173,6 +219,56 @@ while [[ $# -gt 0 ]]; do
     --module|--app-module)
       require_value "$1" "${2:-}"
       MODULES+=("${2:-}")
+      shift 2
+      ;;
+    --profile)
+      require_value "$1" "${2:-}"
+      case "$(normalize_option_value "$2")" in
+        minimal) PROFILE="MINIMAL" ;;
+        balanced) PROFILE="BALANCED" ;;
+        full) PROFILE="FULL" ;;
+        release-safe) PROFILE="RELEASE_SAFE" ;;
+        targeted) PROFILE="TARGETED" ;;
+        *) fail "--profile must be minimal, balanced, full, release-safe, or targeted" ;;
+      esac
+      shift 2
+      ;;
+    --collection)
+      require_value "$1" "${2:-}"
+      case "$(normalize_option_value "$2")" in
+        balanced) COLLECTION="BALANCED" ;;
+        exact) COLLECTION="EXACT" ;;
+        *) fail "--collection must be balanced or exact" ;;
+      esac
+      shift 2
+      ;;
+    --processes)
+      require_value "$1" "${2:-}"
+      case "$(normalize_option_value "$2")" in
+        main-only) PROCESSES="MAIN_ONLY" ;;
+        all) PROCESSES="ALL" ;;
+        *) fail "--processes must be main-only or all" ;;
+      esac
+      shift 2
+      ;;
+    --scope)
+      require_value "$1" "${2:-}"
+      case "$(normalize_option_value "$2")" in
+        namespace-and-packages) INSTRUMENTATION_SCOPE="NAMESPACE_AND_PACKAGES" ;;
+        packages-only) INSTRUMENTATION_SCOPE="PACKAGES_ONLY" ;;
+        whole-application) INSTRUMENTATION_SCOPE="WHOLE_APPLICATION" ;;
+        *) fail "--scope must be namespace-and-packages, packages-only, or whole-application" ;;
+      esac
+      shift 2
+      ;;
+    --enable-feature|--feature)
+      require_value "$1" "${2:-}"
+      ENABLED_FEATURES+=("$(normalize_feature_selection "$2")")
+      shift 2
+      ;;
+    --disable-feature)
+      require_value "$1" "${2:-}"
+      DISABLED_FEATURES+=("$(normalize_feature_selection "$2")")
       shift 2
       ;;
     --include-package|--include)
@@ -227,6 +323,30 @@ while [[ $# -gt 0 ]]; do
       DI_ANALYSIS=0
       shift
       ;;
+    --auto-init)
+      AUTO_INIT=1
+      shift
+      ;;
+    --no-auto-init)
+      AUTO_INIT=0
+      shift
+      ;;
+    --growth-analytics)
+      GROWTH_ANALYTICS=1
+      shift
+      ;;
+    --no-growth-analytics)
+      GROWTH_ANALYTICS=0
+      shift
+      ;;
+    --delete-obsolete-logs)
+      DELETE_OBSOLETE_LOGS=1
+      shift
+      ;;
+    --keep-obsolete-logs|--no-delete-obsolete-logs)
+      DELETE_OBSOLETE_LOGS=0
+      shift
+      ;;
     --build-type)
       require_value "$1" "${2:-}"
       if [[ "$BUILD_TYPES_EXPLICIT" -eq 0 ]]; then
@@ -236,13 +356,13 @@ while [[ $# -gt 0 ]]; do
       split_csv_into "${2:-}" BUILD_TYPES
       shift 2
       ;;
-    --max-session-log-size-mib)
+    --storage-limit-mib|--max-session-log-size-mib)
       require_value "$1" "${2:-}"
       MAX_SESSION_LOG_SIZE_MIB="$2"
       SESSION_LOG_SIZE_LIMIT=1
       shift 2
       ;;
-    --no-session-log-size-limit)
+    --unlimited-storage|--no-session-log-size-limit)
       SESSION_LOG_SIZE_LIMIT=0
       MAX_SESSION_LOG_SIZE_MIB=""
       shift
@@ -285,14 +405,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-local-properties)
       SKIP_LOCAL_PROPERTIES=1
-      shift
-      ;;
-    --asm-progress-log)
-      ASM_PROGRESS_LOG=1
-      shift
-      ;;
-    --no-asm-progress-log)
-      ASM_PROGRESS_LOG=0
       shift
       ;;
     --no-gitignore)
@@ -1308,49 +1420,6 @@ sub remove_managed_block {
   return $source;
 }
 
-sub migrate_legacy_helper {
-  my ($source) = @_;
-  my $marker = '// Jank Hunter optional OkHttp/WebSocket helper';
-  my @markers;
-  while ($source =~ /^[ \t]*\Q$marker\E[ \t]*\r?(?:\n|\z)/mg) {
-    push @markers, [$-[0], $+[0]];
-  }
-  die "multiple legacy Jank Hunter helper markers in $file\n" if @markers > 1;
-  return $source unless @markers;
-  my ($marker_start, $marker_end) = @{$markers[0]};
-  my $tokens = tokenise($source);
-  my $opening_index = -1;
-  for (my $index = 0; $index + 1 < @$tokens; $index++) {
-    next if $tokens->[$index]{start} < $marker_end;
-    die "legacy helper marker is not followed by dependencies { ... } in $file\n"
-      unless $tokens->[$index]{type} eq 'identifier' && $tokens->[$index]{value} eq 'dependencies' &&
-        $tokens->[$index + 1]{type} eq 'symbol' && $tokens->[$index + 1]{value} eq '{';
-    $opening_index = $index + 1;
-    last;
-  }
-  die "legacy helper marker has no dependencies block in $file\n" if $opening_index < 0;
-  my $closing_index = matching_symbol($tokens, $opening_index, '{', '}');
-  my $block_start = $tokens->[$opening_index - 1]{start};
-  my $block_end = $tokens->[$closing_index]{end};
-  my $between = substr($source, $marker_end, $block_start - $marker_end);
-  my $block = substr($source, $block_start, $block_end - $block_start);
-  my $group = quotemeta($ENV{JH_GROUP} // die "JH_GROUP is required\n");
-  my @lines = split(/(?<=\n)/, $block, -1);
-  my @kept;
-  for my $line (@lines) {
-    if ($line =~ /^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*Implementation|add)\b[^\n]*["']$group:jankhunter-okhttp3:[^"']+["'][^\n]*(?:\n|\z)$/) {
-      next;
-    }
-    push @kept, $line;
-  }
-  my $migrated = join('', @kept);
-  if ($migrated =~ /["']$group:jankhunter-okhttp3:[^"']+["']/) {
-    die "legacy helper dependency uses unsupported multiline/custom syntax in $file; migrate it manually\n";
-  }
-  substr($source, $marker_start, $block_end - $marker_start, $between . $migrated);
-  return $source;
-}
-
 sub top_level_block {
   my ($source, $name) = @_;
   my $blocks = named_blocks($source, $name, 0);
@@ -1380,7 +1449,7 @@ sub inspect_aliases {
     if ($prefix =~ /(?:^|\s)apply\s+plugin\s*:\s*$/ ||
         $prefix =~ /(?:^|\s)apply\s*\(\s*plugin\s*=\s*$/ ||
         $prefix =~ /pluginManager\s*\.\s*apply\s*\(\s*$/) {
-      die "legacy/programmatic Jank Hunter plugin application in $file cannot be versioned safely; migrate it to plugins { id(...) }\n";
+      die "programmatic Jank Hunter plugin application in $file cannot be versioned safely; use plugins { id(...) }\n";
     }
   }
   die "multiple top-level plugins blocks in $file\n" if @$blocks > 1;
@@ -1420,8 +1489,6 @@ if ($command eq 'preflight-settings') {
   my @versioned = grep { $_->{version} } @$declarations;
   print scalar(@versioned);
 } elsif ($command eq 'preflight-module') {
-  my $legacy_marker = '// Jank Hunter optional OkHttp/WebSocket helper';
-  my $legacy_count = exact_marker_count($text, $legacy_marker);
   my $managed_helper_count = exact_marker_count($text, '// Jank Hunter optional helper dependencies - BEGIN');
   my $managed_configuration_count = exact_marker_count($text, '// Jank Hunter integration managed configuration - BEGIN');
   my $sdk_dependency = $ENV{JH_SDK_DEPENDENCY} // '';
@@ -1430,9 +1497,8 @@ if ($command eq 'preflight-settings') {
       $text =~ m{^[ \t]*// Jank Hunter optional helper dependencies - BEGIN[ \t]*\r?\n(.*?)^[ \t]*// Jank Hunter optional helper dependencies - END[ \t]*\r?$}ms) {
     $current_sdk_dependency = index($1, $sdk_dependency) >= 0 ? 1 : 0;
   }
-  migrate_legacy_helper($text);
   my ($literal, $alias, $missing) = inspect_aliases($text);
-  print "$literal|$alias|$missing|$legacy_count|$managed_helper_count|$managed_configuration_count|$current_sdk_dependency";
+  print "$literal|$alias|$missing|$managed_helper_count|$managed_configuration_count|$current_sdk_dependency";
 } elsif ($command eq 'patch-central') {
   print replace_plugin_versions($text, 0, 0);
 } elsif ($command eq 'patch-settings') {
@@ -1442,8 +1508,6 @@ if ($command eq 'preflight-settings') {
   my $dependency_end = $ENV{JH_DEPENDENCY_REPOSITORY_END} // die "dependency end marker is required\n";
   $text = remove_managed_block($text, $plugin_begin, $plugin_end);
   $text = remove_managed_block($text, $dependency_begin, $dependency_end);
-  $text =~ s{^[ \t]*// Jank Hunter plugin repository[ \t]*\r?\n[ \t]*repositories\s*\{\s*maven\s*\{[^{}]*\}\s*\}[ \t]*(?:\r?\n|\z)}{}msg;
-  $text =~ s{^[ \t]*// Jank Hunter dependency repository[ \t]*\r?\n[ \t]*repositories\s*\{\s*maven\s*\{[^{}]*\}\s*\}[ \t]*(?:\r?\n|\z)}{}msg;
   $text = replace_plugin_versions($text, 0, 0);
   my $plugin_block = $ENV{PLUGIN_BLOCK} // die "PLUGIN_BLOCK is required\n";
   my $dependency_block = $ENV{DEPENDENCY_BLOCK} // die "DEPENDENCY_BLOCK is required\n";
@@ -1461,7 +1525,6 @@ if ($command eq 'preflight-settings') {
   my $preserve_configuration = ($ENV{JH_PRESERVE_MANAGED_CONFIGURATION} // '0') eq '1';
   $text = remove_managed_block($text, $dependencies_begin, $dependencies_end) unless $preserve_helper;
   $text = remove_managed_block($text, $configuration_begin, $configuration_end) unless $preserve_configuration;
-  $text = migrate_legacy_helper($text);
   my ($blocks, $declarations, $aliases) = jh_declarations($text, 1);
   die "multiple top-level plugins blocks in $file\n" if @$blocks > 1;
   die "multiple literal Jank Hunter plugin declarations in $file\n" if @$declarations > 1;
@@ -1857,19 +1920,11 @@ patch_module_build_file() {
   local dsl="groovy"
   [[ "$file" == *.kts ]] && dsl="kts"
 
-  local plugin_line jh_block helper_dependencies_block includes excludes build_types
+  local plugin_line jh_block helper_dependencies_block includes excludes build_types selection
   local configuration_begin="// Jank Hunter integration managed configuration - BEGIN"
   local configuration_end="// Jank Hunter integration managed configuration - END"
   local dependencies_begin="// Jank Hunter optional helper dependencies - BEGIN"
   local dependencies_end="// Jank Hunter optional helper dependencies - END"
-  local okhttp_value="false"
-  local websocket_value="false"
-  local runtime_call_graph_value="false"
-  local asm_progress_value="false"
-  [[ "$OKHTTP_HOOKS" -eq 1 ]] && okhttp_value="true"
-  [[ "$WEBSOCKET_HOOKS" -eq 1 ]] && websocket_value="true"
-  [[ "$RUNTIME_CALL_GRAPH" -eq 1 ]] && runtime_call_graph_value="true"
-  [[ "$ASM_PROGRESS_LOG" -eq 1 ]] && asm_progress_value="true"
   if [[ "$dsl" == "kts" ]]; then
     plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
   else
@@ -1878,11 +1933,15 @@ patch_module_build_file() {
 
   local has_top_level_configuration=0
   local has_instrument_configuration=0
-  [[ "$BUILD_TYPES_EXPLICIT" -eq 1 || "$DI_ANALYSIS" -ge 0 || "$SESSION_LOG_SIZE_LIMIT" -ge 0 ]] &&
+  [[ "$BUILD_TYPES_EXPLICIT" -eq 1 || -n "$PROFILE" || -n "$COLLECTION" || -n "$PROCESSES" ||
+    -n "$INSTRUMENTATION_SCOPE" || "$AUTO_INIT" -ge 0 || "$GROWTH_ANALYTICS" -ge 0 ||
+    "$DELETE_OBSOLETE_LOGS" -ge 0 || "$SESSION_LOG_SIZE_LIMIT" -ge 0 ]] &&
     has_top_level_configuration=1
-  [[ "$OKHTTP_HOOKS" -ge 0 || "$WEBSOCKET_HOOKS" -ge 0 || "$RUNTIME_CALL_GRAPH" -ge 0 ||
-    "$ASM_PROGRESS_LOG" -ge 0 || "${#INCLUDE_PACKAGES[@]}" -gt 0 || "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]] &&
+  set +u
+  [[ "${#ENABLED_FEATURES[@]}" -gt 0 || "${#DISABLED_FEATURES[@]}" -gt 0 ||
+    "${#INCLUDE_PACKAGES[@]}" -gt 0 || "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]] &&
     has_instrument_configuration=1
+  set -u
 
   jh_block=""
   if [[ "$has_top_level_configuration" -eq 1 || "$has_instrument_configuration" -eq 1 ]]; then
@@ -1897,45 +1956,45 @@ patch_module_build_file() {
         jh_block+="    enabledBuildTypes.set([$build_types])"$'\n'
       fi
     fi
-    if [[ "$DI_ANALYSIS" -ge 0 ]]; then
-      if [[ "$DI_ANALYSIS" -eq 1 ]]; then
-        jh_block+=$'    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.ENABLED\n'
-      else
-        jh_block+=$'    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.DISABLED\n'
-      fi
-    fi
+    [[ -z "$PROFILE" ]] ||
+      jh_block+="    profile.set(io.jankhunter.gradle.JankHunterProfile.$PROFILE)"$'\n'
+    [[ -z "$COLLECTION" ]] ||
+      jh_block+="    collection.set(io.jankhunter.gradle.JankHunterCollection.$COLLECTION)"$'\n'
+    [[ -z "$PROCESSES" ]] ||
+      jh_block+="    processes.set(io.jankhunter.gradle.JankHunterProcesses.$PROCESSES)"$'\n'
+    [[ -z "$INSTRUMENTATION_SCOPE" ]] ||
+      jh_block+="    scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.$INSTRUMENTATION_SCOPE)"$'\n'
+    [[ "$AUTO_INIT" -lt 0 ]] ||
+      jh_block+="    autoInit.set($([[ "$AUTO_INIT" -eq 1 ]] && printf true || printf false))"$'\n'
+    [[ "$GROWTH_ANALYTICS" -lt 0 ]] ||
+      jh_block+="    growthAnalytics.set($([[ "$GROWTH_ANALYTICS" -eq 1 ]] && printf true || printf false))"$'\n'
+    [[ "$DELETE_OBSOLETE_LOGS" -lt 0 ]] ||
+      jh_block+="    deleteObsoleteLogs.set($([[ "$DELETE_OBSOLETE_LOGS" -eq 1 ]] && printf true || printf false))"$'\n'
     if [[ "$SESSION_LOG_SIZE_LIMIT" -ge 0 ]]; then
       if [[ "$SESSION_LOG_SIZE_LIMIT" -eq 1 ]]; then
-        jh_block+=$'    sessionLogSizeLimitEnabled = true\n'
-        jh_block+="    maxSessionLogSizeMiB = $MAX_SESSION_LOG_SIZE_MIB"$'\n'
+        jh_block+="    storageLimitMiB($MAX_SESSION_LOG_SIZE_MIB)"$'\n'
       else
-        jh_block+=$'    sessionLogSizeLimitEnabled = false\n'
+        jh_block+=$'    unlimitedStorage()\n'
       fi
     fi
     if [[ "$has_instrument_configuration" -eq 1 ]]; then
       [[ "$has_top_level_configuration" -eq 0 ]] || jh_block+=$'\n'
-      jh_block+=$'    instrument {\n'
-      [[ "$OKHTTP_HOOKS" -lt 0 ]] || jh_block+="        okhttp = $okhttp_value"$'\n'
-      [[ "$WEBSOCKET_HOOKS" -lt 0 ]] || jh_block+="        webSockets = $websocket_value"$'\n'
-      [[ "$RUNTIME_CALL_GRAPH" -lt 0 ]] || jh_block+="        runtimeCallGraph = $runtime_call_graph_value"$'\n'
-      [[ "$ASM_PROGRESS_LOG" -lt 0 ]] || jh_block+="        asmProgressLog = $asm_progress_value"$'\n'
+      set +u
+      for selection in "${ENABLED_FEATURES[@]}"; do
+        jh_block+="    enable(io.jankhunter.gradle.$selection)"$'\n'
+      done
+      for selection in "${DISABLED_FEATURES[@]}"; do
+        jh_block+="    disable(io.jankhunter.gradle.$selection)"$'\n'
+      done
+      set -u
       if [[ "${#INCLUDE_PACKAGES[@]}" -gt 0 ]]; then
         includes="$(gradle_string_args "${INCLUDE_PACKAGES[@]}")"
-        if [[ "$dsl" == "kts" ]]; then
-          jh_block+="        includePackages.set(setOf($includes))"$'\n'
-        else
-          jh_block+="        includePackages.set([$includes])"$'\n'
-        fi
+        jh_block+="    packages($includes)"$'\n'
       fi
       if [[ "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]]; then
         excludes="$(gradle_string_args "${EXCLUDE_PACKAGES[@]}")"
-        if [[ "$dsl" == "kts" ]]; then
-          jh_block+="        excludePackages.set(setOf($excludes))"$'\n'
-        else
-          jh_block+="        excludePackages.set([$excludes])"$'\n'
-        fi
+        jh_block+="    excludePackages($excludes)"$'\n'
       fi
-      jh_block+=$'    }\n'
     fi
     jh_block+=$'}\n'
     jh_block+="$configuration_end"$'\n'
@@ -2120,7 +2179,7 @@ validate_configuration_inputs() {
     [[ "$value" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || fail "invalid Android build type: $value"
     lower="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
     [[ "$lower" != "release" && "$lower" != *release ]] ||
-      fail "release-like build type '$value' requires manual releaseSafety and performance evidence; configure it without this helper"
+      fail "release-like build type '$value' requires a manual release { ... } approval and performance evidence; configure it without this helper"
   done
   local package_values=()
   set +u
@@ -2132,8 +2191,17 @@ validate_configuration_inputs() {
   set -u
   if [[ "$SESSION_LOG_SIZE_LIMIT" -eq 1 ]]; then
     [[ "$MAX_SESSION_LOG_SIZE_MIB" =~ ^[1-9][0-9]*$ ]] ||
-      fail "--max-session-log-size-mib must be a positive integer"
+      fail "--storage-limit-mib must be a positive integer"
   fi
+  local enabled disabled
+  set +u
+  for enabled in "${ENABLED_FEATURES[@]}"; do
+    for disabled in "${DISABLED_FEATURES[@]}"; do
+      [[ "$enabled" != "$disabled" ]] ||
+        fail "feature is both enabled and disabled: ${enabled#*.}"
+    done
+  done
+  set -u
 }
 
 detect_root_build_file() {
@@ -2222,11 +2290,10 @@ preflight_target_project() {
 
   MODULE_USES_JH_ALIAS=()
   MODULE_ADD_LITERAL_VERSION=()
-  MODULE_LEGACY_HELPER=()
   MODULE_MANAGED_HELPER=()
   MODULE_CURRENT_SDK_DEPENDENCY=()
   MODULE_MANAGED_CONFIGURATION=()
-  local index file result literal alias missing legacy managed_helper managed_configuration current_sdk_dependency
+  local index file result literal alias missing managed_helper managed_configuration current_sdk_dependency
   for ((index = 0; index < ${#MODULE_BUILD_FILES[@]}; index++)); do
     file="${MODULE_BUILD_FILES[$index]}"
     validate_target_file_path "module build file" "$file"
@@ -2237,20 +2304,19 @@ preflight_target_project() {
       "// Jank Hunter optional helper dependencies - BEGIN" \
       "// Jank Hunter optional helper dependencies - END"
     if ! result="$(
-      JH_GROUP="$GROUP" JH_SDK_DEPENDENCY="$GROUP:jankhunter-android-sdk:$VERSION" \
+      JH_SDK_DEPENDENCY="$GROUP:jankhunter-android-sdk:$VERSION" \
         JH_CATALOG_ALIAS="$CATALOG_JH_ALIAS" CATALOG_ALIASES="$CATALOG_ALIASES" \
         HAS_STANDARD_CATALOG="$([[ -n "$CATALOG_FILE" ]] && printf 1 || printf 0)" \
         gradle_file_tool preflight-module "$file"
     )"; then
       fail "module Gradle structure is ambiguous or unsafe to patch: $file"
     fi
-    IFS='|' read -r literal alias missing legacy managed_helper managed_configuration current_sdk_dependency <<< "$result"
+    IFS='|' read -r literal alias missing managed_helper managed_configuration current_sdk_dependency <<< "$result"
     [[ "$literal" =~ ^[0-9]+$ && "$alias" =~ ^[0-9]+$ && "$missing" =~ ^[01]$ &&
-      "$legacy" =~ ^[01]$ && "$managed_helper" =~ ^[01]$ && "$managed_configuration" =~ ^[01]$ &&
+      "$managed_helper" =~ ^[01]$ && "$managed_configuration" =~ ^[01]$ &&
       "$current_sdk_dependency" =~ ^[01]$ ]] ||
       fail "invalid module preflight result for $file: $result"
     MODULE_USES_JH_ALIAS+=("$alias")
-    MODULE_LEGACY_HELPER+=("$legacy")
     MODULE_MANAGED_HELPER+=("$managed_helper")
     MODULE_CURRENT_SDK_DEPENDENCY+=("$current_sdk_dependency")
     MODULE_MANAGED_CONFIGURATION+=("$managed_configuration")
@@ -2295,10 +2361,33 @@ begin_target_transaction() {
   fi
 }
 
+if [[ "$RUNTIME_CALL_GRAPH" -eq 1 ]]; then
+  ENABLED_FEATURES+=("JankHunterFeature.CALL_GRAPH")
+elif [[ "$RUNTIME_CALL_GRAPH" -eq 0 ]]; then
+  DISABLED_FEATURES+=("JankHunterFeature.CALL_GRAPH")
+fi
+if [[ "$OKHTTP_HOOKS" -eq 1 ]]; then
+  ENABLED_FEATURES+=("JankHunterFeature.HTTP")
+elif [[ "$OKHTTP_HOOKS" -eq 0 ]]; then
+  DISABLED_FEATURES+=("JankHunterFeature.HTTP")
+fi
+if [[ "$WEBSOCKET_HOOKS" -eq 1 ]]; then
+  ENABLED_FEATURES+=("JankHunterFeature.WEBSOCKETS")
+elif [[ "$WEBSOCKET_HOOKS" -eq 0 ]]; then
+  DISABLED_FEATURES+=("JankHunterFeature.WEBSOCKETS")
+fi
+if [[ "$DI_ANALYSIS" -eq 1 ]]; then
+  ENABLED_FEATURES+=("JankHunterFeature.DI_ANALYSIS")
+elif [[ "$DI_ANALYSIS" -eq 0 ]]; then
+  DISABLED_FEATURES+=("JankHunterFeature.DI_ANALYSIS")
+fi
+
 dedupe_array MODULES
 dedupe_array INCLUDE_PACKAGES
 dedupe_array EXCLUDE_PACKAGES
 dedupe_array BUILD_TYPES
+dedupe_array ENABLED_FEATURES
+dedupe_array DISABLED_FEATURES
 validate_configuration_inputs
 
 if [[ "${#MODULES[@]}" -eq 0 ]]; then

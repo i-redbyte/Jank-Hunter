@@ -2,6 +2,7 @@ package io.jankhunter.gradle
 
 import org.gradle.api.GradleException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,10 +13,21 @@ import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.ClassNode
+import org.objectweb.asm.tree.analysis.Analyzer
+import org.objectweb.asm.tree.analysis.BasicVerifier
 import org.objectweb.asm.util.CheckClassAdapter
-import java.nio.file.Files
 
 class InstrumentationSmokeTest {
+    @Test
+    fun handlerCancellationAndLookupKeepOnePlatformLinearizationPoint() {
+        val instrumented = instrument(mixedHookFixture(), okHttpHelperAvailable = true)
+        for (name in listOf("removeCallbacks", "removeCallbacksAndMessages", "hasCallbacks")) {
+            assertEquals("instrumentation repeats Handler.$name", 1,
+                countMethodCalls(instrumented, "exercise", "android/os/Handler", name))
+        }
+    }
+
     @Test
     fun instrumentsMixedAndroidSdkCallSitesIntoVerifiableBytecode() {
         val instrumented = instrument(mixedHookFixture(), okHttpHelperAvailable = true)
@@ -27,23 +39,28 @@ class InstrumentationSmokeTest {
         )
         val calls = collectCalls(instrumented)
 
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "enterAnnotatedContext")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
+        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "startAnnotatedOperation")))
+        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "finishAnnotatedOperation")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "onHandlerPostResult")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "handlerWrappers")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "clearHandlerWrappers")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "handlerWrappers")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "clearHandlerWrappers")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapRunnable")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapCoroutineBlock")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapClickListener")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "watchLifecycleObject")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "recordLogSpam")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "wrapEventListenerFactory")))
+        assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "installEventListener")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "installEventListenerFactory")))
+        assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "newCall")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "wrapWebSocketListener")))
+        assertEquals(0, countMethodCalls(instrumented, "exercise", "okhttp3/OkHttpClient\$Builder", "eventListener"))
+        assertEquals(0, countMethodCalls(instrumented, "exercise", "okhttp3/OkHttpClient", "newCall"))
         assertTrue(calls.contains(Call("android/os/Handler", "post")))
         assertEquals(1, countMethodCalls(instrumented, "exercise", "android/os/Handler", "post"))
         assertEquals(
-            2,
+            1,
             countMethodCalls(
                 instrumented,
                 "exercise",
@@ -60,6 +77,163 @@ class InstrumentationSmokeTest {
                 Call("io/jankhunter/runtime/JankHunterHooks", "watchLifecycleObject"),
             ),
         )
+    }
+
+    @Test
+    fun replacesReviewedIoCallsWithoutTouchingLowLevelReads() {
+        val instrumented = instrument(criticalIOFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+        assertTrue(verifierDiagnostics.toString(), verifierDiagnostics.toString().isBlank())
+
+        assertEquals(1, countMethodCalls(instrumented, "io", "io/jankhunter/runtime/JankHunterIOHooks", "readFileBytes"))
+        assertEquals(1, countMethodCalls(instrumented, "io", "io/jankhunter/runtime/JankHunterIOHooks", "writeFileBytes"))
+        assertEquals(1, countMethodCalls(instrumented, "io", "io/jankhunter/runtime/JankHunterIOHooks", "appendFileBytes"))
+        assertEquals(1, countMethodCalls(instrumented, "io", "io/jankhunter/runtime/JankHunterIOHooks", "syncFileDescriptor"))
+        assertEquals(1, countMethodCalls(instrumented, "io", "io/jankhunter/runtime/JankHunterIOHooks", "forceFileChannel"))
+        assertEquals(1, countMethodCalls(instrumented, "io", "java/io/InputStream", "read"))
+        assertEquals(0, countMethodCalls(instrumented, "io", "kotlin/io/FilesKt", "readBytes"))
+        assertEquals(0, countMethodCalls(instrumented, "io", "java/io/FileDescriptor", "sync"))
+    }
+
+    @Test
+    fun databaseCallIsMeasuredOnSuccessAndFailureWithBuildTimeNormalizedSql() {
+        val instrumented = instrument(databaseFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+        assertTrue(verifierDiagnostics.toString(), verifierDiagnostics.toString().isBlank())
+
+        assertEquals(1, countMethodCalls(instrumented, "database", "android/database/sqlite/SQLiteDatabase", "rawQuery"))
+        assertEquals(1, countMethodCalls(instrumented, "database", "io/jankhunter/runtime/JankHunterHooks", "enterDatabase"))
+        assertEquals(2, countMethodCalls(instrumented, "database", "io/jankhunter/runtime/JankHunterHooks", "exitDatabase"))
+        assertEquals(0, countMethodCalls(instrumented, "database", "io/jankhunter/runtime/JankHunterHooks", "normalizeDatabaseQuery"))
+        assertEquals(0, countMethodCalls(instrumented, "database", "io/jankhunter/runtime/JankHunterHooks", "databaseStatementFingerprint"))
+        val constants = stringConstants(instrumented, "database")
+        assertTrue(constants.contains("SELECT * FROM messages WHERE id = 42 AND author = 'secret-author'"))
+        assertTrue(constants.contains("SELECT * FROM messages WHERE id = ? AND author = ?"))
+    }
+
+    @Test
+    fun databaseSqlComesFromCurrentInvocationArgumentNotStaleLdc() {
+        val instrumented = instrument(dynamicDatabaseFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+        assertTrue(verifierDiagnostics.toString(), verifierDiagnostics.toString().isBlank())
+
+        assertEquals(1, countMethodCalls(instrumented, "databaseDynamic", "io/jankhunter/runtime/JankHunterHooks", "normalizeDatabaseQuery"))
+        assertEquals(1, countMethodCalls(instrumented, "databaseDynamic", "io/jankhunter/runtime/JankHunterHooks", "databaseStatementFingerprint"))
+        assertFalse(
+            stringConstants(instrumented, "databaseDynamic")
+                .contains("SELECT * FROM stale_private_table WHERE token=?"),
+        )
+    }
+
+    @Test
+    fun preparedStatementCompileExecuteAndNaturalResultAreLinkedWithoutConsumingReturnValue() {
+        val instrumented = instrument(preparedDatabaseFixture())
+        verifyWithoutLoadingAndroidTypes(instrumented)
+
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "preparedDatabase",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "registerPreparedStatement",
+            ),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "preparedDatabase",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "resolvePreparedStatement",
+            ),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "preparedDatabase",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "databaseResultCountBucket",
+            ),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "preparedDatabase",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "enterDatabase",
+            ),
+        )
+        assertEquals(
+            2,
+            countMethodCalls(
+                instrumented,
+                "preparedDatabase",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "exitDatabase",
+            ),
+        )
+    }
+
+    @Test
+    fun databaseFailureHookPrecedesUserCatchHandler() {
+        val instrumented = instrument(caughtDatabaseFailureFixture())
+        verifyWithoutLoadingAndroidTypes(instrumented)
+
+        val classNode = ClassNode()
+        ClassReader(instrumented).accept(classNode, 0)
+        val method = classNode.methods.single { it.name == "caughtDatabaseFailure" }
+        val userHandlerIndex = method.tryCatchBlocks.indexOfFirst {
+            it.type == "android/database/sqlite/SQLiteConstraintException"
+        }
+        val databaseHandlerIndex = method.tryCatchBlocks.indexOfFirst { block ->
+            block.type == null && generateSequence(block.handler.next) { it.next }
+                .take(32)
+                .filterIsInstance<org.objectweb.asm.tree.MethodInsnNode>()
+                .any { it.owner == "io/jankhunter/runtime/JankHunterHooks" && it.name == "exitDatabase" }
+        }
+        assertTrue("database handler missing: ${method.tryCatchBlocks}", databaseHandlerIndex >= 0)
+        assertTrue(
+            "database handler must observe the failure before the user handler: ${method.tryCatchBlocks}",
+            databaseHandlerIndex < userHandlerIndex,
+        )
+    }
+
+    @Test
+    fun transactionLifecycleHooksAreVerifiableAndCloseOnEndFailure() {
+        val instrumented = instrument(databaseTransactionFixture())
+        verifyWithoutLoadingAndroidTypes(instrumented)
+
+        assertEquals(1, countMethodCalls(instrumented, "transaction", "io/jankhunter/runtime/JankHunterHooks", "beginDatabaseTransaction"))
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "transaction",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "markDatabaseTransactionSuccessful",
+            ),
+        )
+        assertEquals(2, countMethodCalls(instrumented, "transaction", "io/jankhunter/runtime/JankHunterHooks", "endDatabaseTransaction"))
+    }
+
+    @Test
+    fun generatedRoomSqlLambdaMeasuresWholeQueryAndNormalizesRuntimeArgument() {
+        val instrumented = instrument(generatedRoomSqlLambdaFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+        assertTrue(verifierDiagnostics.toString(), verifierDiagnostics.toString().isBlank())
+
+        val method = "loadMessages\$lambda\$0"
+        assertEquals(1, countMethodCalls(instrumented, method, "io/jankhunter/runtime/JankHunterHooks", "normalizeDatabaseQuery"))
+        assertEquals(1, countMethodCalls(instrumented, method, "io/jankhunter/runtime/JankHunterHooks", "databaseQueryOperation"))
+        assertEquals(1, countMethodCalls(instrumented, method, "io/jankhunter/runtime/JankHunterHooks", "enterDatabase"))
+        assertEquals(2, countMethodCalls(instrumented, method, "io/jankhunter/runtime/JankHunterHooks", "exitDatabase"))
     }
 
     @Test
@@ -122,41 +296,74 @@ class InstrumentationSmokeTest {
     }
 
     @Test
-    fun appliedCallSiteHooksWriteStableOwnerMapEntries() {
-        val entries = Files.createTempDirectory("jankhunter-hook-owner-map").toFile()
-
-        instrument(
+    fun appliedCallSiteHooksEmbedReadableOwner() {
+        val instrumented = instrument(
             mixedHookFixture(),
-            ownerMapEntriesDirectory = entries.absolutePath,
             methodCounters = false,
             runtimeCallGraph = false,
         )
 
-        val text = InstrumentationArtifactFiles.readJsonlLines(entries).joinToString("\n")
-        assertTrue(text.contains("\"owner\":\"example.AsmSmoke.exercise\""))
-        assertTrue(text.contains("\"id\":\"stable:0x"))
+        assertTrue(instrumented.toString(Charsets.ISO_8859_1).contains("example.AsmSmoke.exercise"))
     }
 
     @Test
-    fun constructorsOnlyInstrumentCallSitesAfterSuperAndClassInitializersStayUntouched() {
+    fun constructorsInstrumentBoundariesAndCallSitesAfterSuperWhileClassInitializersStayUntouched() {
         val instrumented = instrument(mixedHookFixture())
         val constructorCalls = methodCalls(instrumented, "<init>")
         val classInitializerCalls = methodCalls(instrumented, "<clinit>")
 
-        assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
+        assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "onHandlerPostResult")))
         assertEquals(1, countMethodCalls(instrumented, "<init>", "android/os/Handler", "post"))
-        setOf(
-            "recordMethodCall",
-            "enterMethod",
-            "exitMethod",
-            "enterAnnotatedContext",
-            "exitAnnotatedContext",
-            "watchLifecycleObject",
-        ).forEach { forbidden ->
-            assertTrue(constructorCalls.none { it == Call("io/jankhunter/runtime/JankHunterHooks", forbidden) })
-        }
+        setOf("recordMethodCall", "enterMethod", "exitMethod", "startAnnotatedOperation", "finishAnnotatedOperation")
+            .forEach { expected ->
+                assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", expected)))
+            }
+        assertTrue(
+            constructorCalls.none {
+                it == Call("io/jankhunter/runtime/JankHunterHooks", "watchLifecycleObject")
+            },
+        )
         assertTrue(classInitializerCalls.none { it.owner.startsWith("io/jankhunter/") })
         assertTrue(classInitializerCalls.contains(Call("android/util/Log", "d")))
+    }
+
+    @Test
+    fun constructorBoundariesSurviveKotlinStylePostSuperExceptionHandlers() {
+        val instrumented = instrument(kotlinStyleConstructorWithExceptionHandlerFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+
+        assertTrue(
+            "ASM verifier rejected instrumented constructor bytecode:\n$verifierDiagnostics",
+            verifierDiagnostics.toString().isBlank(),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(instrumented, "<init>", "io/jankhunter/runtime/JankHunterHooks", "enterMethod"),
+        )
+        assertEquals(
+            2,
+            countMethodCalls(instrumented, "<init>", "io/jankhunter/runtime/JankHunterHooks", "exitMethod"),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "<init>",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "startAnnotatedOperation",
+            ),
+        )
+        assertEquals(
+            2,
+            countMethodCalls(
+                instrumented,
+                "<init>",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "finishAnnotatedOperation",
+            ),
+        )
     }
 
     private fun instrument(
@@ -166,7 +373,6 @@ class InstrumentationSmokeTest {
             "androidx/lifecycle/ViewModel",
             "androidx/recyclerview/widget/RecyclerView\$Adapter",
         ),
-        ownerMapEntriesDirectory: String = "",
         methodCounters: Boolean = true,
         runtimeCallGraph: Boolean = true,
         okHttpHelperAvailable: Boolean = true,
@@ -185,14 +391,14 @@ class InstrumentationSmokeTest {
                     handlers = true,
                     executors = true,
                     coroutines = true,
-                    flowInteractions = true,
+                    interactionOperations = true,
                     logSpam = true,
                     classGraph = true,
                     runtimeCallGraph = runtimeCallGraph,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = "",
-                    ownerMapEntriesDirectory = ownerMapEntriesDirectory,
                     lifecycleLeaks = true,
+                    ioTracing = true,
                 ),
                 classHierarchy = classHierarchy,
             ),
@@ -211,7 +417,7 @@ class InstrumentationSmokeTest {
             null,
             null,
         ).apply {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("constructor")
+            visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("constructor")
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
             visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
@@ -240,7 +446,7 @@ class InstrumentationSmokeTest {
             visitEnd()
         }
         writer.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "exercise", MIXED_DESCRIPTOR, null, null).apply {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("asmSmoke")
+            visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("asmSmoke")
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
             visitVarInsn(Opcodes.ALOAD, 1)
@@ -309,11 +515,33 @@ class InstrumentationSmokeTest {
             visitInsn(Opcodes.POP)
 
             visitVarInsn(Opcodes.ALOAD, 9)
+            visitVarInsn(Opcodes.ALOAD, 14)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "okhttp3/OkHttpClient\$Builder",
+                "eventListener",
+                "(Lokhttp3/EventListener;)Lokhttp3/OkHttpClient\$Builder;",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+
+            visitVarInsn(Opcodes.ALOAD, 9)
             visitMethodInsn(
                 Opcodes.INVOKEVIRTUAL,
                 "okhttp3/OkHttpClient\$Builder",
                 "build",
                 "()Lokhttp3/OkHttpClient;",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+
+            visitVarInsn(Opcodes.ALOAD, 10)
+            visitVarInsn(Opcodes.ALOAD, 11)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "okhttp3/OkHttpClient",
+                "newCall",
+                "(Lokhttp3/Request;)Lokhttp3/Call;",
                 false,
             )
             visitInsn(Opcodes.POP)
@@ -366,6 +594,300 @@ class InstrumentationSmokeTest {
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
         writer.visitMethod(Opcodes.ACC_PUBLIC, "work", "()V", null, null).apply {
             visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun criticalIOFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "io",
+            "(Ljava/io/File;[BLjava/io/FileDescriptor;Ljava/nio/channels/FileChannel;Ljava/io/InputStream;)V",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESTATIC, "kotlin/io/FilesKt", "readBytes", "(Ljava/io/File;)[B", false)
+            visitInsn(Opcodes.POP)
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(Opcodes.INVOKESTATIC, "kotlin/io/FilesKt", "writeBytes", "(Ljava/io/File;[B)V", false)
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(Opcodes.INVOKESTATIC, "kotlin/io/FilesKt", "appendBytes", "(Ljava/io/File;[B)V", false)
+            visitVarInsn(Opcodes.ALOAD, 2)
+            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/io/FileDescriptor", "sync", "()V", false)
+            visitVarInsn(Opcodes.ALOAD, 3)
+            visitInsn(Opcodes.ICONST_1)
+            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/nio/channels/FileChannel", "force", "(Z)V", false)
+            visitVarInsn(Opcodes.ALOAD, 4)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/io/InputStream", "read", "([B)I", false)
+            visitInsn(Opcodes.POP)
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun databaseFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "database",
+            "(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;)Landroid/database/Cursor;",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitLdcInsn("SELECT * FROM messages WHERE id = 42 AND author = 'secret-author'")
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "rawQuery",
+                "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;",
+                false,
+            )
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun dynamicDatabaseFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "databaseDynamic",
+            "(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitLdcInsn("SELECT * FROM stale_private_table WHERE token='do-not-attribute'")
+            visitInsn(Opcodes.POP)
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitVarInsn(Opcodes.ALOAD, 2)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "rawQuery",
+                "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;",
+                false,
+            )
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun generatedRoomSqlLambdaFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitField(
+            Opcodes.ACC_PRIVATE or Opcodes.ACC_FINAL,
+            "__db",
+            "Landroidx/room/RoomDatabase;",
+            null,
+            null,
+        ).visitEnd()
+        writer.visitMethod(
+            Opcodes.ACC_PRIVATE or Opcodes.ACC_STATIC or Opcodes.ACC_FINAL,
+            "loadMessages\$lambda\$0",
+            "(Ljava/lang/String;Landroidx/sqlite/SQLiteConnection;)Ljava/util/List;",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitTypeInsn(Opcodes.NEW, "java/util/ArrayList")
+            visitInsn(Opcodes.DUP)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/ArrayList", "<init>", "()V", false)
+            visitInsn(Opcodes.ARETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun preparedDatabaseFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/PreparedSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "preparedDatabase",
+            "(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)I",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "compileStatement",
+                "(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;",
+                false,
+            )
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteStatement",
+                "executeUpdateDelete",
+                "()I",
+                false,
+            )
+            visitInsn(Opcodes.IRETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun caughtDatabaseFailureFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/CaughtDatabaseFailure", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "caughtDatabaseFailure",
+            "(Landroidx/sqlite/db/SupportSQLiteStatement;)Z",
+            null,
+            null,
+        ).apply {
+            val tryStart = Label()
+            val tryEnd = Label()
+            val userHandler = Label()
+            visitTryCatchBlock(
+                tryStart,
+                tryEnd,
+                userHandler,
+                "android/database/sqlite/SQLiteConstraintException",
+            )
+            visitCode()
+            visitLabel(tryStart)
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(
+                Opcodes.INVOKEINTERFACE,
+                "androidx/sqlite/db/SupportSQLiteStatement",
+                "executeInsert",
+                "()J",
+                true,
+            )
+            visitInsn(Opcodes.POP2)
+            visitLabel(tryEnd)
+            visitInsn(Opcodes.ICONST_0)
+            visitInsn(Opcodes.IRETURN)
+            visitLabel(userHandler)
+            visitVarInsn(Opcodes.ASTORE, 1)
+            visitInsn(Opcodes.ICONST_1)
+            visitInsn(Opcodes.IRETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun databaseTransactionFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/TransactionSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(
+            Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC,
+            "transaction",
+            "(Landroid/database/sqlite/SQLiteDatabase;Landroid/database/sqlite/SQLiteTransactionListener;)V",
+            null,
+            null,
+        ).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "beginTransactionWithListenerNonExclusive",
+                "(Landroid/database/sqlite/SQLiteTransactionListener;)V",
+                false,
+            )
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "setTransactionSuccessful",
+                "()V",
+                false,
+            )
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(
+                Opcodes.INVOKEVIRTUAL,
+                "android/database/sqlite/SQLiteDatabase",
+                "endTransaction",
+                "()V",
+                false,
+            )
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun kotlinStyleConstructorWithExceptionHandlerFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "(Ljava/lang/Object;)V", null, null).apply {
+            visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("constructor-with-handler")
+            val tryStart = Label()
+            val tryEnd = Label()
+            val handler = Label()
+            val returnLabel = Label()
+            visitTryCatchBlock(tryStart, tryEnd, handler, "java/lang/RuntimeException")
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitLdcInsn("value")
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "kotlin/jvm/internal/Intrinsics",
+                "checkNotNullParameter",
+                "(Ljava/lang/Object;Ljava/lang/String;)V",
+                false,
+            )
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+            visitLabel(tryStart)
+            visitLdcInsn("1")
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Integer",
+                "parseInt",
+                "(Ljava/lang/String;)I",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+            visitLabel(tryEnd)
+            visitJumpInsn(Opcodes.GOTO, returnLabel)
+            visitLabel(handler)
+            visitInsn(Opcodes.POP)
+            visitLabel(returnLabel)
             visitInsn(Opcodes.RETURN)
             visitMaxs(0, 0)
             visitEnd()
@@ -436,9 +958,36 @@ class InstrumentationSmokeTest {
         return calls
     }
 
-    private fun AnnotationVisitor.stringValue(value: String) {
-        visit("value", value)
-        visitEnd()
+    private fun verifyWithoutLoadingAndroidTypes(bytes: ByteArray) {
+        val node = ClassNode(Opcodes.ASM9)
+        ClassReader(bytes).accept(node, 0)
+        for (method in node.methods) {
+            Analyzer(BasicVerifier()).analyze(node.name, method)
+        }
+    }
+
+    private fun stringConstants(bytes: ByteArray, targetMethod: String): Set<String> {
+        val constants = linkedSetOf<String>()
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor? {
+                    if (name != targetMethod) return null
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitLdcInsn(value: Any?) {
+                            if (value is String) constants += value
+                        }
+                    }
+                }
+            },
+            0,
+        )
+        return constants
     }
 
     private data class Call(val owner: String, val name: String)
@@ -526,13 +1075,13 @@ class InstrumentationSmokeTest {
     }
 
     private companion object {
-        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+        private const val OPERATION_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOperation;"
         private const val MIXED_DESCRIPTOR =
             "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/util/concurrent/Executor;" +
                 "Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
                 "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;" +
                 "Landroid/view/View;Landroid/view/View\$OnClickListener;" +
                 "Lokhttp3/OkHttpClient\$Builder;Lokhttp3/OkHttpClient;Lokhttp3/Request;" +
-                "Lokhttp3/WebSocketListener;Lokhttp3/EventListener\$Factory;)V"
+                "Lokhttp3/WebSocketListener;Lokhttp3/EventListener\$Factory;Lokhttp3/EventListener;)V"
     }
 }

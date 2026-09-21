@@ -8,42 +8,182 @@ import org.junit.Test
 
 class RuntimeCallGraphStorageTest {
     @Test
+    fun producerPageTableCapacitySupportsBitMaskProbingAtTargetLoad() {
+        assertEquals(0, RUNTIME_GRAPH_PAGE_TABLE_CAPACITY and (RUNTIME_GRAPH_PAGE_TABLE_CAPACITY - 1))
+        assertEquals(
+            RUNTIME_GRAPH_PAGE_MAX_KEYS,
+            RUNTIME_GRAPH_PAGE_TABLE_CAPACITY * 3 / 4,
+        )
+    }
+
+    @Test
+    fun producerBufferAbsorbsEightFullPagesWithoutConsumer() {
+        val buffer = RuntimeGraphAggregateBuffer(Thread.currentThread())
+        val burstCapacity = 8 * RUNTIME_GRAPH_PAGE_MAX_KEYS
+
+        repeat(burstCapacity) { index ->
+            assertTrue(
+                "edge $index unexpectedly overflowed producer buffer",
+                buffer.tryAdd(
+                    callerId = index.toLong(),
+                    callerName = "caller",
+                    calleeId = index.toLong() + 1L,
+                    calleeName = "callee",
+                    screen = null,
+                    operationId = 0L,
+                    durationMs = 1L,
+                ) != RUNTIME_GRAPH_ADD_FULL,
+            )
+        }
+        assertEquals(burstCapacity.toLong(), buffer.bufferedLogicalEventCount())
+    }
+
+    @Test
+    fun saturatedProducerBufferStillAggregatesAnEdgeFromItsActivePage() {
+        val buffer = RuntimeGraphAggregateBuffer(Thread.currentThread())
+        val burstCapacity = RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY * RUNTIME_GRAPH_PAGE_MAX_KEYS
+
+        repeat(burstCapacity) { index ->
+            assertTrue(
+                buffer.tryAdd(
+                    callerId = index.toLong(),
+                    callerName = "caller",
+                    calleeId = index.toLong() + 1L,
+                    calleeName = "callee",
+                    screen = null,
+                    operationId = 0L,
+                    durationMs = 1L,
+                ) != RUNTIME_GRAPH_ADD_FULL,
+            )
+        }
+
+        assertEquals(
+            RUNTIME_GRAPH_ADD_FULL,
+            buffer.tryAdd(
+                callerId = burstCapacity.toLong(),
+                callerName = "overflow-caller",
+                calleeId = burstCapacity.toLong() + 1L,
+                calleeName = "overflow-callee",
+                screen = null,
+                operationId = 0L,
+                durationMs = 1L,
+            ),
+        )
+        assertEquals(
+            RUNTIME_GRAPH_ADD_AGGREGATED,
+            buffer.tryAdd(
+                callerId = (burstCapacity - 1).toLong(),
+                callerName = "caller",
+                calleeId = burstCapacity.toLong(),
+                calleeName = "callee",
+                screen = null,
+                operationId = 0L,
+                durationMs = 7L,
+            ),
+        )
+        assertEquals(burstCapacity.toLong() + 1L, buffer.bufferedLogicalEventCount())
+    }
+
+    @Test
+    fun producerPageAggregatesRepeatedEdgeExactly() {
+        val page = RuntimeGraphAggregatePage()
+
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 3L))
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 7L))
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 5L))
+
+        val index = page.nextOccupiedIndex(0)
+        assertEquals(1, page.size)
+        assertEquals(3L, page.logicalEventCount())
+        assertEquals(3L, page.counts[index])
+        assertEquals(15L, page.totalsMs[index])
+        assertEquals(7L, page.maximaMs[index])
+        assertEquals("caller", page.callerNames[index])
+        assertEquals("callee", page.calleeNames[index])
+    }
+
+    @Test
+    fun producerPageStopsAtKeyLimitWithoutCorruptingExistingAggregates() {
+        val page = RuntimeGraphAggregatePage()
+        repeat(RUNTIME_GRAPH_PAGE_MAX_KEYS) { index ->
+            assertTrue(page.add(index.toLong(), "caller-$index", index + 1L, "callee-$index", null, 0L, 1L))
+        }
+
+        assertFalse(page.add(10_000L, "caller-full", 10_001L, "callee-full", null, 0L, 1L))
+        assertTrue(page.add(0L, "caller-0", 1L, "callee-0", null, 0L, 4L))
+        assertEquals(RUNTIME_GRAPH_PAGE_MAX_KEYS, page.size)
+        assertEquals(RUNTIME_GRAPH_PAGE_MAX_KEYS.toLong() + 1L, page.logicalEventCount())
+    }
+
+    @Test
     fun tombstonesAreCompactedWithoutGrowingSparseTable() {
-        val table = RuntimeGraphEdgeTable(contextAware = true)
-        val buffer = RuntimeGraphEdgeBuffer(Thread.currentThread())
+        val table = RuntimeGraphEdgeTable()
+        val page = RuntimeGraphAggregatePage()
         repeat(11) { index ->
-            setEdge(buffer, index.toLong())
-            assertTrue(table.add(buffer, 0, 1_000))
+            page.clear()
+            val source = setEdge(page, index.toLong())
+            assertTrue(table.add(page, source, 1_000))
         }
 
         val nearlyFullBatch = RuntimeCallBatch(RUNTIME_GRAPH_MAX_FLUSH_RECORDS)
         repeat(RUNTIME_GRAPH_MAX_FLUSH_RECORDS - 1) {
-            nearlyFullBatch.add(null, 0L, null, null, 0L, 0L, 0L, 0L)
+            nearlyFullBatch.add(null, 0L, "caller", 0L, 0L, "callee", 0L, 0L, 0L)
         }
         table.drainInto(nearlyFullBatch)
         assertEquals(10, table.size)
 
-        setEdge(buffer, 100L)
-        assertTrue(table.add(buffer, 0, 1_000))
+        page.clear()
+        val source = setEdge(page, 100L)
+        assertTrue(table.add(page, source, 1_000))
         assertEquals(16, table.capacityForTest())
+    }
+
+    @Test
+    fun edgeTablePreservesNamesAcrossMergedPages() {
+        val table = RuntimeGraphEdgeTable()
+        val first = RuntimeGraphAggregatePage()
+        val second = RuntimeGraphAggregatePage()
+        assertTrue(first.add(1L, "caller", 2L, "callee", "screen", 41L, 3L))
+        assertTrue(second.add(1L, "caller", 2L, "callee", "screen", 41L, 7L))
+
+        assertTrue(table.add(first, first.nextOccupiedIndex(0), 1_000))
+        assertTrue(table.add(second, second.nextOccupiedIndex(0), 1_000))
+        val batch = RuntimeCallBatch(RUNTIME_GRAPH_MAX_FLUSH_RECORDS)
+        table.drainInto(batch)
+
+        assertEquals(1, batch.size)
+        assertEquals("caller", batch.callerName(0))
+        assertEquals("callee", batch.calleeName(0))
+        assertEquals(2L, batch.count(0))
+        assertEquals(10L, batch.totalMs(0))
+        assertEquals(7L, batch.maxMs(0))
     }
 
     @Test
     fun nonLifoPopDiscardsInnerFramesWithoutPublishingAnEdge() {
         val stack = RuntimeCallStack()
-        assertTrue(stack.push(1L, "outer", 1L, null, null, null))
-        assertTrue(stack.push(2L, "inner", 2L, null, null, null))
+        stack.push(1L, "outer", 1L, null, 0L)
+        stack.push(2L, "inner", 2L, null, 0L)
 
         assertFalse(stack.pop(1L))
         assertEquals(0, stack.depth)
     }
 
-    private fun setEdge(buffer: RuntimeGraphEdgeBuffer, id: Long) {
-        buffer.callers[0] = id
-        buffer.callees[0] = id + 1L
-        buffer.screens[0] = "screen"
-        buffer.flows[0] = "flow"
-        buffer.steps[0] = "step"
-        buffer.durationsMs[0] = 1L
+    @Test
+    fun stackGrowsWithoutDroppingDeepApplicationCalls() {
+        val stack = RuntimeCallStack()
+        repeat(1_024) { depth ->
+            stack.push(depth.toLong(), "method-$depth", depth.toLong(), null, 0L)
+        }
+        assertEquals(1_024, stack.depth)
+        repeat(1_024) { offset ->
+            assertTrue(stack.pop((1_023 - offset).toLong()))
+        }
+        assertEquals(0, stack.depth)
+    }
+
+    private fun setEdge(page: RuntimeGraphAggregatePage, id: Long): Int {
+        assertTrue(page.add(id, "caller-$id", id + 1L, "callee-${id + 1L}", "screen", 41L, 1L))
+        return page.nextOccupiedIndex(0)
     }
 }

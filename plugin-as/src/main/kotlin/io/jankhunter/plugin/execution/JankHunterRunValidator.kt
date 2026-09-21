@@ -1,7 +1,6 @@
 package io.jankhunter.plugin.execution
 
 import com.intellij.openapi.project.Project
-import io.jankhunter.plugin.services.JankHunterCliCompatibility
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,12 +21,9 @@ object JankHunterRunValidator {
         val warnings = mutableListOf<String>()
 
         validateCli(command.executable, errors)
-        if (errors.isEmpty()) {
-            JankHunterCliCompatibility.validate(project, command)?.let(errors::add)
-        }
         validateModeInputs(project, request, errors, warnings)
         if (request.mode in analysisModes) {
-            validateArtifact(project, "owner-map", request.ownerMap, errors)
+            validateArtifact(project, "artifacts-dir", request.artifactsDir, errors)
             validateArtifact(project, "mapping", request.mapping, errors)
             validateArtifact(project, "class-graph", request.classGraph, errors)
             validateArtifact(project, "instrumentation-diagnostics", request.diagnostics, errors)

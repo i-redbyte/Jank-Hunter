@@ -43,7 +43,7 @@ func TestSpectralAnalysisDetectsSinePeriod(t *testing.T) {
 	}
 }
 
-func TestSpectralAnalysisPreservesPeriodAfterDownsampling(t *testing.T) {
+func TestSpectralAnalysisPreservesEverySampleOfLongSignal(t *testing.T) {
 	points := make([]float64, 4_097)
 	for index := range points {
 		points[index] = math.Sin(2 * math.Pi * float64(index) / 64)
@@ -51,11 +51,11 @@ func TestSpectralAnalysisPreservesPeriodAfterDownsampling(t *testing.T) {
 
 	signal := analyzePeriodicSignal("HTTP запросы", "шт", 1_000, points)
 
-	if !signal.Approximated || signal.AnalysisBucketMS <= signal.BucketMS {
-		t.Fatalf("long signal must expose effective downsample step: %+v", signal)
+	if signal.Approximated || signal.AnalysisBucketMS != signal.BucketMS || signal.AnalyzedSampleCount != len(points) {
+		t.Fatalf("long signal must retain all samples at their original interval: %+v", signal)
 	}
 	if len(signal.Peaks) == 0 || signal.Peaks[0].PeriodMS < 60_000 || signal.Peaks[0].PeriodMS > 68_000 {
-		t.Fatalf("downsampled period must stay near 64s: %+v", signal.Peaks)
+		t.Fatalf("full-resolution period must stay near 64s: %+v", signal.Peaks)
 	}
 }
 

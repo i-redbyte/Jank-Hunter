@@ -15,7 +15,7 @@ const (
 )
 
 func buildMemoryLeakSuspects(
-	items map[string]*memoryLeakStats,
+	items map[memoryLeakKey]*memoryLeakStats,
 	lowMemoryCount int,
 	maxPSSKB uint64,
 	heap *HeapEvidence,
@@ -47,9 +47,6 @@ func buildMemoryLeakSuspects(
 		}
 		return out[i].Score > out[j].Score
 	})
-	if len(out) > 80 {
-		out = out[:80]
-	}
 	return out
 }
 
@@ -60,30 +57,19 @@ func memoryLeakSuspectFromStats(
 	heap *HeapLeakEvidence,
 	quality retentionDataQuality,
 ) MemoryLeakSuspect {
+	// Runtime records identify a class and context, not an HPROF instance. Keep the
+	// independently observed heap candidate out of runtime ownership, size and priority.
+	quality = quality.forHeap(heap)
 	className := item.className
 	holder := item.holder
 	if holder == "" || holder == "unknown" {
 		holder = "не определен"
 	}
-	heapCandidate := heap != nil
-	heapEvidence := confirmedHeapReferencePath(heap)
-	var confirmedHeap *HeapLeakEvidence
-	if heapEvidence {
-		confirmedHeap = heap
-	}
-	evidenceKind := retainedEvidenceKind(item, heap, heapEvidence)
-	evidenceLabel := retainedEvidenceLabel(evidenceKind)
-	qualityWarnings := retainedQualityWarnings(item, heapCandidate, quality)
+	evidenceKind := retainedEvidenceKind(item)
+	qualityWarnings := retainedQualityWarnings(item, heap != nil, quality)
 	dataQuality := "complete"
 	if len(qualityWarnings) > 0 {
 		dataQuality = "degraded"
-	}
-	if heapCandidate {
-		if heap.Holder != "" {
-			holder = heap.Holder
-		} else if heap.HolderField != "" {
-			holder = heap.HolderField
-		}
 	}
 	userOwned := isLikelyAppClass(className) || isLikelyAppClass(holder)
 	systemRetained := isLikelySystemClass(className)
@@ -94,117 +80,46 @@ func memoryLeakSuspectFromStats(
 	dominatorPath := retainedDominatorPath(item, holder, className)
 	dominatorConfidence := retainedDominatorConfidence(holderQuality, dominatorPath)
 	chainConfidence := retainedAttributionConfidence(item, holderQuality, userOwned)
-	chainSummary := retainedLeakChainSummary(item, holder, className, objectKind, chainConfidence, evidenceKind)
-	chainActions := retainedLeakChainActions(item, holder, className, objectKind, holderQuality)
-	score := retainedScore(item, userOwned, systemRetained, lowMemoryCount, maxPSSKB)
-	score *= retainedRuntimeEvidenceWeight(evidenceKind)
-	retainedObjectCount := uint64(0)
-	heapSource := ""
-	gcRoot := ""
-	gcRootCategory := ""
-	holderField := ""
-	chainFingerprint := ""
-	leakPattern := ""
-	var referenceMatchers []string
-	var alternativePaths [][]HeapPathElement
-	if heapCandidate {
-		estimatedRetainedKB = firstPositive(heap.RetainedSizeKB, estimatedRetainedKB)
-		sizeConfidence = firstNonEmpty(heap.Confidence, "среднее: значение получено из дампа памяти")
-		retainedObjectCount = heap.RetainedObjectCount
-		heapSource = heap.Source
-		if heapEvidence {
-			gcRoot = heap.GCRoot
-			gcRootCategory = heap.GCRootCategory
-			holderField = heap.HolderField
-			chainFingerprint = heap.ChainFingerprint
-			leakPattern = heap.LeakPattern
-			referenceMatchers = append([]string(nil), heap.ReferenceMatchers...)
-			alternativePaths = cloneHeapPaths(heap.AlternativePaths)
-		}
-	}
-	if heapEvidence {
-		sizeConfidence = firstNonEmpty(heap.Confidence, "высокое: рассчитано из дампа памяти")
-		dominatorPath = heapDominatorPath(*heap, className)
-		dominatorConfidence = "высокое: путь найден в дампе памяти до корня GC"
-		chainConfidence = "высокое: в HPROF найден путь от распознанного корня GC до объекта"
-		chainSummary = retainedHeapChainSummary(*heap, holder, className, objectKind)
-		chainActions = retainedHeapChainActions(*heap, chainActions)
-		score += 6
-		if estimatedRetainedKB >= 16*1024 {
-			score += 4
-		} else if estimatedRetainedKB >= 4*1024 {
-			score += 2
-		}
-	}
+	score := retainedScore(item, userOwned, systemRetained, lowMemoryCount, maxPSSKB) * retainedRuntimeEvidenceWeight(evidenceKind)
 	severity := "ok"
 	switch {
-	case score >= 16 || item.maxAgeMs >= 60_000 || item.count >= 10 || estimatedRetainedKB >= 16*1024:
+	case score >= 16 || item.maxAgeMs >= 60000 || item.count >= 10 || estimatedRetainedKB >= 16*1024:
 		severity = "high"
-	case score >= 7 || item.maxAgeMs >= 15_000 || item.count >= 2 || estimatedRetainedKB >= 4*1024:
+	case score >= 7 || item.maxAgeMs >= 15000 || item.count >= 2 || estimatedRetainedKB >= 4*1024:
 		severity = "medium"
 	}
-	if (evidenceKind == RetentionEvidenceTimeOnly || evidenceKind == RetentionEvidenceUnconfirmedHPROF) && severity == "high" {
+	if evidenceKind == RetentionEvidenceTimeOnly && severity == "high" {
 		severity = "medium"
+	}
+	heapSource := ""
+	if heap != nil {
+		heapSource = heap.Source
 	}
 	return MemoryLeakSuspect{
-		ClassName:                className,
-		Holder:                   holder,
-		Screen:                   emptyUnknown(item.screen),
-		Flow:                     emptyUnknown(item.flow),
-		Step:                     emptyUnknown(item.step),
-		Count:                    item.count,
-		MaxAgeMS:                 item.maxAgeMs,
-		EvidenceKind:             evidenceKind,
-		EvidenceLabel:            evidenceLabel,
-		EvidenceConfidence:       retainedEvidenceConfidence(evidenceKind, dataQuality),
-		TimeOnlyCount:            item.timeOnlyCount,
-		AfterExplicitGCCount:     item.afterExplicitGCCount,
-		DataQuality:              dataQuality,
-		QualityWarnings:          qualityWarnings,
-		EstimatedRetainedKB:      estimatedRetainedKB,
-		HeapEvidence:             heapEvidence,
-		HeapCandidate:            heapCandidate,
-		HeapSource:               heapSource,
-		GCRoot:                   gcRoot,
-		GCRootCategory:           gcRootCategory,
-		ChainFingerprint:         firstNonEmpty(chainFingerprint, runtimeLeakFingerprint(className, holder, item)),
-		HolderField:              holderField,
-		RetainedObjectCount:      retainedObjectCount,
-		ReferencePath:            cloneHeapPath(heapPath(confirmedHeap)),
-		AlternativePaths:         alternativePaths,
-		AlternativePathSummaries: heapPathSummaries(alternativePaths),
-		RetainedClassSample:      append([]string(nil), heapDominatorTree(confirmedHeap)...),
-		LeakPattern:              leakPattern,
-		ReferenceMatchers:        referenceMatchers,
-		RetainedSizeConfidence:   sizeConfidence,
-		RetainedSizeExplanation:  retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, heap),
-		DominatorPath:            dominatorPath,
-		DominatorTreeConfidence:  dominatorConfidence,
-		DominatorTreeExplanation: retainedDominatorExplanation(dominatorConfidence, confirmedHeap),
+		WatchedObjectAssociation: EvidenceUnknown,
+		HeapClassEvidence:        cloneHeapClassEvidence(heap),
+		EvidenceSources:          retainedEvidenceSources(item, heap),
+		ClassName:                className, Holder: holder, Screen: emptyUnknown(item.screen), Operation: emptyUnknown(item.operation),
+		Count: item.count, MaxAgeMS: item.maxAgeMs, EvidenceKind: evidenceKind, EvidenceLabel: retainedEvidenceLabel(evidenceKind),
+		EvidenceConfidence: retainedEvidenceConfidence(evidenceKind, retainedPrimaryEvidenceQuality(evidenceKind, quality)),
+		TimeOnlyCount:      item.timeOnlyCount, AfterExplicitGCCount: item.afterExplicitGCCount,
+		DataQuality: dataQuality, QualityWarnings: qualityWarnings,
+		EstimatedRetainedKB: estimatedRetainedKB, HeapCandidate: heap != nil, HeapSource: heapSource,
+		ChainFingerprint:        runtimeLeakFingerprint(className, holder, item),
+		RetainedSizeConfidence:  sizeConfidence,
+		RetainedSizeExplanation: retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, nil),
+		DominatorPath:           dominatorPath, DominatorTreeConfidence: dominatorConfidence,
+		DominatorTreeExplanation: retainedDominatorExplanation(dominatorConfidence, nil),
 		LeakChainConfidence:      chainConfidence,
-		LeakChainSummary:         chainSummary,
-		LeakChainActions:         chainActions,
-		InvestigationSteps:       retainedInvestigationSteps(item, holder, className, objectKind, confirmedHeap),
-		FixExamples:              retainedFixExamples(holder, objectKind, confirmedHeap),
-		VerificationSteps:        retainedVerificationSteps(heapEvidence),
-		Score:                    math.Round(score*10) / 10,
-		Severity:                 severity,
-		ObjectKind:               objectKind,
-		HolderQuality:            holderQuality,
-		UserOwned:                userOwned,
-		SystemRetained:           systemRetained,
-		Impact:                   retainedImpact(className, item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, heap, evidenceKind),
-		Recommendation:           retainedRecommendation(className, holder, holderQuality),
-		Evidence: retainedEvidence(
-			item,
-			lowMemoryCount,
-			maxPSSKB,
-			estimatedRetainedKB,
-			sizeConfidence,
-			heap,
-			evidenceKind,
-			qualityWarnings,
-		),
+		LeakChainSummary:         retainedLeakChainSummary(item, holder, className, objectKind, chainConfidence, evidenceKind),
+		LeakChainActions:         retainedLeakChainActions(item, holder, className, objectKind, holderQuality),
+		InvestigationSteps:       retainedInvestigationSteps(item, holder, className, objectKind, nil),
+		FixExamples:              retainedFixExamples(holder, objectKind, nil), VerificationSteps: retainedVerificationSteps(false),
+		Score: math.Round(score*10) / 10, Severity: severity, ObjectKind: objectKind, HolderQuality: holderQuality,
+		UserOwned: userOwned, SystemRetained: systemRetained,
+		Impact:         retainedImpact(className, item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, nil, evidenceKind),
+		Recommendation: retainedRecommendation(className, holder, holderQuality),
+		Evidence:       retainedEvidence(item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, sizeConfidence, nil, evidenceKind),
 	}
 }
 
@@ -212,22 +127,18 @@ func confirmedHeapReferencePath(heap *HeapLeakEvidence) bool {
 	if heap == nil || len(heap.ReferencePath) < 2 {
 		return false
 	}
+	if heap.ReferencePathState == HeapPathTruncated || heapReferencePathState(heap.ReferencePath) == HeapPathTruncated {
+		// A fragment cannot prove its missing edges. The parser independently records
+		// reachability from the complete BFS before shortening the displayed path.
+		return heap.Reachability == EvidencePositive
+	}
 	first := heap.ReferencePath[0]
 	return heap.GCRoot != "" || first.Kind == "gc_root" || strings.HasPrefix(first.ClassName, "GC root: ")
 }
 
-func retainedEvidenceKind(item memoryLeakStats, heap *HeapLeakEvidence, confirmedPath bool) string {
-	if confirmedPath {
-		return RetentionEvidenceConfirmedHPROFPath
-	}
-	if item.timeOnlyCount > 0 {
-		return RetentionEvidenceTimeOnly
-	}
+func retainedEvidenceKind(item memoryLeakStats) string {
 	if item.afterExplicitGCCount > 0 {
 		return RetentionEvidenceAfterExplicitGC
-	}
-	if heap != nil {
-		return RetentionEvidenceUnconfirmedHPROF
 	}
 	return RetentionEvidenceTimeOnly
 }
@@ -235,13 +146,13 @@ func retainedEvidenceKind(item memoryLeakStats, heap *HeapLeakEvidence, confirme
 func retainedEvidenceLabel(kind string) string {
 	switch kind {
 	case RetentionEvidenceConfirmedHPROFPath:
-		return "подтвержденный путь HPROF"
+		return "путь до GC root подтверждён дампом памяти"
 	case RetentionEvidenceAfterExplicitGC:
-		return "объект остался достижим после запрошенного GC"
+		return "объект остался в памяти после запрошенного GC"
 	case RetentionEvidenceUnconfirmedHPROF:
-		return "данные HPROF без подтвержденного пути"
+		return "объект найден в дампе памяти, но путь до GC root не подтверждён"
 	default:
-		return "объект жив после временной задержки"
+		return "объект остался в памяти после задержки"
 	}
 }
 
@@ -250,7 +161,7 @@ func retainedRuntimeEvidenceWeight(kind string) float64 {
 	case RetentionEvidenceConfirmedHPROFPath:
 		return 1
 	case RetentionEvidenceUnconfirmedHPROF:
-		return 0.6
+		return 0.45
 	case RetentionEvidenceAfterExplicitGC:
 		return 0.75
 	default:
@@ -259,23 +170,23 @@ func retainedRuntimeEvidenceWeight(kind string) float64 {
 }
 
 func retainedEvidenceConfidence(kind, dataQuality string) string {
-	confidence := "низкое"
+	confidence := "низкая"
 	switch kind {
 	case RetentionEvidenceConfirmedHPROFPath:
-		confidence = "высокое"
-	case RetentionEvidenceAfterExplicitGC, RetentionEvidenceUnconfirmedHPROF:
-		confidence = "среднее"
+		confidence = "высокая"
+	case RetentionEvidenceAfterExplicitGC:
+		confidence = "средняя"
 	}
 	if dataQuality == "degraded" {
 		switch confidence {
-		case "высокое":
-			confidence = "среднее"
-		case "среднее":
-			confidence = "низкое"
+		case "высокая":
+			confidence = "средняя"
+		case "средняя":
+			confidence = "низкая"
 		}
-		return confidence + ": качество входных данных снижено"
+		return confidence + ": часть входных данных потеряна"
 	}
-	return confidence + ": " + retainedEvidenceLabel(kind)
+	return confidence
 }
 
 func retainedQualityWarnings(item memoryLeakStats, heapCandidate bool, quality retentionDataQuality) []string {
@@ -289,21 +200,10 @@ func retainedQualityWarnings(item memoryLeakStats, heapCandidate bool, quality r
 	if heapCandidate && quality.heapDegraded {
 		warnings = append(warnings, quality.heapNotes...)
 	}
+	for i, warning := range warnings {
+		warnings[i] = "Качество сбора: " + warning
+	}
 	return uniqueStrings(warnings)
-}
-
-func heapPath(heap *HeapLeakEvidence) []HeapPathElement {
-	if heap == nil {
-		return nil
-	}
-	return heap.ReferencePath
-}
-
-func heapDominatorTree(heap *HeapLeakEvidence) []string {
-	if heap == nil {
-		return nil
-	}
-	return heap.DominatorTree
 }
 
 func cloneHeapPath(path []HeapPathElement) []HeapPathElement {
@@ -352,8 +252,7 @@ func runtimeLeakFingerprint(className, holder string, item memoryLeakStats) stri
 		normalizeLeakToken(className),
 		normalizeLeakToken(holder),
 		normalizeLeakToken(item.screen),
-		normalizeLeakToken(item.flow),
-		normalizeLeakToken(item.step),
+		normalizeLeakToken(item.operation),
 	}, "|")
 }
 
@@ -457,10 +356,10 @@ func retainedImpact(
 	}
 	if heap != nil && evidenceKind == RetentionEvidenceConfirmedHPROFPath {
 		if heap.LeakPattern != "" {
-			parts = append(parts, "Паттерн: "+heap.LeakPattern+".")
+			parts = append(parts, "Тип утечки: "+heap.LeakPattern+".")
 		}
 		if heap.RetainedObjectCount > 0 {
-			parts = append(parts, fmt.Sprintf("В дампе памяти доминируемых объектов: %d.", heap.RetainedObjectCount))
+			parts = append(parts, fmt.Sprintf("Через этот объект удерживается ещё %d объект(ов).", heap.RetainedObjectCount))
 		}
 		if heap.GCRoot != "" {
 			parts = append(parts, "Корень GC: "+heap.GCRoot+".")
@@ -483,7 +382,7 @@ func retainedImpact(
 
 func retainedRecommendation(className, holder, holderQuality string) string {
 	if holderQuality == "держатель не определен" || strings.HasPrefix(holderQuality, "автоматическая проверка") {
-		return "Проверьте владельцев ссылок на этот объект: одиночки, статические поля и кеши, корутинные задачи, слушатели, обратные вызовы, adapter, ViewModel и область DI. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
+		return "Проверьте владельцев ссылок на этот объект: одиночки, статические поля и кеши, корутинные задачи, слушатели, обратные вызовы, адаптеры, ViewModel и область DI. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
 	}
 	if isLikelySystemClass(className) {
 		return fmt.Sprintf("Проверьте пользовательский держатель %s: не хранит ли он Context/View/Activity дольше жизненного цикла.", holder)
@@ -499,58 +398,55 @@ func retainedEvidence(
 	sizeConfidence string,
 	heap *HeapLeakEvidence,
 	evidenceKind string,
-	qualityWarnings []string,
 ) string {
 	parts := []string{
-		"уровень=" + evidenceKind,
-		"смысл=" + retainedEvidenceMeaning(evidenceKind),
-		fmt.Sprintf("кол-во=%d", item.count),
-		fmt.Sprintf("макс. возраст=%s", formatDurationMS(item.maxAgeMs)),
-		fmt.Sprintf("time_only=%d", item.timeOnlyCount),
-		fmt.Sprintf("after_explicit_gc=%d", item.afterExplicitGCCount),
+		"Основание: " + retainedEvidenceLabel(evidenceKind),
+		"Что это значит: " + retainedEvidenceMeaning(evidenceKind),
+		fmt.Sprintf("Наблюдений: %d", item.count),
+		fmt.Sprintf("Максимальный возраст: %s", formatDurationMS(item.maxAgeMs)),
+		fmt.Sprintf("После задержки: %d", item.timeOnlyCount),
+		fmt.Sprintf("После явного GC: %d", item.afterExplicitGCCount),
 	}
 	if heap != nil {
-		parts = append(parts, "дамп=есть", fmt.Sprintf("подтвержденный путь=%t", confirmedHeapReferencePath(heap)))
-		if heap.Source != "" {
-			parts = append(parts, "источник дампа="+heap.Source)
+		pathConfirmed := "нет"
+		if confirmedHeapReferencePath(heap) {
+			pathConfirmed = "да"
+		}
+		parts = append(parts, "Дамп памяти: есть", "Путь от GC root подтверждён: "+pathConfirmed)
+		if heap.Confidence != "" {
+			parts = append(parts, "Вывод HPROF: "+heap.Confidence)
 		}
 		if heap.GCRoot != "" {
-			parts = append(parts, "корень GC="+heap.GCRoot)
+			parts = append(parts, "GC root: "+heap.GCRoot)
 		}
 		if heap.HolderField != "" {
-			parts = append(parts, "поле="+heap.HolderField)
+			parts = append(parts, "Поле держателя: "+heap.HolderField)
 		}
 		if heap.LeakPattern != "" {
-			parts = append(parts, "паттерн="+heap.LeakPattern)
+			parts = append(parts, "Тип утечки: "+heap.LeakPattern)
 		}
 		if len(heap.ReferenceMatchers) > 0 {
-			parts = append(parts, "совпавшие правила ссылок="+strings.Join(heap.ReferenceMatchers, ","))
+			parts = append(parts, "Совпавшие правила ссылок: "+strings.Join(heap.ReferenceMatchers, ", "))
 		}
 		if heap.RetainedObjectCount > 0 {
-			parts = append(parts, fmt.Sprintf("доминируемые объекты=%d", heap.RetainedObjectCount))
+			parts = append(parts, fmt.Sprintf("Объектов, удерживаемых через этот узел: %d", heap.RetainedObjectCount))
 		}
 	}
 	if estimatedRetainedKB > 0 {
-		parts = append(parts, fmt.Sprintf("оценка удержанного размера=%s", formatDataSize(estimatedRetainedKB)))
-		parts = append(parts, "доверие размера="+sizeConfidence)
+		parts = append(parts, fmt.Sprintf("Оценка удержанного размера: %s", formatDataSize(estimatedRetainedKB)))
+		parts = append(parts, "Надёжность оценки размера: "+sizeConfidence)
 	}
 	if item.screen != "" && item.screen != "unknown" {
-		parts = append(parts, "экран="+item.screen)
+		parts = append(parts, "Экран: "+item.screen)
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "сценарий="+item.flow)
-	}
-	if item.step != "" && item.step != "unknown" {
-		parts = append(parts, "шаг="+item.step)
+	if item.operation != "" && item.operation != "unknown" {
+		parts = append(parts, "Операция: "+item.operation)
 	}
 	if lowMemoryCount > 0 {
-		parts = append(parts, fmt.Sprintf("низкая память=%d", lowMemoryCount))
+		parts = append(parts, fmt.Sprintf("Сигналов нехватки памяти: %d", lowMemoryCount))
 	}
 	if maxPSSKB > 0 {
-		parts = append(parts, fmt.Sprintf("макс. PSS=%s", formatDataSize(maxPSSKB)))
-	}
-	if len(qualityWarnings) > 0 {
-		parts = append(parts, "ограничения качества="+strings.Join(qualityWarnings, "; "))
+		parts = append(parts, fmt.Sprintf("Максимальный PSS: %s", formatDataSize(maxPSSKB)))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -636,14 +532,10 @@ func retainedSizeExplanation(sizeKB uint64, confidence, objectKind string, heap 
 	if sizeKB == 0 {
 		return "Размер не рассчитан: в логе нет достаточных сигналов выполнения."
 	}
-	if heap != nil {
-		source := heap.Source
-		if source == "" {
-			source = "дамп памяти"
-		}
-		return fmt.Sprintf("Размер взят из анализа %s: удержанный размер=%s. Доверие: %s.", source, formatDataSize(sizeKB), confidence)
+	if heap != nil && heap.RetainedSizeKB > 0 {
+		return fmt.Sprintf("Размер рассчитан по HPROF: удержанный размер=%s. Надёжность: %s.", formatDataSize(sizeKB), confidence)
 	}
-	return fmt.Sprintf("Это не точный размер удержанной кучи из дампа памяти, а оценка по типу объекта %q, числу удержаний, возрасту и PSS процесса. Доверие: %s.", objectKind, confidence)
+	return fmt.Sprintf("Это примерный размер по типу объекта %q, числу удержаний, возрасту и PSS процесса. Точный размер требует дампа памяти. Надёжность: %s.", objectKind, confidence)
 }
 
 func retainedDominatorPath(item memoryLeakStats, holder, className string) []string {
@@ -651,11 +543,8 @@ func retainedDominatorPath(item memoryLeakStats, holder, className string) []str
 	if item.screen != "" && item.screen != "unknown" {
 		path = append(path, "экран: "+item.screen)
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		path = append(path, "сценарий: "+item.flow)
-	}
-	if item.step != "" && item.step != "unknown" {
-		path = append(path, "шаг: "+item.step)
+	if item.operation != "" && item.operation != "unknown" {
+		path = append(path, "операция: "+item.operation)
 	}
 	if holder != "" && holder != "unknown" && holder != "не определен" {
 		holderClass, holderMethod := splitHolderReference(holder)
@@ -688,10 +577,10 @@ func retainedDominatorExplanation(confidence string, heap *HeapLeakEvidence) str
 		if len(heap.DominatorTree) > 0 {
 			details = append(details, "В мини-дереве доминирования: "+strings.Join(heap.DominatorTree, ", ")+".")
 		}
-		details = append(details, "Доверие: "+confidence+".")
+		details = append(details, "Надёжность: "+confidence+".")
 		return strings.Join(details, " ")
 	}
-	return "Схема показывает контекст, в котором объект оставался жив после lifecycle-события. Она помогает найти вероятного владельца и место наблюдения, но не является цепочкой ссылок; точный корень GC и удержанный размер доступны только из дампа памяти. Доверие: " + confidence + "."
+	return "Схема показывает контекст, в котором объект остался жив после lifecycle-события. Это не цепочка ссылок. Точный gc root и удержанный размер доступны только из дампа памяти. Надёжность: " + confidence + "."
 }
 
 func retainedAttributionConfidence(item memoryLeakStats, holderQuality string, userOwned bool) string {
@@ -713,8 +602,12 @@ func retainedAttributionConfidence(item memoryLeakStats, holderQuality string, u
 }
 
 func retainedLeakChainSummary(item memoryLeakStats, holder, className, objectKind, confidence, evidenceKind string) string {
+	observed := fmt.Sprintf("Наблюдался %s %s.", objectKind, className)
+	if evidenceKind != RetentionEvidenceUnconfirmedHPROF {
+		observed = fmt.Sprintf("Наблюдается достижимый %s %s.", objectKind, className)
+	}
 	parts := []string{
-		fmt.Sprintf("Наблюдается достижимый %s %s.", objectKind, className),
+		observed,
 		retainedEvidenceMeaning(evidenceKind) + ".",
 	}
 	holderClass, holderMethod := splitHolderReference(holder)
@@ -732,13 +625,10 @@ func retainedLeakChainSummary(item memoryLeakStats, holder, className, objectKin
 	if item.screen != "" && item.screen != "unknown" {
 		parts = append(parts, "Экран: "+item.screen+".")
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "Сценарий: "+item.flow+".")
+	if item.operation != "" && item.operation != "unknown" {
+		parts = append(parts, "Операция: "+item.operation+".")
 	}
-	if item.step != "" && item.step != "unknown" {
-		parts = append(parts, "Шаг: "+item.step+".")
-	}
-	parts = append(parts, "Доверие runtime-атрибуции: "+confidence+".")
+	parts = append(parts, "Надёжность связи с данными выполнения: "+confidence+".")
 	return strings.Join(parts, " ")
 }
 
@@ -793,7 +683,7 @@ func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectK
 			steps = append(steps, "Найдите поле "+heap.HolderField+" в коде и проверьте, где ссылка присваивается и где должна очищаться.")
 		}
 		if heap.LeakPattern != "" {
-			steps = append(steps, "Проверьте конкретный паттерн: "+heap.LeakPattern+".")
+			steps = append(steps, "Проверьте указанный тип утечки: "+heap.LeakPattern+".")
 		}
 		if heap.GCRootCategory != "" {
 			steps = append(steps, "Проверьте категорию корня GC: "+heap.GCRootCategory+"; она подсказывает, искать статическое поле, одиночку, поток, JNI или системный обратный вызов.")
@@ -838,7 +728,7 @@ func retainedFixExamples(holder, objectKind string, heap *HeapLeakEvidence) []st
 		examples = append(examples, "Очистите "+heap.HolderField+" на границе жизненного цикла или замените сильную ссылку на WeakReference, если владелец обязан жить дольше.")
 	}
 	if heap != nil && heap.LeakPattern != "" {
-		examples = append(examples, "Зафиксируйте паттерн \""+heap.LeakPattern+"\" регрессионным сценарием: объект должен исчезнуть после задержки удержания и повторного дампа памяти.")
+		examples = append(examples, "Добавьте регрессионный сценарий для утечки \""+heap.LeakPattern+"\": объект должен исчезнуть после задержки удержания и повторного дампа памяти.")
 	}
 	switch objectKind {
 	case "экран / Activity", "Context":
@@ -888,7 +778,7 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 	bestScore := -1
 	for i := range heap.Leaks {
 		leak := heap.Leaks[i]
-		if leak.ClassName != item.className {
+		if leak.ClassName != item.className || !heapHolderMatchesRuntime(item, leak) {
 			continue
 		}
 		score := 0
@@ -914,87 +804,66 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 	return &heap.Leaks[bestIndex]
 }
 
-func heapDominatorPath(heap HeapLeakEvidence, className string) []string {
-	if len(heap.ReferencePath) == 0 {
-		if len(heap.DominatorTree) > 0 {
-			return heap.DominatorTree
-		}
-		return []string{"удержанный объект: " + className}
+func heapHolderMatchesRuntime(item memoryLeakStats, leak HeapLeakEvidence) bool {
+	holder := strings.TrimSpace(item.holder)
+	if holder == "" || holder == "unknown" || holder == "не определен" || strings.HasPrefix(holder, "lifecycle.") {
+		return true
 	}
-	out := make([]string, 0, len(heap.ReferencePath))
-	for i, step := range heap.ReferencePath {
-		if i == 0 && strings.HasPrefix(step.ClassName, "GC root: ") {
-			out = append(out, step.ClassName)
+	if leak.Holder == "" && leak.HolderField == "" && len(leak.ReferencePath) == 0 {
+		// A complete HPROF can show that an instance of the runtime class existed but was no longer
+		// reachable. There is no holder to compare in that case; the class identity is the evidence.
+		return true
+	}
+	runtimeHolders := [2]string{normalizeHeapHolderClass(holder), ""}
+	if className, member := splitHolderReference(holder); member != "" {
+		runtimeHolders[1] = normalizeHeapHolderClass(className)
+	}
+	for _, candidate := range runtimeHolders {
+		if candidate == "" {
 			continue
 		}
-		label := step.ClassName
-		if step.FieldName != "" {
-			label = step.FieldName + " -> " + label
+		if heapHolderIdentityEqual(candidate, normalizeHeapHolderClass(leak.Holder)) ||
+			heapHolderIdentityEqual(candidate, normalizeHeapHolderFieldOwner(leak.HolderField)) {
+			return true
 		}
-		if step.Kind == "static" && !strings.HasPrefix(label, "static ") {
-			label = "static " + label
+		for _, step := range leak.ReferencePath {
+			if heapHolderIdentityEqual(
+				candidate,
+				normalizeHeapHolderClass(strings.TrimPrefix(step.ClassName, "GC root: ")),
+			) {
+				return true
+			}
 		}
-		out = append(out, label)
 	}
-	if len(out) == 0 {
-		out = append(out, "удержанный объект: "+className)
-	}
-	return out
+	return false
 }
 
-func retainedHeapChainSummary(heap HeapLeakEvidence, holder, className, objectKind string) string {
-	parts := []string{fmt.Sprintf("Удержан %s %s, цепочка подтверждена дампом памяти.", objectKind, className)}
-	if heap.GCRoot != "" {
-		parts = append(parts, "Корень GC: "+heap.GCRoot+".")
+func heapHolderIdentityEqual(runtime, heap string) bool {
+	if runtime == "" || heap == "" {
+		return false
 	}
-	if heap.GCRootCategory != "" {
-		parts = append(parts, "Категория корня: "+heap.GCRootCategory+".")
+	if runtime == heap {
+		return true
 	}
-	if heap.Holder != "" {
-		parts = append(parts, "Пользовательский держатель: "+heap.Holder+".")
-	} else if holder != "" && holder != "unknown" && holder != "не определен" {
-		parts = append(parts, "Держатель из контекста выполнения: "+holder+".")
+	if strings.IndexByte(runtime, '.') >= 0 {
+		return false
 	}
-	if heap.HolderField != "" {
-		parts = append(parts, "Поле/ссылка: "+heap.HolderField+".")
+	if dot := strings.LastIndexByte(heap, '.'); dot >= 0 {
+		heap = heap[dot+1:]
 	}
-	if heap.RetainedSizeKB > 0 {
-		parts = append(parts, "Удержанный размер: "+formatDataSize(heap.RetainedSizeKB)+".")
-	}
-	if heap.RetainedObjectCount > 0 {
-		parts = append(parts, fmt.Sprintf("Доминатор удерживает %d объект(ов).", heap.RetainedObjectCount))
-	}
-	if len(heap.AlternativePaths) > 0 {
-		parts = append(parts, fmt.Sprintf("Найдено альтернативных цепочек: %d.", len(heap.AlternativePaths)))
-	}
-	return strings.Join(parts, " ")
+	return runtime == heap
 }
 
-func retainedHeapChainActions(heap HeapLeakEvidence, fallback []string) []string {
-	actions := make([]string, 0, len(fallback)+2)
-	if heap.HolderField != "" {
-		actions = append(actions, "Начните с поля "+heap.HolderField+": очистите ссылку на границе жизненного цикла или перенесите владельца в более короткую область.")
+func normalizeHeapHolderClass(value string) string {
+	return strings.ToLower(normalizeClassName(strings.TrimPrefix(strings.TrimSpace(value), "owner.")))
+}
+
+func normalizeHeapHolderFieldOwner(value string) string {
+	value = strings.TrimSpace(value)
+	if dot := strings.LastIndexByte(value, '.'); dot > 0 {
+		value = value[:dot]
 	}
-	if heap.GCRoot != "" {
-		actions = append(actions, "Проверьте, почему цепочка живет от корня GC "+heap.GCRoot+": статическое поле, одиночка, thread-local, активный поток, JNI или системный обратный вызов.")
-	}
-	if heap.GCRootCategory != "" {
-		switch heap.GCRootCategory {
-		case "class/static":
-			actions = append(actions, "Категория class/static: ищите companion object, object singleton, статическое поле, одиночку DI или глобальный кеш.")
-		case "thread":
-			actions = append(actions, "Категория thread: проверьте активные Runnable/Coroutine/Executor/Handler задачи и ThreadLocal.")
-		case "jni":
-			actions = append(actions, "Категория JNI: проверьте native/global references и обратные вызовы сторонних SDK.")
-		case "monitor":
-			actions = append(actions, "Категория monitor: проверьте синхронизацию и объекты, удерживаемые заблокированными потоками.")
-		}
-	}
-	if len(heap.ReferenceMatchers) > 0 {
-		actions = append(actions, "Правила совпадения ссылок подсказали область риска: "+strings.Join(heap.ReferenceMatchers, ", ")+". Проверьте соответствующую очистку фреймворка, слушателя или контекста.")
-	}
-	actions = append(actions, fallback...)
-	return uniqueStrings(actions)
+	return normalizeHeapHolderClass(value)
 }
 
 func firstPositive(values ...uint64) uint64 {
@@ -1025,7 +894,7 @@ func splitHolderReference(holder string) (string, string) {
 
 func knownContextCount(item memoryLeakStats) int {
 	count := 0
-	for _, value := range []string{item.screen, item.flow, item.step} {
+	for _, value := range []string{item.screen, item.operation} {
 		if value != "" && value != "unknown" {
 			count++
 		}

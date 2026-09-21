@@ -89,7 +89,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         if (lastContextToken.get() == token) return
         lastContextToken.set(token)
         if (eventSink?.tryPublishContext(token, screen, owner, flow, step) != true) {
-            JankHunter.recordCounter("jankhunter.artti.context_sink_drop.count", 1L)
+            JankHunter.recordIntegrationCounter("jankhunter.artti.context_sink_drop.count", 1L)
         }
         val result = ArtTiNativeBridge.nativeLinkThreadContext(thread, token)
         if (result < 0) report(Reason.CORRELATION_DROP)
@@ -102,7 +102,12 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
             report(Reason.STACK_BUDGET_DROP)
             return
         }
-        val token = contextToken(context.screen, context.owner, context.flow, context.step)
+        val token = contextToken(
+            context.screen,
+            context.owner,
+            context.initiatorName,
+            if (context.operationId != 0L) context.operationId.toString() else null,
+        )
         val result = ArtTiNativeBridge.nativeCaptureStack(
             thread = thread,
             trigger = STACK_TRIGGER_MAIN_THREAD_STALL,
@@ -281,7 +286,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 payload3 = 0L,
             )
             if (eventSink?.tryPublish(statusBatch) != true) {
-                JankHunter.recordCounter("jankhunter.artti.event_sink_drop.count", 1L)
+                JankHunter.recordIntegrationCounter("jankhunter.artti.event_sink_drop.count", 1L)
             }
         }
     }
@@ -327,7 +332,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     }
 
     private fun report(reason: Reason, warning: Boolean = false, safeDetail: String? = null) {
-        JankHunter.recordCounter("jankhunter.artti.${reason.metric}.count", 1L)
+        JankHunter.recordIntegrationCounter("jankhunter.artti.${reason.metric}.count", 1L)
         if (reason.loggable) publishCanonicalStatus(SDK_STATUS_REASON_BASE + reason.ordinal)
         if (!reason.loggable) return
         val mask = 1 shl reason.ordinal
@@ -372,7 +377,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 payload3 = nativeMemoryBytes,
             )
             if (!sink.tryPublish(statusBatch)) {
-                JankHunter.recordCounter("jankhunter.artti.event_sink_drop.count", 1L)
+                JankHunter.recordIntegrationCounter("jankhunter.artti.event_sink_drop.count", 1L)
             }
         }
     }

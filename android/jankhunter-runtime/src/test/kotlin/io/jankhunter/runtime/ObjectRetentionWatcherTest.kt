@@ -1,18 +1,93 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.SymbolOrigin
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetentionEvidence
+import java.lang.ref.Reference
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ObjectRetentionWatcherTest {
     @Test
+    fun identicalClassStringsDoNotMergeDifferentOrigins() {
+        var now = 0L
+        val reports = mutableListOf<Pair<SymbolOrigin, Long>>()
+        val watcher = ObjectRetentionWatcher(RETAINED_DELAY_MS, clock = { now },
+            reporter = { _, _, _, _, count, _, origin -> reports += origin to count })
+        val first = Any()
+        val second = Any()
+        enableManualWatch(watcher)
+        try {
+            watcher.watch(first, "a", "owner", null)
+            watcher.watch(second, "a", "owner", null, SymbolOrigin.RUNTIME_CLASS)
+            now = RETAINED_DELAY_MS
+            watcher.checkRetained()
+            assertEquals(listOf(SymbolOrigin.UNKNOWN to 1L, SymbolOrigin.RUNTIME_CLASS to 1L), reports)
+        } finally {
+            watcher.stop()
+            Reference.reachabilityFence(first)
+            Reference.reachabilityFence(second)
+        }
+    }
+
+    @Test
+    fun watchedObjectsUseWeakIdentityIndexWithoutQueueCompaction() {
+        val fieldTypes = ObjectRetentionWatcher::class.java.declaredFields.map { it.type }
+
+        assertFalse(fieldTypes.contains(ConcurrentLinkedQueue::class.java))
+        assertTrue(ObjectRetentionWatcher::class.java.declaredFields.any { it.name == "watchedByIdentityHash" })
+    }
+
+    @Test
+    fun startDoesNotWaitForBusyDiagnosticLock() {
+        val watcher = ObjectRetentionWatcher(retainedDelayMs = RETAINED_DELAY_MS)
+        val scheduler = io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler()
+        val checkLock = checkNotNull(ObjectRetentionWatcher::class.java.getDeclaredField("checkLock").apply {
+            isAccessible = true
+        }.get(watcher)) as ReentrantLock
+        val startEntered = CountDownLatch(1)
+        val startCompleted = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            checkLock.withLock {
+                executor.submit {
+                    startEntered.countDown()
+                    watcher.start(scheduler)
+                    startCompleted.countDown()
+                }
+                assertTrue(startEntered.await(1, TimeUnit.SECONDS))
+                assertTrue(startCompleted.await(1, TimeUnit.SECONDS))
+            }
+            watcher.start(scheduler)
+        } finally {
+            watcher.stop()
+            scheduler.shutdown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun cardinalityLossUsesPrimitivePort() {
+        val field = ObjectRetentionWatcher::class.java.getDeclaredField("onCardinalityLoss")
+
+        assertFalse(field.type == Function1::class.java)
+    }
+
+    @Test
     fun retainedHolderFallsBackToClassNameWhenHolderIsMissing() {
-        assertEquals("com.example.Owner", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "com.example.Owner"))
-        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", null))
-        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "unknown"))
+        assertEquals("com.example.Owner", firstContextValue("com.example.Owner", "com.example.LeakyActivity"))
+        assertEquals("com.example.LeakyActivity", firstContextValue(null, "com.example.LeakyActivity"))
+        assertEquals("com.example.LeakyActivity", firstContextValue("unknown", "com.example.LeakyActivity"))
     }
 
     @Test
@@ -25,7 +100,7 @@ class ObjectRetentionWatcherTest {
             forceGcBeforeReport = true,
             clock = { now },
             requestGc = { gcRequests++ },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -68,7 +143,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -107,16 +182,16 @@ class ObjectRetentionWatcherTest {
     fun keepsWeakWatchUntilHeapDumpAgeWithoutDuplicatingRetainedReport() {
         var now = 0L
         val reports = mutableListOf<Report>()
-        val heapDumps = mutableListOf<Report>()
+        val heapDumps = mutableListOf<HeapDumpRequest>()
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
             heapDumpMinRetainedAgeMs = HEAP_DUMP_AGE_MS,
-            heapDumpReporter = { className, ownerHint, context, ageMs, count, evidence ->
-                heapDumps += Report(className, ownerHint, context, ageMs, count, evidence)
+            heapDumpReporter = { className, ownerHint, context, ageMs, count ->
+                heapDumps += HeapDumpRequest(className, ownerHint, context, ageMs, count)
             },
         )
         val retained = Any()
@@ -140,13 +215,12 @@ class ObjectRetentionWatcherTest {
             assertEquals(1, reports.size)
             assertEquals(
                 listOf(
-                    Report(
+                    HeapDumpRequest(
                         "com.example.LeakyScreen",
                         "com.example.Holder",
                         null,
                         HEAP_DUMP_AGE_MS,
                         1L,
-                        RetentionEvidence.TIME_ONLY,
                     ),
                 ),
                 heapDumps,
@@ -167,7 +241,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -175,8 +249,6 @@ class ObjectRetentionWatcherTest {
         val context = JankHunterContext(
             screen = "LeakDemoScreen",
             owner = "sample.memory_leak.listener_registry",
-            flow = "sample.memory_leak.demo",
-            step = "listener_callback",
         )
         enableManualWatch(watcher)
         try {
@@ -210,7 +282,7 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
-            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
         )
@@ -243,6 +315,39 @@ class ObjectRetentionWatcherTest {
     }
 
     @Test
+    fun staleQueueEntryFromPreviousRunCannotRemoveCurrentWatch() {
+        var now = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+        )
+        enableManualWatch(watcher)
+        watcher.watch(Any(), "previous-run", null, null)
+        val staleReference = watchedReferences(watcher).single()
+        watcher.stop()
+
+        enableManualWatch(watcher)
+        try {
+            val first = Any()
+            val second = Any()
+            watcher.watch(first, "current-run", null, null)
+            staleReference.enqueue()
+            watcher.watch(second, "current-run", null, null)
+            now = RETAINED_DELAY_MS
+
+            watcher.checkRetained()
+
+            assertEquals(2L, reports.single().count)
+        } finally {
+            watcher.stop()
+        }
+    }
+
+    @Test
     fun reportsWatcherCapacityLossWithoutRetainingExtraObject() {
         var losses = 0L
         val watcher = ObjectRetentionWatcher(
@@ -263,6 +368,75 @@ class ObjectRetentionWatcherTest {
         }
     }
 
+    @Test
+    fun exactAdmissionStillHonorsHardWatchLimit() {
+        var now = 0L
+        var losses = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+            maxWatchedReferences = 1,
+            exactAdmission = true,
+            onCardinalityLoss = { losses += it },
+        )
+        val first = Any()
+        val second = Any()
+        enableManualWatch(watcher)
+        try {
+            watcher.watch(first, "first", null, null)
+            watcher.watch(second, "second", null, null)
+            now = RETAINED_DELAY_MS
+            watcher.checkRetained()
+
+            assertEquals(1L, losses)
+            assertEquals(listOf("first"), reports.map { it.className })
+        } finally {
+            watcher.stop()
+        }
+    }
+
+    @Test
+    fun exactStopSealsEligibleRetentionAfterOptionalGc() {
+        var now = 0L
+        var gcRequests = 0
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            forceGcBeforeReport = true,
+            clock = { now },
+            requestGc = { gcRequests++ },
+            reporter = { className, ownerHint, context, ageMs, count, evidence, _ ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+            exactAdmission = true,
+        )
+        val retained = Any()
+        enableManualWatch(watcher)
+        watcher.watch(retained, "shutdown-retained", "shutdown-holder", null)
+        now = RETAINED_DELAY_MS
+
+        watcher.stop()
+
+        assertEquals(1, gcRequests)
+        assertEquals(
+            listOf(
+                Report(
+                    "shutdown-retained",
+                    "shutdown-holder",
+                    null,
+                    RETAINED_DELAY_MS,
+                    1L,
+                    RetentionEvidence.AFTER_EXPLICIT_GC,
+                ),
+            ),
+            reports,
+        )
+    }
+
     private data class Report(
         val className: String?,
         val ownerHint: String?,
@@ -272,11 +446,26 @@ class ObjectRetentionWatcherTest {
         val evidence: RetentionEvidence,
     )
 
+    private data class HeapDumpRequest(
+        val className: String?,
+        val ownerHint: String?,
+        val context: JankHunterContext?,
+        val ageMs: Long,
+        val count: Long,
+    )
+
     private fun enableManualWatch(watcher: ObjectRetentionWatcher) {
         val runningField = ObjectRetentionWatcher::class.java.getDeclaredField("running").apply {
             isAccessible = true
         }
         (runningField.get(watcher) as AtomicBoolean).set(true)
+    }
+
+    private fun watchedReferences(watcher: ObjectRetentionWatcher): List<Reference<*>> {
+        val watchedField = ObjectRetentionWatcher::class.java.getDeclaredField("watched").apply {
+            isAccessible = true
+        }
+        return (watchedField.get(watcher) as List<*>).map { requireNotNull(it) as Reference<*> }
     }
 
     private companion object {

@@ -1,5 +1,7 @@
 package io.jankhunter.sample
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -13,7 +15,6 @@ import io.jankhunter.sample.automatic.ScenarioStep
 import io.jankhunter.sample.graph.ScenarioGraphComponent
 import io.jankhunter.sample.ui.SampleTheme
 import io.jankhunter.sample.ui.ScenarioScreen
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.launch
 
 internal class MemoryScenarioActivity : ComponentActivity() {
@@ -34,7 +35,7 @@ internal class MemoryScenarioActivity : ComponentActivity() {
                 )
             }
         }
-        JankHunter.setScreen(ScenarioStep.MEMORY.screenName)
+        JankHunterTelemetry.setScreen(ScenarioStep.MEMORY.screenName)
         lifecycleScope.launch {
             val sampleApplication = application as SampleApplication
             AutomaticMemoryScenario(
@@ -48,7 +49,7 @@ internal class MemoryScenarioActivity : ComponentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         window.decorView.post {
-            JankHunter.setScreen(ScenarioStep.MEMORY.screenName)
+            JankHunterTelemetry.setScreen(ScenarioStep.MEMORY.screenName)
         }
     }
 }

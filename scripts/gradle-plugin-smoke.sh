@@ -12,6 +12,7 @@ SMOKE_CONFIGURATION_CACHE="${SMOKE_CONFIGURATION_CACHE:-1}"
 SMOKE_MARKER_NAME=".jankhunter-gradle-smoke-owned"
 SMOKE_MARKER_VALUE="jankhunter-gradle-smoke:v1"
 SMOKE_RUN_DIR=""
+SMOKE_HELPER_SOURCE="${SMOKE_HELPER_SOURCE:-external}"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ Environment:
   SMOKE_AGP_VERSION            AGP version for the consumer; defaults to the version catalog.
   SMOKE_COMPILE_SDK            Compile/target SDK; defaults to the version catalog.
   ANDROID_BUILD_TOOLS_VERSION  Installed Build Tools version; defaults to the highest installed.
+  SMOKE_HELPER_SOURCE          Helper source: external (default), project, or composite.
   SMOKE_CONFIGURATION_CACHE    Set to 0 to disable the create/reuse configuration-cache check.
   SMOKE_WORK_DIR               Parent for a unique cold run directory preserved for inspection.
   KEEP_SMOKE_DIR               Set to 1 to preserve an automatically created work directory.
@@ -328,44 +330,29 @@ jankHunter {
     enabled = true
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("release")
-    autoInit = true
-    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.ENABLED
-    sessionLogSizeLimitEnabled = true
-    maxSessionLogSizeMiB = 8
-    releaseSafety {
-        allowInstrumentation = true
-        privacyReviewed = true
-        allowHeapDumps = true
-        performanceBudgetEvidence = "release-performance-budget.md"
+    storageLimitMiB(8)
+    enable(
+        io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+        io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS,
+    )
+    profile = io.jankhunter.gradle.JankHunterProfile.FULL
+    privacyReviewed()
+    release {
+        allowHeapDumps()
+        allowSecondaryProcesses()
+        performanceBudget(file("release-performance-budget.md"))
     }
-    artTi {
-        mode = io.jankhunter.gradle.ArtTiMode.CAUSAL
-    }
-    retainedHeapDump {
-        enabled = true
-        privacyApproved = true
-        minIntervalMs = 600_000
-        maxCount = 1
-        minRetainedAgeMs = 30_000
-    }
-    instrument {
-        okhttp = true
-        webSockets = true
-        methodCounters = true
-        handlers = true
-        logSpam = true
-        classGraph = true
-        runtimeCallGraph = true
-        includeWholeApplication = true
-        asmProgressLog = false
-    }
+    tuning.heapDumps.minIntervalMs = 600_000
+    tuning.heapDumps.maxCount = 1
+    tuning.heapDumps.minRetainedAgeMs = 30_000
+    scope = io.jankhunter.gradle.JankHunterInstrumentationScope.NAMESPACE_AND_PACKAGES
 }
 
 dependencies {
     implementation(project(":feature"))
     implementation(project(":network-feature"))
     implementation("com.squareup.okhttp3:okhttp:3.12.13")
-    implementation("$group:jankhunter-okhttp3:$version")
+    implementation("$group:jankhunter-android-sdk:$version")
 }
 EOF
 
@@ -412,13 +399,16 @@ android {
 jankHunter {
     enabled = true
     enabledBuildTypes.add("debug")
-    instrument {
-        methodCounters = true
-        handlers = true
-        logSpam = true
-        classGraph = true
-        runtimeCallGraph = true
-        asmProgressLog = false
+    profile = io.jankhunter.gradle.JankHunterProfile.TARGETED
+    debug {
+        enable(
+            io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+            io.jankhunter.gradle.JankHunterFeatureBundle.CONCURRENCY_ALL,
+            io.jankhunter.gradle.JankHunterFeature.LOGGING,
+            io.jankhunter.gradle.JankHunterFeature.CLASS_GRAPH,
+            io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH,
+            io.jankhunter.gradle.JankHunterFeature.LIFECYCLE_LEAKS,
+        )
     }
 }
 EOF
@@ -491,9 +481,16 @@ import okhttp3.Request;
 import okhttp3.WebSocketListener;
 
 public class MainActivity extends Activity {
+    public static class LifecycleFragment extends android.app.Fragment {
+        @Override public void onDestroyView() { super.onDestroyView(); }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (io.jankhunter.runtime.JankHunterHooks.classifyWorkerOutcome(new Object()) != 4) {
+            throw new AssertionError("Unknown worker result must stay unknown");
+        }
         Helper.work();
         com.example.jhsmoke.feature.FeatureEntry.touch();
         org.example.jhsmoke.network.ReleaseNetworkClient.create();
@@ -571,6 +568,56 @@ sdk.dir=$sdk_dir_properties
 EOF
 }
 
+
+# Exercise real producer dependencies, including a transitive SDK dependency substitution.
+write_helper_source_fixture() {
+  local fixture_dir="$1" build_tools_version="$2" group="$3" version="$4"
+  [[ "$SMOKE_HELPER_SOURCE" != "external" ]] || return 0
+  local helper_dir="$fixture_dir/jankhunter-okhttp3"
+  mkdir -p "$helper_dir/src"
+  cp -R "$ANDROID_DIR/jankhunter-okhttp3/src/main" "$helper_dir/src/"
+  cp "$ANDROID_DIR/jankhunter-okhttp3/consumer-rules.pro" "$helper_dir/consumer-rules.pro"
+  cat > "$helper_dir/build.gradle.kts" <<EOF
+plugins { id("com.android.library") version "$SMOKE_AGP_VERSION" }
+group = "$group"
+version = "$version"
+android {
+    namespace = "io.jankhunter.okhttp3"
+    compileSdk = $SMOKE_COMPILE_SDK
+    buildToolsVersion = "$build_tools_version"
+    defaultConfig { minSdk = 23; consumerProguardFiles("consumer-rules.pro") }
+}
+dependencies {
+    implementation("$group:jankhunter-runtime:$version")
+    compileOnly("com.squareup.okhttp3:okhttp:3.12.13")
+}
+EOF
+  if [[ "$SMOKE_HELPER_SOURCE" == "project" ]]; then
+    cat >> "$fixture_dir/settings.gradle.kts" <<'EOF'
+include(":jankhunter-okhttp3")
+EOF
+    cat >> "$fixture_dir/build.gradle.kts" <<EOF
+allprojects {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("$group:jankhunter-okhttp3")).using(project(":jankhunter-okhttp3"))
+        }
+    }
+}
+EOF
+  else
+    cp "$fixture_dir/local.properties" "$helper_dir/local.properties"
+    # Reuse repository declarations, but give this included build its own root project.
+    sed '/rootProject.name/,$d' "$fixture_dir/settings.gradle.kts" > "$helper_dir/settings.gradle.kts"
+    cat >> "$helper_dir/settings.gradle.kts" <<'EOF'
+rootProject.name = "jankhunter-okhttp3"
+EOF
+    cat >> "$fixture_dir/settings.gradle.kts" <<'EOF'
+includeBuild("jankhunter-okhttp3")
+EOF
+  fi
+}
+
 main() {
   if [[ $# -gt 0 ]]; then
     if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
@@ -580,6 +627,10 @@ main() {
     fail "unknown or unexpected arguments: $*"
   fi
 
+  case "$SMOKE_HELPER_SOURCE" in
+    external|project|composite) ;;
+    *) fail "SMOKE_HELPER_SOURCE must be external, project, or composite" ;;
+  esac
   require_boolean_environment KEEP_SMOKE_DIR "$KEEP_SMOKE_DIR"
   require_boolean_environment SMOKE_CONFIGURATION_CACHE "$SMOKE_CONFIGURATION_CACHE"
   SMOKE_COMPILE_SDK="$(resolve_compile_sdk)"
@@ -646,33 +697,36 @@ main() {
     -PjankHunterBuildToolsVersion="$build_tools_version" \
     -Dmaven.repo.local="$maven_repo" \
     --no-daemon --console=plain --warning-mode all
-  JAVA_HOME="$java17_home" ANDROID_HOME="$sdk_dir" ANDROID_SDK_ROOT="$sdk_dir" \
-    "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR/jankhunter-gradle-plugin" publishToMavenLocal \
-    -Dmaven.repo.local="$maven_repo" \
-    --no-daemon --console=plain --warning-mode all
 
   local group_path
   group_path="$(printf '%s' "$group" | tr '.' '/')"
   local plugin_module="$maven_repo/$group_path/jankhunter-gradle-plugin/$version/jankhunter-gradle-plugin-$version.module"
+  local sdk_module="$maven_repo/$group_path/jankhunter-android-sdk/$version/jankhunter-android-sdk-$version.module"
   local runtime_module="$maven_repo/$group_path/jankhunter-runtime/$version/jankhunter-runtime-$version.module"
   local annotations_module="$maven_repo/$group_path/jankhunter-annotations/$version/jankhunter-annotations-$version.module"
   local okhttp_module="$maven_repo/$group_path/jankhunter-okhttp3/$version/jankhunter-okhttp3-$version.module"
-  local artti_module="$maven_repo/$group_path/jankhunter-artti/$version/jankhunter-artti-$version.module"
   [[ -f "$plugin_module" ]] || fail "Published plugin metadata was not found: $plugin_module"
+  [[ -f "$sdk_module" ]] || fail "Published Android SDK metadata was not found: $sdk_module"
   [[ -f "$runtime_module" ]] || fail "Published runtime metadata was not found: $runtime_module"
   [[ -f "$annotations_module" ]] || fail "Published annotations metadata was not found: $annotations_module"
   [[ -f "$okhttp_module" ]] || fail "Published OkHttp helper metadata was not found: $okhttp_module"
-  [[ -f "$artti_module" ]] || fail "Published ART TI metadata was not found: $artti_module"
+  require_file_contains "$sdk_module" '"module": "jankhunter-runtime"' "Android SDK metadata"
+  require_file_contains "$sdk_module" '"module": "jankhunter-annotations"' "Android SDK metadata"
+  require_file_contains "$sdk_module" '"module": "jankhunter-okhttp3"' "Android SDK metadata"
   grep -q '"org.gradle.jvm.version": 17' "$plugin_module" ||
     fail "Published Gradle plugin metadata is not Java 17-compatible: $plugin_module"
 
   write_fixture "$fixture_dir" "$maven_repo" "$sdk_dir" "$build_tools_version" "$group" "$version"
 
-  log "building external Android consumer"
+  write_helper_source_fixture "$fixture_dir" "$build_tools_version" "$group" "$version"
+
+  log "building external Android consumer (helper: $SMOKE_HELPER_SOURCE)"
   local consumer_args=(
     -p "$fixture_dir"
-    :app:assembleDebug
-    :app:assembleRelease
+    :app:packageDebug
+    :app:packageRelease
+    :app:signReleaseBundle
+    --stacktrace
     --no-daemon
     --console=plain
     --warning-mode all
@@ -704,18 +758,30 @@ main() {
     assert_single_banner "$cached_output" "$version"
   fi
 
-  local owner_map="$fixture_dir/app/build/generated/jankhunter/debug/owner-map.json"
-  require_file_contains "$owner_map" '"class":"com.example.jhsmoke.MainActivity"' "Application owner map"
-  require_file_contains "$owner_map" '"methodCounters":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"okhttp":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"webSockets":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"handlers":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"logSpam":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"classGraph":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"runtimeCallGraph":true' "Application owner map metadata"
-  local feature_owner_map="$fixture_dir/feature/build/generated/jankhunter/debug/owner-map.json"
-  require_file_contains "$feature_owner_map" '"class":"com.example.jhsmoke.feature.FeatureEntry"' "Feature owner map"
-  require_file_contains "$feature_owner_map" '"method":"touch"' "Feature owner map"
+  python3 "$ROOT_DIR/scripts/validate-build-manifests.py" "$fixture_dir/app/build"
+
+  local variant variant_title transport_jar transport_signature
+  for variant in debug release; do
+    require_file_contains "$fixture_dir/app/build/intermediates/jankhunter/$variant/transport-capability.txt" \
+      'transport-v1:available' "Transport capability ($variant)"
+    if [[ "$variant" == "debug" ]]; then variant_title="Debug"; else variant_title="Release"; fi
+    transport_jar="$fixture_dir/app/build/intermediates/classes/$variant/ALL/instrument${variant_title}JankHunterTransport/classes.jar"
+    transport_signature="$("$java17_home/bin/javap" -classpath "$transport_jar" okhttp3.internal.connection.RealConnection)"
+    [[ "$transport_signature" == *"io.jankhunter.okhttp3.JankHunterHttpTransportV1"* ]] || \
+      fail "RealConnection did not receive its transport ABI ($variant)"
+  done
+
+  local artifact_metadata="$fixture_dir/app/build/generated/jankhunter/debug/artifact-metadata.json"
+  require_file_contains "$artifact_metadata" '"kind":"artifact-metadata"' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"methodCounters":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"okhttp":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"webSockets":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"handlers":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"logSpam":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"classGraph":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"runtimeCallGraph":true' "Application artifact metadata"
+  local feature_artifact_metadata="$fixture_dir/feature/build/generated/jankhunter/debug/artifact-metadata.json"
+  require_file_contains "$feature_artifact_metadata" '"kind":"artifact-metadata"' "Feature artifact metadata"
 
   local class_graph="$fixture_dir/app/build/generated/jankhunter/debug/class-graph.jsonl"
   require_file_contains "$class_graph" '"class":"com.example.jhsmoke.MainActivity"' "Application class graph"
@@ -723,36 +789,27 @@ main() {
   require_file_contains "$class_graph" '"calleeClass":"com.example.jhsmoke.feature.FeatureEntry"' "Application class graph"
 
   local diagnostics="$fixture_dir/app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl"
+  require_file_contains "$diagnostics" '"format":2,"pass":"main"' "Versioned main diagnostics"
+  require_file_contains "$diagnostics" '"format":2,"pass":"lifecycle","class":"com.example.jhsmoke.MainActivity$LifecycleFragment"' "Application lifecycle pass diagnostics"
   require_file_contains "$diagnostics" '"class":"com.example.jhsmoke.MainActivity"' "Application instrumentation diagnostics"
   require_file_contains "$diagnostics" '"intent":"handler.wrap_runnable.single_runnable"' "Handler hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"logspam.android.util.Log.d"' "Log hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.install_event_listener_factory"' "OkHttp hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.wrap_websocket_listener"' "WebSocket hook diagnostics"
   local feature_diagnostics="$fixture_dir/feature/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl"
+  require_file_contains "$feature_diagnostics" '"format":2,"pass":"lifecycle"' "Versioned lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"owner":"smoke.feature"' "Feature annotation diagnostics"
   require_file_contains "$feature_diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Feature lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"intent":"lifecycle.watch_retained"' "Feature lifecycle diagnostics"
   require_file_not_contains "$diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Application lifecycle diagnostics"
 
-  local release_owner_map="$fixture_dir/app/build/generated/jankhunter/release/owner-map.json"
-  require_file_contains "$release_owner_map" '"includeWholeApplication":true' "Release owner map metadata"
+  local release_artifact_metadata="$fixture_dir/app/build/generated/jankhunter/release/artifact-metadata.json"
+  require_file_contains "$release_artifact_metadata" '"includeWholeApplication":false' "Release artifact metadata"
   local release_diagnostics="$fixture_dir/app/build/generated/jankhunter/release/instrumentation-diagnostics.jsonl"
-  require_file_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
-  require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release dependency OkHttp hook diagnostics"
+  require_file_not_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
+  require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release OkHttp hook diagnostics"
   local release_mapping="$fixture_dir/app/build/outputs/mapping/release/mapping.txt"
   require_file_contains "$release_mapping" 'okhttp3.EventListener$Factory eventListenerFactory -> eventListenerFactory' "Release R8 mapping"
-
-  local debug_apk="$fixture_dir/app/build/outputs/apk/debug/app-debug.apk"
-  local release_apk="$fixture_dir/app/build/outputs/apk/release/app-release-unsigned.apk"
-  [[ -s "$debug_apk" ]] || fail "External debug APK was not generated: $debug_apk"
-  [[ -s "$release_apk" ]] || fail "External release APK was not generated: $release_apk"
-  zipinfo -1 "$debug_apk" | grep -Fx 'lib/arm64-v8a/libjankhunter_artti.so' >/dev/null ||
-    fail "Published ART TI arm64 library was not packaged in the external debug APK"
-  zipinfo -1 "$debug_apk" | grep -Fx 'lib/x86_64/libjankhunter_artti.so' >/dev/null ||
-    fail "Published ART TI x86_64 library was not packaged in the external debug APK"
-  if zipinfo -1 "$release_apk" | grep -F 'libjankhunter_artti.so' >/dev/null; then
-    fail "ART TI library unexpectedly leaked into the external release APK"
-  fi
 
   local di_catalog="$fixture_dir/app/build/generated/jankhunter/debug/di-catalog.jsonl"
   require_file_contains "$di_catalog" '"kind":"metadata"' "Dependency injection catalog metadata"
@@ -770,7 +827,7 @@ main() {
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.session_log_size_limit_enabled true
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.max_session_log_size_mib 8
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_enabled true
-  assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_privacy_approved true
+  require_file_not_contains "$runtime_manifest" 'io.jankhunter.retained_heap_dump_privacy_approved' "Application runtime manifest"
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_min_interval_ms 600000
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_max_count 1
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_min_retained_age_ms 30000
@@ -790,4 +847,6 @@ assert_single_banner() {
   [[ "$count" -eq 1 ]] || fail "expected one Jank Hunter build banner, found $count in $output"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

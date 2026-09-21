@@ -14,12 +14,13 @@ class InstrumentationMatcherTest {
 
     @Test
     fun excludesPlatformAndSdkClasses() {
-        val matcher = InstrumentationMatcher(emptyList(), emptyList())
+        val matcher = InstrumentationMatcher(emptyList(), emptyList(), includeWholeApplication = true)
 
         assertFalse(matcher.matches("kotlin.collections.CollectionsKt"))
         assertFalse(matcher.matches("androidx.fragment.app.Fragment"))
         assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
         assertFalse(matcher.matches("io.jankhunter.okhttp3.JankHunterEventListener"))
+        assertFalse(matcher.matches("io.jankhunter.workmanager.JankHunterCoroutineWorker"))
     }
 
     @Test
@@ -45,6 +46,39 @@ class InstrumentationMatcherTest {
         assertFalse(matcher.matches("org.example.generated.NetworkFactory"))
         assertFalse(matcher.matches("okhttp3.OkHttpClient"))
         assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
+    }
+
+    @Test
+    fun staticMatcherKeepsJankHunterHelpersOutsideWholeApplicationInstrumentation() {
+        val excludedHelpers = listOf(
+            "io.jankhunter.okhttp3.JankHunterOkHttp3",
+            "io.jankhunter.runtime.JankHunterHooks",
+            "io.jankhunter.workmanager.WorkerTelemetry",
+        )
+
+        excludedHelpers.forEach { className ->
+            assertFalse(
+                className,
+                InstrumentationMatcher.matchesNormalizedClassName(
+                    normalizedClassName = className,
+                    includePackages = emptySet(),
+                    excludePackages = emptySet(),
+                    includeWholeApplication = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun staticMatcherDoesNotExcludePackagesThatOnlyShareANamePrefix() {
+        assertTrue(
+            InstrumentationMatcher.matchesNormalizedClassName(
+                normalizedClassName = "io.jankhunter.okhttp3extra.ApplicationClient",
+                includePackages = emptySet(),
+                excludePackages = emptySet(),
+                includeWholeApplication = true,
+            ),
+        )
     }
 
     @Test

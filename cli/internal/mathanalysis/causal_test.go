@@ -1,6 +1,9 @@
 package mathanalysis
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestShortestGraphPathUsesLowerCostRoute(t *testing.T) {
 	nodes := map[string]CausalNode{
@@ -14,7 +17,7 @@ func TestShortestGraphPathUsesLowerCostRoute(t *testing.T) {
 		{From: "state:Janky", To: "owner:Feed", Weight: 1, Confidence: 0.8},
 	}
 
-	path, ok := shortestGraphPath(nodes, edges, "symptom:jank", "owner:Feed")
+	path, ok := shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), "symptom:jank", "owner:Feed")
 	if !ok {
 		t.Fatalf("shortestGraphPath() returned no path")
 	}
@@ -42,7 +45,7 @@ func TestShortestGraphPathChoosesStableLexicographicEqualCostRoute(t *testing.T)
 	}
 
 	for iteration := range 200 {
-		path, ok := shortestGraphPath(nodes, edges, "symptom:jank", "owner:Feed")
+		path, ok := shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), "symptom:jank", "owner:Feed")
 		if !ok {
 			t.Fatalf("iteration %d: shortestGraphPath() returned no path", iteration)
 		}
@@ -50,6 +53,28 @@ func TestShortestGraphPathChoosesStableLexicographicEqualCostRoute(t *testing.T)
 			t.Fatalf("iteration %d: path.Nodes = %v, want %v", iteration, got, want)
 		}
 		assertFloat(t, path.Cost, 2)
+	}
+}
+
+func TestCausalShortestPathsRunOneSearchPerSymptom(t *testing.T) {
+	const ownerCount = 512
+	nodes := make([]CausalNode, 0, ownerCount+1)
+	nodes = append(nodes, CausalNode{ID: "symptom:jank", Label: "симптом", Kind: "symptom"})
+	edges := make([]CausalEdge, 0, ownerCount)
+	for index := range ownerCount {
+		id := fmt.Sprintf("owner:%04d", index)
+		nodes = append(nodes, CausalNode{ID: id, Label: id, Kind: "owner"})
+		edges = append(edges, CausalEdge{From: "symptom:jank", To: id, Weight: 1})
+	}
+
+	if paths := causalShortestPaths(nodes, edges); len(paths) != 6 {
+		t.Fatalf("causalShortestPaths() returned %d paths, want 6", len(paths))
+	}
+	allocations := testing.AllocsPerRun(3, func() {
+		causalShortestPaths(nodes, edges)
+	})
+	if allocations > 5_000 {
+		t.Fatalf("causal shortest paths allocate %.0f objects, want one bounded search per symptom", allocations)
 	}
 }
 
@@ -88,7 +113,7 @@ func TestBuildCausalGraphConnectsSymptomToOwner(t *testing.T) {
 
 	graph := buildCausalGraph(timeline, nil, markov)
 	for _, path := range graph.Paths {
-		if path.From == "симптом: медленная сеть" && path.To == "источник: ConfigRepository.refresh" {
+		if path.From == "симптом: медленная сеть" && path.To == "место запуска: ConfigRepository.refresh" {
 			return
 		}
 	}

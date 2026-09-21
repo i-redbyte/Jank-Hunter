@@ -3,7 +3,6 @@ package io.jankhunter.gradle
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
-import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.ClassVisitor
@@ -30,20 +29,20 @@ class InstrumentationDiagnosticsTest {
                     handlers = false,
                     executors = false,
                     coroutines = true,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = true,
                     classGraph = false,
                     runtimeCallGraph = false,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
-                    ownerMapEntriesDirectory = "",
                 ),
             ),
             0,
         )
 
         val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
-        assertTrue(text.contains("\"format\":1"))
+        assertTrue(text.contains("\"format\":2"))
+        assertTrue(text.contains("\"pass\":\"main\""))
         assertTrue(text.contains("\"class\":\"example.Diagnostics\""))
         assertTrue(text.contains("\"methods\":1"))
         assertTrue(text.contains("\"annotatedMethods\":1"))
@@ -58,8 +57,8 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"line\":55"))
         assertTrue(text.contains("\"owner\":\"FeedOwner\""))
         assertTrue(text.contains("\"screen\":\"FeedScreen\""))
-        assertTrue(text.contains("\"flow\":\"feed.open\""))
-        assertTrue(text.contains("\"trace\":\"refresh\""))
+        assertTrue(text.contains("\"operation\":\"refresh\""))
+        assertTrue(text.contains("\"operationKind\":\"USER\""))
     }
 
     @Test
@@ -73,19 +72,18 @@ class InstrumentationDiagnosticsTest {
                 "example/Filtered",
                 HookConfig(
                     methodCounters = true,
-                    methodFilterMode = JankHunterMethodFilterMode.ENABLED,
+                    methodFilterMode = JankHunterMethodFilterMode.FILTER,
                     okhttp = false,
                     webSockets = false,
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = true,
                     classGraph = false,
                     runtimeCallGraph = true,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
-                    ownerMapEntriesDirectory = "",
                 ),
             ),
             0,
@@ -99,6 +97,51 @@ class InstrumentationDiagnosticsTest {
         val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
         assertTrue(text.contains("\"methodFilterExcluded\":1"))
         assertTrue(text.contains("\"reason\":\"excluded:acc_synthetic\""))
+    }
+
+    @Test
+    fun classVisitorWritesHierarchyResolutionFailuresAsActionableDiagnostics() {
+        val diagnostics = Files.createTempDirectory("jankhunter-hierarchy-diagnostics").toFile()
+        val reader = ClassReader(fixture())
+        val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        reader.accept(
+            JankHunterClassVisitor(
+                writer,
+                "example/Diagnostics",
+                HookConfig(
+                    methodCounters = false,
+                    okhttp = false,
+                    webSockets = false,
+                    handlers = false,
+                    executors = false,
+                    coroutines = false,
+                    interactionOperations = false,
+                    logSpam = false,
+                    classGraph = false,
+                    runtimeCallGraph = false,
+                    classGraphDirectory = "",
+                    instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
+                ),
+                hierarchyResolutionDiagnostics = {
+                    mapOf(
+                        ClassHierarchyResolutionFailure(
+                            className = "broken.Parent",
+                            errorType = "java.lang.IllegalStateException",
+                            detail = "invalid class metadata",
+                        ) to 1,
+                    )
+                },
+                diagnosticsOnlyWhenHookApplied = true,
+            ),
+            0,
+        )
+
+        val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
+        assertTrue(text.contains("\"kind\":\"warning\""))
+        assertTrue(text.contains("\"module\":\"class_hierarchy\""))
+        assertTrue(text.contains("\"reason\":\"metadata_load_failed\""))
+        assertTrue(text.contains("\"method\":\"broken.Parent\""))
+        assertTrue(text.contains("\"detail\":\"java.lang.IllegalStateException: invalid class metadata\""))
     }
 
     private fun syntheticLogFixture(): ByteArray {
@@ -153,11 +196,11 @@ class InstrumentationDiagnosticsTest {
     private fun fixture(): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Diagnostics", null, "java/lang/Object", null)
-        writer.visitAnnotation(OWNER_DESCRIPTOR, false).stringValue("FeedOwner")
-        writer.visitAnnotation(SCREEN_DESCRIPTOR, false).stringValue("FeedScreen")
-        writer.visitAnnotation(FLOW_DESCRIPTOR, false).stringValue("feed.open")
+        writer.visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue("FeedOwner")
+        writer.visitAnnotation(SCREEN_DESCRIPTOR, false).finishStringValue("FeedScreen")
+        writer.visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("feed.open")
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).run {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("refresh")
+            visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("refresh")
             visitCode()
             val logLine = Label()
             visitLabel(logLine)
@@ -196,15 +239,9 @@ class InstrumentationDiagnosticsTest {
         return writer.toByteArray()
     }
 
-    private fun AnnotationVisitor.stringValue(value: String) {
-        visit("value", value)
-        visitEnd()
-    }
-
     private companion object {
         private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOwner;"
         private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
-        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
-        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+        private const val OPERATION_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOperation;"
     }
 }

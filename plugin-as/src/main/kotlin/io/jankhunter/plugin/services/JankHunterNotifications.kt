@@ -12,36 +12,17 @@ object JankHunterNotifications {
     fun reportReady(
         project: Project,
         outputPath: String,
-        problemCount: Int?,
         openReport: () -> Unit,
-        openProblems: (() -> Unit)?,
         rerun: () -> Unit,
     ) {
-        val message = buildString {
-            append("Результат готов: ")
-            append(File(outputPath).name)
-            if (problemCount != null) {
-                append(". Problems: ")
-                append(problemCount)
-            }
-        }
-        val notification = NotificationGroupManager.getInstance()
-            .getNotificationGroup(GROUP_ID)
-            .createNotification("Jank Hunter", message, NotificationType.INFORMATION)
-            .addAction(NotificationAction.createSimple("Open Output", openReport))
-        if (openProblems != null) {
-            notification.addAction(NotificationAction.createSimple("Open Problems", openProblems))
-        }
-        notification
-            .addAction(NotificationAction.createSimple("Rerun", rerun))
-            .notify(project)
-    }
-
-    fun scorecardFailed(project: Project, message: String, openOutput: () -> Unit, rerun: () -> Unit) {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
-            .createNotification("Jank Hunter scorecard failed", message, NotificationType.WARNING)
-            .addAction(NotificationAction.createSimple("Open Output", openOutput))
+            .createNotification(
+                "Jank Hunter",
+                "Результат готов: ${File(outputPath).name}",
+                NotificationType.INFORMATION,
+            )
+            .addAction(NotificationAction.createSimple("Open Output", openReport))
             .addAction(NotificationAction.createSimple("Rerun", rerun))
             .notify(project)
     }
