@@ -20,10 +20,10 @@ Android-часть Jank Hunter отвечает за сбор сигналов �
 
 ```kotlin
 plugins {
-    id("io.jankhunter.android") version "1.0.0"
+    id("io.jankhunter.android") version "1.0.11"
 }
 dependencies {
-    implementation("io.jankhunter:jankhunter-android-sdk:1.0.0")
+    implementation("io.jankhunter:jankhunter-android-sdk:1.0.11")
 }
 ```
 
@@ -36,14 +36,14 @@ OkHttp/WebSocket support. Плагин проверяет её наличие д
 При фактической сборке любого включённого application-варианта Gradle один раз выводит заметный баннер с версией Jank Hunter. Он не зависит от `verboseLogs`; выключенные варианты его не выводят:
 
 ```text
-================JANK HUNTER 1.0.0 ENABLED================
+================JANK HUNTER 1.0.11 ENABLED================
 ```
 
 Без Gradle-плагина можно подключить runtime вручную и вызвать `JankHunter.init(...)`:
 
 ```kotlin
 dependencies {
-    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.0")
+    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.11")
 }
 ```
 
