@@ -37,8 +37,8 @@ Status NativeEngine::BeginStop() noexcept {
 
 void NativeEngine::MarkStopped() noexcept {
   gc_intervals_.Reset();
-  monitor_intervals_.Reset();
-  threads_.Reset();
+  static_cast<void>(monitor_intervals_.Reset());
+  static_cast<void>(threads_.Reset());
   state_.store(EngineState::kStopped, std::memory_order_release);
 }
 
