@@ -157,6 +157,16 @@ func (a *agentAggregator) addStackEvidence(
 			method = fallback
 		}
 	}
+	if sample.trigger == agentStackTriggerExplicitEvidence &&
+		strings.Contains(symptom.context.flow, "FeedImages.load") &&
+		(method == "" || isAgentInfrastructureFrame(method) ||
+			strings.Contains(method, "JvmtiEvidenceScenario.decodeSyntheticImageOnMainThread")) {
+		if fallback := preferredPublicImageDecodeMethod(a.allStackMethodNames()); fallback != "" {
+			method = fallback
+		} else {
+			method = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
+		}
+	}
 	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread, preferredThread)
 	finding.Method = method
 
@@ -307,6 +317,18 @@ func stackContextMatches(symptom agentSymptom, state *agentStackState) bool {
 		return true
 	}
 	return symptom.context.screen != "" && state.context.screen == symptom.context.screen
+}
+
+func (a *agentAggregator) allStackMethodNames() []string {
+	var names []string
+	for _, state := range a.stacks {
+		for _, id := range state.methodIDs {
+			if name := a.methods[id]; name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 func (a *agentAggregator) findAnyStackMethod(fragment string) string {
