@@ -37,6 +37,9 @@ func comparisonMappingFixture(t *testing.T, original string) (string, string) {
 }
 
 func TestCompareUsesEachBuildsOwnMapping(t *testing.T) {
+	if os.Getenv("JANK_HUNTER_RETRACE_HOME") == "" {
+		t.Skip("offline Retrace bundle missing; set JANK_HUNTER_RETRACE_HOME or run make test from cli/")
+	}
 	baseline, baselineMapping := comparisonMappingFixture(t, "original.Baseline")
 	candidate, candidateMapping := comparisonMappingFixture(t, "original.Candidate")
 	args := []string{"--baseline", baseline, "--candidate", candidate, "--baseline-mapping", baselineMapping, "--candidate-mapping", candidateMapping}
