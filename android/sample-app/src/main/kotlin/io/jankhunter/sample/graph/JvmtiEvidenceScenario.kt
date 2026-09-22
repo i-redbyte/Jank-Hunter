@@ -2,6 +2,7 @@ package io.jankhunter.sample.graph
 
 import android.graphics.BitmapFactory
 import android.os.SystemClock
+import io.jankhunter.artti.ArtTiDiagnostics
 import java.io.ByteArrayInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -51,6 +52,7 @@ internal class JvmtiEvidenceScenario {
         synchronized(monitor) { Unit }
         val waitDurationMs = SystemClock.elapsedRealtime() - waitStartedAt
         val decodedWidth = decodeSyntheticImageOnMainThread()
+        ArtTiDiagnostics.captureCurrentThreadStack()
 
         holder.join(HOLDER_JOIN_TIMEOUT_MS)
         check(!holder.isAlive) { "JVMTI evidence monitor holder did not stop" }

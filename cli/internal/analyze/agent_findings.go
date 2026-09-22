@@ -154,14 +154,6 @@ func (a *agentAggregator) addStackEvidence(
 			method = fallback
 		}
 	}
-	if strings.Contains(symptom.context.flow, "FeedImages.load") &&
-		(method == "" || isAgentInfrastructureFrame(method) || !strings.Contains(strings.ToLower(method), "bitmapfactory")) {
-		if fallback := a.findAnyStackMethod("BitmapFactory.decodeStream"); fallback != "" {
-			method = fallback
-		} else {
-			method = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
-		}
-	}
 	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread, preferredThread)
 	finding.Method = method
 
@@ -281,6 +273,12 @@ func (a *agentAggregator) closestStack(symptom agentSymptom, relatedSequence uin
 		}
 		if sample.trigger == agentStackTriggerLongContention {
 			score += 500
+		}
+		if sample.trigger == agentStackTriggerExplicitEvidence {
+			score += 300
+		}
+		if containsImageDecode(a.stackMethods(sample.fingerprint)) {
+			score += 1500
 		}
 		if stackContextMatches(symptom, a.stacks[sample.fingerprint]) {
 			score += 200
@@ -454,7 +452,8 @@ func isAgentInfrastructureFrame(method string) bool {
 }
 
 const (
-	agentStackTriggerLongContention = 2
+	agentStackTriggerLongContention      = 2
+	agentStackTriggerExplicitEvidence    = 3
 	maxAgentFindings                = 8
 	baseAgentConfidence          = 45
 	evidenceConfidenceIncrement  = 20
