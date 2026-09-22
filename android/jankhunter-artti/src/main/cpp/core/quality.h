@@ -69,14 +69,32 @@ class QualityCounters final {
     return high_watermark_.load(std::memory_order_relaxed);
   }
 
+  [[nodiscard]] static bool CountsAsActionableNativeLoss(
+      const QualityCounter counter) noexcept {
+    switch (counter) {
+      case QualityCounter::kJvmtiError:
+      case QualityCounter::kCallbackAfterStop:
+      case QualityCounter::kGcDuplicateStart:
+      case QualityCounter::kGcOrphanFinish:
+      case QualityCounter::kGcInvalidClock:
+      case QualityCounter::kContentionDuplicateStart:
+      case QualityCounter::kContentionOrphanFinish:
+      case QualityCounter::kContentionContended:
+      case QualityCounter::kContentionInvalidClock:
+      case QualityCounter::kInvalidInput:
+        return false;
+      default:
+        return true;
+    }
+  }
+
   [[nodiscard]] std::uint64_t SumNativeLossExceptQueue() const noexcept {
     std::uint64_t total = 0U;
     for (std::size_t index = static_cast<std::size_t>(QualityCounter::kRejectedAfterClose);
          index < static_cast<std::size_t>(QualityCounter::kCount);
          ++index) {
       const auto counter = static_cast<QualityCounter>(index);
-      if (counter == QualityCounter::kJvmtiError ||
-          counter == QualityCounter::kCallbackAfterStop) {
+      if (!CountsAsActionableNativeLoss(counter)) {
         continue;
       }
       const auto value = Get(counter);

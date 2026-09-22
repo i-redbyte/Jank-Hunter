@@ -179,6 +179,8 @@ void QualitySnapshotNativeLossAggregate() {
   quality.Add(QualityCounter::kStackCaptureFailure, 3U);
   quality.Add(QualityCounter::kJvmtiError, 9U);
   quality.Add(QualityCounter::kCallbackAfterStop, 7U);
+  quality.Add(QualityCounter::kGcDuplicateStart, 11U);
+  quality.Add(QualityCounter::kContentionOrphanFinish, 13U);
   JH_CHECK(quality.SumNativeLossExceptQueue() == 5U);
 }
 

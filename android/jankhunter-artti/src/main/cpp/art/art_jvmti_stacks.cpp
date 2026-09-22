@@ -109,14 +109,18 @@ std::int32_t ArtJvmtiAdapter::CaptureStackLocked(
     stack_budget_window_start_ns_ = now_ns;
     stack_captures_in_window_ = 0U;
   }
+  const bool explicit_evidence = trigger == 3U;
   const bool too_soon = last_stack_capture_ns_ != 0U &&
                         now_ns - last_stack_capture_ns_ < min_interval_ns;
-  if (stack_captures_in_window_ >= max_per_minute || too_soon) {
+  if (!explicit_evidence &&
+      (stack_captures_in_window_ >= max_per_minute || too_soon)) {
     engine->quality().Add(QualityCounter::kStackCaptureBudgetLoss);
     return -static_cast<std::int32_t>(StatusCode::kContended);
   }
-  last_stack_capture_ns_ = now_ns;
-  ++stack_captures_in_window_;
+  if (!explicit_evidence) {
+    last_stack_capture_ns_ = now_ns;
+    ++stack_captures_in_window_;
+  }
 
   std::array<jvmtiFrameInfo, 256U> frames{};
   jint frame_count = 0;
