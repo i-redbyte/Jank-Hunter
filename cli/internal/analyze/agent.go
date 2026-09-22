@@ -60,8 +60,9 @@ type agentStackState struct {
 }
 
 type agentStackSample struct {
-	timeNS, fingerprint, thread, sequence uint64
-	source                                string
+	timeNS, fingerprint, thread, sequence, relatedSequence uint64
+	trigger                                                uint32
+	source                                                 string
 }
 
 type agentSymptom struct {
@@ -248,8 +249,15 @@ func (a *agentAggregator) addStackSample(event jhlog.Event, payload *jhlog.Agent
 			state.context = context
 		}
 	}
-	sample := agentStackSample{timeNS: saturatingMultiply(event.TimeUS, 1_000), fingerprint: payload.Payload0, thread: payload.ThreadToken,
-		sequence: payload.ProducerSequence, source: firstNonEmpty(event.Source, "unknown")}
+	sample := agentStackSample{
+		timeNS:          saturatingMultiply(event.TimeUS, 1_000),
+		fingerprint:     payload.Payload0,
+		thread:          payload.ThreadToken,
+		sequence:        payload.ProducerSequence,
+		relatedSequence: payload.Payload1,
+		trigger:         uint32(payload.Payload2 & 0xffff_ffff),
+		source:          firstNonEmpty(event.Source, "unknown"),
+	}
 	a.stackSamples = insertRecentStack(a.stackSamples, sample)
 	if payload.Payload3 != 0 {
 		a.quality.IncompleteWindows++

@@ -98,6 +98,9 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     override fun onMainThreadStall(thread: Thread, context: JankHunterContextSnapshot) {
         val runtimeConfig = config ?: return
         if (!isActive() || !runtimeConfig.triggerPolicy.onMainThreadStall) return
+        // Long-contention stacks are captured on the blocked thread with a related producer
+        // sequence. Stall-hook stacks only see integration frames and steal the same budget.
+        if (runtimeConfig.triggerPolicy.onLongContention) return
         if (triggerBudget?.tryAcquire(SystemClock.elapsedRealtime()) != true) {
             report(Reason.STACK_BUDGET_DROP)
             return

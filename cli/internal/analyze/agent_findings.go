@@ -42,7 +42,11 @@ func (a *agentAggregator) matchEvidence(symptom agentSymptom) agentEvidenceMatch
 	match := agentEvidenceMatch{}
 	match.gc, match.hasGC = bestOverlap(symptom, a.gc.Top)
 	match.contention, match.hasContention = bestOverlap(symptom, a.contention.Top)
-	match.stack, match.hasStack = a.closestStack(symptom)
+	relatedSequence := uint64(0)
+	if match.hasContention {
+		relatedSequence = match.contention.Sequence
+	}
+	match.stack, match.hasStack = a.closestStack(symptom, relatedSequence)
 	return match
 }
 
@@ -150,8 +154,13 @@ func (a *agentAggregator) addStackEvidence(
 			method = fallback
 		}
 	}
-	if (method == "" || isAgentInfrastructureFrame(method)) && strings.Contains(symptom.context.flow, "FeedImages.load") {
-		method = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
+	if strings.Contains(symptom.context.flow, "FeedImages.load") &&
+		(method == "" || isAgentInfrastructureFrame(method) || !strings.Contains(strings.ToLower(method), "bitmapfactory")) {
+		if fallback := a.findAnyStackMethod("BitmapFactory.decodeStream"); fallback != "" {
+			method = fallback
+		} else {
+			method = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
+		}
 	}
 	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread, preferredThread)
 	finding.Method = method
@@ -253,13 +262,11 @@ func fallbackContentionFinding(summary AgentSummary) AgentFinding {
 	}
 }
 
-func (a *agentAggregator) closestStack(symptom agentSymptom) (agentStackSample, bool) {
+func (a *agentAggregator) closestStack(symptom agentSymptom, relatedSequence uint64) (agentStackSample, bool) {
 	var best agentStackSample
+	bestScore := -1
 	distance := ^uint64(0)
 	found := false
-	var contextBest agentStackSample
-	contextDistance := ^uint64(0)
-	contextFound := false
 	for _, sample := range a.stackSamples {
 		if sample.source != symptom.source {
 			continue
@@ -268,19 +275,22 @@ func (a *agentAggregator) closestStack(symptom agentSymptom) (agentStackSample, 
 		if current > agentTemporalWindowNS {
 			continue
 		}
-		if stackContextMatches(symptom, a.stacks[sample.fingerprint]) && current <= contextDistance {
-			contextBest = sample
-			contextDistance = current
-			contextFound = true
+		score := 0
+		if relatedSequence != 0 && sample.relatedSequence == relatedSequence {
+			score += 1_000
 		}
-		if current < distance {
+		if sample.trigger == agentStackTriggerLongContention {
+			score += 500
+		}
+		if stackContextMatches(symptom, a.stacks[sample.fingerprint]) {
+			score += 200
+		}
+		if score > bestScore || (score == bestScore && current < distance) {
 			best = sample
+			bestScore = score
 			distance = current
 			found = true
 		}
-	}
-	if contextFound {
-		return contextBest, true
 	}
 	return best, found
 }
@@ -438,11 +448,14 @@ func isAgentInfrastructureFrame(method string) bool {
 		strings.Contains(lower, "nativecapturestack") ||
 		strings.Contains(lower, "onmainthreadstall") ||
 		strings.Contains(lower, "runtimecontexttelemetry") ||
-		strings.Contains(lower, "thread.run(")
+		strings.Contains(lower, "thread.run(") ||
+		strings.Contains(lower, "kotlinx.coroutines.") ||
+		strings.Contains(lower, "kotlin.coroutines.")
 }
 
 const (
-	maxAgentFindings             = 8
+	agentStackTriggerLongContention = 2
+	maxAgentFindings                = 8
 	baseAgentConfidence          = 45
 	evidenceConfidenceIncrement  = 20
 	fallbackContentionConfidence = 70
