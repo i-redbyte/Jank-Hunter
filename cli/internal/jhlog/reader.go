@@ -17,8 +17,13 @@ import (
 type EventHandler func(Event, map[uint64]string) error
 
 func StreamFile(path string, handle EventHandler) error {
-	_, err := StreamFileWithResult(path, handle)
+	_, err := StreamFileWithWarnings(path, handle)
 	return err
+}
+
+func StreamFileWithWarnings(path string, handle EventHandler) ([]string, error) {
+	_, err := StreamFileWithResult(path, handle)
+	return nil, err
 }
 
 // ReadSessionHeader reads only the bounded current-version file header. It does not scan,

@@ -46,11 +46,14 @@ func runExport(args []string) error {
 func writeExportEvents(writer io.Writer, paths []string) error {
 	encoder := json.NewEncoder(writer)
 	for _, path := range paths {
-		err := jhlog.StreamFile(path, func(event jhlog.Event, _ map[uint64]string) error {
+		warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
 			return encoder.Encode(event)
 		})
 		if err != nil {
 			return err
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
 	}
 	return nil

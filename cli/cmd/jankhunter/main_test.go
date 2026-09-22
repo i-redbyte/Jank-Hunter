@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -950,8 +953,8 @@ func TestAnalysisOptionsBuilderRejectsIncompleteArtifactBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	builder := analysisOptionsBuilder{artifactsDir: directory}
-	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "class-graph.jsonl") {
-		t.Fatalf("build() error = %v, want missing class graph", err)
+	if _, err := builder.build(); err == nil || (!strings.Contains(err.Error(), "class-graph.jsonl") && !strings.Contains(err.Error(), "artifact-metadata.json")) {
+		t.Fatalf("build() error = %v, want missing artifact bundle file", err)
 	}
 }
 
@@ -1030,10 +1033,11 @@ func assertFileNotContains(t *testing.T, path string, needles ...string) {
 }
 
 type testBundlePage struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Href  string `json:"href"`
-	HTML  string `json:"html"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Href    string `json:"href"`
+	HTML    string `json:"html"`
+	Payload string `json:"payload"`
 }
 
 func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
@@ -1059,9 +1063,37 @@ func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
 	}
 	byID := make(map[string]testBundlePage, len(pages))
 	for _, page := range pages {
+		if page.HTML == "" && page.Payload != "" {
+			page.HTML = decodeTestBundlePagePayload(t, text, page.Payload)
+		}
 		byID[page.ID] = page
 	}
 	return byID
+}
+
+func decodeTestBundlePagePayload(t *testing.T, document, payloadID string) string {
+	t.Helper()
+	marker := `<script id="` + payloadID + `" type="application/octet-stream" data-jankhunter-report-payload data-encoding="gzip-base64">`
+	start := strings.Index(document, marker)
+	if start < 0 {
+		t.Fatalf("bundle payload %q not found", payloadID)
+	}
+	start += len(marker)
+	end := strings.Index(document[start:], `</script>`)
+	if end < 0 {
+		t.Fatalf("bundle payload %q has no terminator", payloadID)
+	}
+	decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(document[start:start+end]))
+	compressed, err := gzip.NewReader(decoded)
+	if err != nil {
+		t.Fatalf("open bundle payload %q: %v", payloadID, err)
+	}
+	page, readErr := io.ReadAll(compressed)
+	closeErr := compressed.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("decode bundle payload %q: read=%v close=%v", payloadID, readErr, closeErr)
+	}
+	return string(page)
 }
 
 func assertBundlePageContains(t *testing.T, path, pageID string, needles ...string) {
@@ -1107,7 +1139,7 @@ func assertNoCompanionReports(t *testing.T, mainPath string) {
 
 func writeDiagnosticsFixture(t *testing.T, path string) {
 	t.Helper()
-	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","method":"load()V","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","flow":"feed.open","trace":"refresh","count":1}]}`
+	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","method":"load()V","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","operation":"feed.open","operationKind":"refresh","count":1}]}`
 	if err := os.WriteFile(path, []byte(data+"\n"), 0o644); err != nil {
 		t.Fatalf("write diagnostics fixture: %v", err)
 	}
@@ -1135,6 +1167,10 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 		`{"format":4,"kind":"entry","id":"stable:0x0000000000000001","owner":"com.app.Feed.call"}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(directory, "owner-map.json"), []byte(ownerMap), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"format":1,"kind":"artifact-metadata","symbolNamespace":"aabb0000000000000000000000000000","networkWholeApplication":true}` + "\n"
+	if err := os.WriteFile(filepath.Join(directory, "artifact-metadata.json"), []byte(metadata), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	classGraph := `{"format":1,"class":"com.app.Feed","edges":[{"caller":"load()V","calleeClass":"com.app.Repository","calleeMethod":"get()V","count":1}]}` + "\n"

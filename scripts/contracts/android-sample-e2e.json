@@ -72,6 +72,7 @@
     {"id": "counter-stage-baseline", "path": "Counters", "where": {"Name": "sample.auto.stage.baseline.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-stage-ui-cpu", "path": "Counters", "where": {"Name": "sample.auto.stage.ui_cpu.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-stage-network", "path": "Counters", "where": {"Name": "sample.auto.stage.network.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
+    {"id": "counter-stage-database", "path": "Counters", "where": {"Name": "sample.auto.stage.database.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-stage-memory", "path": "Counters", "where": {"Name": "sample.auto.stage.memory.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-baseline-operations", "path": "Counters", "where": {"Name": "sample.auto.baseline.operation.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 3}},
     {"id": "counter-executor-completed", "path": "Counters", "where": {"Name": "sample.auto.executor.task.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 3}},
@@ -94,8 +95,8 @@
     {"id": "counter-gc-freed", "path": "Counters", "where": {"Name": "gc.bytes_freed.delta"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"minimum": 1}},
     {"id": "counter-heap-created", "path": "Counters", "where": {"Name": "jankhunter.heap_dump.created.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
 
-    {"id": "gauge-expected-stages", "path": "Gauges", "where": {"Name": "sample.auto.expected_stage_count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 5}},
-    {"id": "gauge-actual-stages", "path": "Gauges", "where": {"Name": "sample.auto.actual_stage_count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 5}},
+    {"id": "gauge-expected-stages", "path": "Gauges", "where": {"Name": "sample.auto.expected_stage_count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 6}},
+    {"id": "gauge-actual-stages", "path": "Gauges", "where": {"Name": "sample.auto.actual_stage_count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 6}},
     {"id": "gauge-baseline-items", "path": "Gauges", "where": {"Name": "sample.auto.baseline.item_count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 24}},
     {"id": "gauge-baseline-budget", "path": "Gauges", "where": {"Name": "sample.auto.baseline.duration_budget_ms"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 50}},
     {"id": "gauge-cpu-checksum", "path": "Gauges", "where": {"Name": "sample.auto.cpu.checksum"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"minimum": 1}},
@@ -112,6 +113,7 @@
     {"id": "screen-baseline", "path": "Screens", "where": {"Screen": "sample.compose.baseline"}, "cardinality": {"equals": 1}},
     {"id": "screen-ui-cpu", "path": "Screens", "where": {"Screen": "sample.compose.ui_cpu"}, "cardinality": {"equals": 1}},
     {"id": "screen-network", "path": "Screens", "where": {"Screen": "sample.compose.network"}, "cardinality": {"equals": 1}},
+    {"id": "screen-database", "path": "Screens", "where": {"Screen": "sample.compose.database"}, "cardinality": {"equals": 1}},
     {"id": "screen-memory", "path": "Screens", "where": {"Screen": "sample.compose.memory"}, "cardinality": {"equals": 1}},
     {"id": "screen-result", "path": "Screens", "where": {"Screen": "sample.compose.result"}, "cardinality": {"equals": 1}},
 

@@ -31,6 +31,37 @@ func takeStringFlag(args []string, name, fallback string) (string, []string, err
 	return fallback, args, nil
 }
 
+func takeStringFlags(args []string, name string) ([]string, []string, error) {
+	long := "--" + name
+	short := "-" + name
+	values := make([]string, 0, 1)
+	remaining := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == long || arg == short:
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("%s needs a value", long)
+			}
+			value := args[i+1]
+			if value == "" {
+				return nil, nil, fmt.Errorf("%s needs a non-empty value", long)
+			}
+			values = append(values, value)
+			i++
+		case strings.HasPrefix(arg, long+"="):
+			value := strings.TrimPrefix(arg, long+"=")
+			if value == "" {
+				return nil, nil, fmt.Errorf("%s needs a non-empty value", long)
+			}
+			values = append(values, value)
+		default:
+			remaining = append(remaining, arg)
+		}
+	}
+	return values, remaining, nil
+}
+
 func takeBoolFlag(args []string, name string) (bool, []string, error) {
 	long := "--" + name
 	for i := 0; i < len(args); i++ {

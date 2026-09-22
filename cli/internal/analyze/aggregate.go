@@ -90,6 +90,9 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		if _, err := ValidateMappingInputs([]SessionInput{{Path: input.Path, Header: result.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping); err != nil {
 			return Summary{}, err
 		}
+		if err := validateOwnerMapNamespace(options.OwnerMap, result.Header, result.Source); err != nil {
+			return Summary{}, err
+		}
 		if err := validateArtifactNamespace(
 			options.ArtifactSymbolNamespace,
 			result.Header,

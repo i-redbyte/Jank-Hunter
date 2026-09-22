@@ -43,6 +43,7 @@ type Options struct {
 	MathMemoryLimitBytes            uint64
 	MathSpectralWorkLimitOperations uint64
 	Filter                          Filter
+	OwnerMap                        *OwnerMap
 	ObfuscationMap                  *NameMapping
 	ClassGraph                      *ClassGraph
 	LambdaCaptures                  *LambdaCaptureCatalog
@@ -56,6 +57,10 @@ type Options struct {
 	ArtifactDirectory               string
 	ArtifactsAutoDiscovered         bool
 	ArtifactSymbolNamespace         []byte
+	// ExternalSymbols opts into resolving stable ASM IDs from OwnerMap instead of the log.
+	ExternalSymbols bool
+	// RequireExplicitExternalSymbols is enabled by the CLI to prevent silent broken reports.
+	RequireExplicitExternalSymbols bool
 }
 
 type RouteStats struct {

@@ -3,6 +3,7 @@ package analyze
 import "fmt"
 
 const (
+	OwnerMapFormat                   = 4
 	ArtifactMetadataFormat           = 1
 	ClassGraphFormat                 = 1
 	LambdaCaptureFormat              = 1
