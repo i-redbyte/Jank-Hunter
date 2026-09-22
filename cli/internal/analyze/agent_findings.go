@@ -149,6 +149,9 @@ func (a *agentAggregator) addStackEvidence(
 ) {
 	methods := a.stackMethods(sample.fingerprint)
 	method := firstInterestingMethod(methods)
+	if preferred := preferredPublicImageDecodeMethod(methods); preferred != "" {
+		method = preferred
+	}
 	if method == "" || isAgentInfrastructureFrame(method) {
 		if fallback := a.findAnyStackMethod("BitmapFactory.decodeStream"); fallback != "" {
 			method = fallback
@@ -412,6 +415,23 @@ func confidenceLabel(score int) string {
 	default:
 		return "LOW"
 	}
+}
+
+func preferredPublicImageDecodeMethod(methods []string) string {
+	const canonical = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
+	for _, method := range methods {
+		if method == canonical {
+			return method
+		}
+	}
+	for _, method := range methods {
+		if strings.Contains(method, "BitmapFactory.decodeStream(java.io.InputStream)") &&
+			!strings.Contains(method, "decodeStreamInternal") &&
+			!strings.Contains(method, "nativeDecodeStream") {
+			return method
+		}
+	}
+	return ""
 }
 
 func containsImageDecode(methods []string) bool {
