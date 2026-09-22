@@ -255,7 +255,7 @@ func (a *agentAggregator) addStackSample(event jhlog.Event, payload *jhlog.Agent
 		thread:          payload.ThreadToken,
 		sequence:        payload.ProducerSequence,
 		relatedSequence: payload.Payload1,
-		trigger:         uint32(payload.Payload2 & 0xffff_ffff),
+		trigger:         uint32(payload.Payload2 >> 32),
 		source:          firstNonEmpty(event.Source, "unknown"),
 	}
 	a.stackSamples = insertRecentStack(a.stackSamples, sample)
