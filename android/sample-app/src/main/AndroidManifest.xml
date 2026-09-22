@@ -25,6 +25,9 @@
             android:name="io.jankhunter.retained_object_delay_ms"
             android:value="12000" />
         <meta-data
+            android:name="io.jankhunter.fps_window_ms"
+            android:value="250" />
+        <meta-data
             android:name="io.jankhunter.retained_object_force_gc_enabled"
             android:value="true" />
         <provider

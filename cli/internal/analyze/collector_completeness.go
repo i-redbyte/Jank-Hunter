@@ -262,7 +262,7 @@ func saturatingUint64Sum(values ...uint64) uint64 {
 // charged once to transport and again to the dedicated runtime-graph completeness component.
 func transportEventLoss(counters map[uint64]uint64, reasons ...jhlog.QualityLossReason) uint64 {
 	var total uint64
-	for eventType := jhlog.EventSession; eventType <= jhlog.EventBinderTransaction; eventType++ {
+	for eventType := jhlog.EventSession; eventType <= jhlog.EventAgent; eventType++ {
 		if eventType == jhlog.EventRuntimeCall || !eventType.IsSemanticData() {
 			continue
 		}

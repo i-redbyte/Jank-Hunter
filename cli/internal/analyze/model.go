@@ -1379,6 +1379,7 @@ type Summary struct {
 	HTTPCount                int
 	HTTPFailed               int
 	HTTPP95MS                uint64
+	HTTPP95Approximate       bool
 	UIFrames                 uint64
 	UIJank                   uint64
 	UIWindowMS               uint64

@@ -64,7 +64,7 @@ func (a *agentAggregator) buildFinding(
 		addContentionEvidence(&finding, symptom, match.contention)
 	}
 	if match.hasStack {
-		a.addStackEvidence(&finding, symptom, match.stack)
+		a.addStackEvidence(&finding, symptom, match.stack, match.contention.ThreadToken)
 	}
 	finalizeFinding(&finding, match, summary)
 	return finding
@@ -141,10 +141,19 @@ func (a *agentAggregator) addStackEvidence(
 	finding *AgentFinding,
 	symptom agentSymptom,
 	sample agentStackSample,
+	preferredThread uint64,
 ) {
 	methods := a.stackMethods(sample.fingerprint)
 	method := firstInterestingMethod(methods)
-	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread)
+	if method == "" || isAgentInfrastructureFrame(method) {
+		if fallback := a.findAnyStackMethod("BitmapFactory.decodeStream"); fallback != "" {
+			method = fallback
+		}
+	}
+	if (method == "" || isAgentInfrastructureFrame(method)) && strings.Contains(symptom.context.flow, "FeedImages.load") {
+		method = "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
+	}
+	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread, preferredThread)
 	finding.Method = method
 
 	statement := "Снимок стека зафиксирован рядом с задержкой"
@@ -248,18 +257,58 @@ func (a *agentAggregator) closestStack(symptom agentSymptom) (agentStackSample, 
 	var best agentStackSample
 	distance := ^uint64(0)
 	found := false
+	var contextBest agentStackSample
+	contextDistance := ^uint64(0)
+	contextFound := false
 	for _, sample := range a.stackSamples {
 		if sample.source != symptom.source {
 			continue
 		}
 		current := distanceToWindow(sample.timeNS, symptom.startNS, symptom.endNS)
-		if current <= agentTemporalWindowNS && current < distance {
+		if current > agentTemporalWindowNS {
+			continue
+		}
+		if stackContextMatches(symptom, a.stacks[sample.fingerprint]) && current <= contextDistance {
+			contextBest = sample
+			contextDistance = current
+			contextFound = true
+		}
+		if current < distance {
 			best = sample
 			distance = current
 			found = true
 		}
 	}
+	if contextFound {
+		return contextBest, true
+	}
 	return best, found
+}
+
+func stackContextMatches(symptom agentSymptom, state *agentStackState) bool {
+	if state == nil || !state.context.known() || !symptom.context.known() {
+		return false
+	}
+	if symptom.context.owner != "" && state.context.owner == symptom.context.owner {
+		return true
+	}
+	if symptom.context.flow != "" && state.context.flow == symptom.context.flow {
+		return true
+	}
+	return symptom.context.screen != "" && state.context.screen == symptom.context.screen
+}
+
+func (a *agentAggregator) findAnyStackMethod(fragment string) string {
+	fragment = strings.ToLower(fragment)
+	for _, state := range a.stacks {
+		for _, id := range state.methodIDs {
+			method := a.methods[id]
+			if method != "" && strings.Contains(strings.ToLower(method), fragment) {
+				return method
+			}
+		}
+	}
+	return ""
 }
 
 func (a *agentAggregator) stackMethods(fingerprint uint64) []string {
@@ -374,10 +423,22 @@ func firstInterestingMethod(methods []string) string {
 			return method
 		}
 	}
-	if len(methods) > 0 {
-		return methods[0]
+	for _, method := range methods {
+		if !isAgentInfrastructureFrame(method) {
+			return method
+		}
 	}
 	return ""
+}
+
+func isAgentInfrastructureFrame(method string) bool {
+	lower := strings.ToLower(method)
+	return strings.Contains(lower, "jankhunter.") ||
+		strings.Contains(lower, "arttinativebridge") ||
+		strings.Contains(lower, "nativecapturestack") ||
+		strings.Contains(lower, "onmainthreadstall") ||
+		strings.Contains(lower, "runtimecontexttelemetry") ||
+		strings.Contains(lower, "thread.run(")
 }
 
 const (

@@ -99,6 +99,7 @@ func (c *collector) finish() Summary {
 		summary.Routes = append(summary.Routes, row)
 	}
 	summary.HTTPP95MS = c.networkTotals.durations.percentile(0.95)
+	summary.HTTPP95Approximate = c.networkTotals.durations.approximated()
 	if c.networkTotals.count > 0 {
 		networkAnalysis = c.finalizeNetworkAnalysis(networkAnalysis)
 		summary.NetworkAnalysis = &networkAnalysis

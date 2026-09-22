@@ -520,10 +520,30 @@ validate_metric_contract() {
 
 validate_html_report() {
   local report="$1"
-  grep -Fq 'Анализ работы среды Android' "$report" ||
+  local inspect_json="$2"
+  grep -Fq 'Анализ JVM TI' "$report" ||
     fail "HTML report does not contain the JVM TI analysis page"
-  grep -Fq 'BitmapFactory.decodeStream' "$report" ||
-    fail "HTML report does not contain the sample JVM TI causal evidence"
+  "$PYTHON" - "$inspect_json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    report = json.load(source)
+findings = report.get("Agent", {}).get("Findings", [])
+matched = [
+    finding
+    for finding in findings
+    if finding.get("EvidenceLevel") == "STRONG_ASSOCIATION"
+    and finding.get("Flow") == "FeedImages.load"
+    and finding.get("Owner") == "FeedImages"
+    and "BitmapFactory.decodeStream" in (finding.get("Method") or "")
+]
+if len(matched) != 1:
+    raise SystemExit(
+        "inspect JSON does not contain exactly one FeedImages causal BitmapFactory finding"
+    )
+PY
 }
 
 require_command "$ADB"
@@ -607,6 +627,18 @@ grep -q 'io.jankhunter.sample.graph' "$class_graph" ||
   inspect_command+=(--artifacts-dir "$generated_artifacts")
   if [[ -n "$INSTRUMENTATION_DIAGNOSTICS" ]]; then
     inspect_command+=(--instrumentation-diagnostics "$INSTRUMENTATION_DIAGNOSTICS")
+  else
+    inspect_command+=(--instrumentation-diagnostics "$instrumentation_artifact")
+  fi
+  heap_dump=""
+  for candidate in "$LOG_DIR"/*.hprof; do
+    if [[ -f "$candidate" ]]; then
+      heap_dump="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$heap_dump" ]]; then
+    inspect_command+=(--heap-dump "$heap_dump")
   fi
   "${inspect_command[@]}" > "$OUT_DIR/inspect.json"
 )
@@ -615,7 +647,7 @@ grep -q 'io.jankhunter.sample.graph' "$class_graph" ||
 [[ -s "$OUT_DIR/inspect.json" ]] || fail "JSON summary was not generated"
 validate_inspect_json "$OUT_DIR/inspect.json"
 validate_metric_contract
-validate_html_report "$OUT_DIR/report.html"
+validate_html_report "$OUT_DIR/report.html" "$OUT_DIR/inspect.json"
 
 log "logs: $LOG_DIR"
 log "instrumentation: $OUT_DIR/instrumentation.txt"

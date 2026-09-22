@@ -13,7 +13,32 @@ internal class RuntimeWebSocketTelemetry(
             JankHunterContext(snapshot.screen, event.owner ?: snapshot.owner, snapshot.operationId)
         }
         val route = access.config?.redactRoute(event.route) ?: event.route
-        activeWriter.webSocket(context.screen, context.owner, event.withRoute(route))
+        val normalized = event.withRoute(route)
+        activeWriter.webSocket(context.screen, context.owner, normalized)
+        recordWebSocketCounters(activeWriter, context.owner, normalized)
+    }
+
+    private fun recordWebSocketCounters(
+        activeWriter: AsyncLogWriter,
+        owner: String?,
+        event: JankHunterWebSocketEvent,
+    ) {
+        when (event.stage) {
+            JankHunterWebSocketEvent.STAGE_OPENED ->
+                activeWriter.counter("websocket.open.count", 1)
+            JankHunterWebSocketEvent.STAGE_CLOSED -> {
+                val closeCode = event.closeCode
+                if (closeCode in MIN_WEBSOCKET_CLOSE_CODE..MAX_WEBSOCKET_CLOSE_CODE) {
+                    val key = websocketMetricOwnerKey(owner)
+                    activeWriter.counter("websocket.$key.close_code.$closeCode.count", 1)
+                }
+            }
+        }
+    }
+
+    private companion object {
+        const val MIN_WEBSOCKET_CLOSE_CODE = 1_000
+        const val MAX_WEBSOCKET_CLOSE_CODE = 4_999
     }
 
     private fun JankHunterWebSocketEvent.withRoute(safeRoute: String?): JankHunterWebSocketEvent {

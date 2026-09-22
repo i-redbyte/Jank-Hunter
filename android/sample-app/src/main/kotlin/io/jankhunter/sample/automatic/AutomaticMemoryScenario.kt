@@ -34,6 +34,13 @@ internal class AutomaticMemoryScenario(
     }
 
     private fun runRetentionFlows(activityReference: Any) {
+        JankHunterTelemetry.traceOperation("sample.auto.retention.watch_activity_reference") {
+            JankHunterTelemetry.watch(
+                activityReference,
+                activityReference.javaClass.name,
+                "sample.auto.retention.activity_reference",
+            )
+        }
         JankHunterTelemetry.traceOperation("sample.auto.retention.watch_collectable_object") {
             graphScenario.watchReleased()
         }

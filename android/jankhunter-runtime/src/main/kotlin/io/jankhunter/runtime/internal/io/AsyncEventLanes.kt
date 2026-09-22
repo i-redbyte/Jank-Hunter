@@ -50,7 +50,7 @@ internal class AsyncEventLanes(
     companion object {
         private const val CRITICAL_QUEUE_CAPACITY_DIVISOR = 8
         private const val MIN_CRITICAL_QUEUE_CAPACITY = 16
-        private const val MAX_CRITICAL_QUEUE_CAPACITY = 256
+        private const val MAX_CRITICAL_QUEUE_CAPACITY = 512
 
         private fun recommendedCriticalCapacity(bulkCapacity: Int): Int {
             val remainder = if (bulkCapacity % CRITICAL_QUEUE_CAPACITY_DIVISOR == 0) 0 else 1

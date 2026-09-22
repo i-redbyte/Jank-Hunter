@@ -30,7 +30,10 @@ class SampleEndToEndLogTest {
         val config = JankHunterManifestConfig.read(context)
             .toBuilder()
             .flushIntervalMs(250)
-            .backgroundAdmissionWaitMs(25L)
+            // Main-thread telemetry counters/gauges use 0 ms admission budget by default and
+            // lose immediately under ART TI / critical-lane bursts unless a small wait is allowed.
+            .mainThreadAdmissionWaitMs(50L)
+            .backgroundAdmissionWaitMs(50L)
             .logDirectory(logDir)
             .retainedHeapDumpDirectory(logDir)
             .build()

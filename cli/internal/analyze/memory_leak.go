@@ -65,7 +65,8 @@ func memoryLeakSuspectFromStats(
 	if holder == "" || holder == "unknown" {
 		holder = "не определен"
 	}
-	evidenceKind := retainedEvidenceKind(item)
+	heapEvidence := heapConfirmsWatchedRetention(item, heap)
+	evidenceKind := retainedEvidenceKind(item, heap)
 	qualityWarnings := retainedQualityWarnings(item, heap != nil, quality)
 	dataQuality := "complete"
 	if len(qualityWarnings) > 0 {
@@ -95,8 +96,16 @@ func memoryLeakSuspectFromStats(
 	if heap != nil {
 		heapSource = heap.Source
 	}
-	return MemoryLeakSuspect{
-		WatchedObjectAssociation: EvidenceUnknown,
+	watchedAssociation := EvidenceUnknown
+	if heapEvidence {
+		watchedAssociation = EvidencePositive
+	}
+	heapForNarrative := heap
+	if !heapEvidence {
+		heapForNarrative = nil
+	}
+	suspect := MemoryLeakSuspect{
+		WatchedObjectAssociation: watchedAssociation,
 		HeapClassEvidence:        cloneHeapClassEvidence(heap),
 		EvidenceSources:          retainedEvidenceSources(item, heap),
 		ClassName: className, Holder: holder, Screen: emptyUnknown(item.screen),
@@ -105,23 +114,37 @@ func memoryLeakSuspectFromStats(
 		EvidenceConfidence: retainedEvidenceConfidence(evidenceKind, retainedPrimaryEvidenceQuality(evidenceKind, quality)),
 		TimeOnlyCount:      item.timeOnlyCount, AfterExplicitGCCount: item.afterExplicitGCCount,
 		DataQuality: dataQuality, QualityWarnings: qualityWarnings,
-		EstimatedRetainedKB: estimatedRetainedKB, HeapCandidate: heap != nil, HeapSource: heapSource,
+		EstimatedRetainedKB: estimatedRetainedKB, HeapEvidence: heapEvidence, HeapCandidate: heap != nil, HeapSource: heapSource,
 		ChainFingerprint:        runtimeLeakFingerprint(className, holder, item),
 		RetainedSizeConfidence:  sizeConfidence,
-		RetainedSizeExplanation: retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, nil),
+		RetainedSizeExplanation: retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, heapForNarrative),
 		DominatorPath:           dominatorPath, DominatorTreeConfidence: dominatorConfidence,
-		DominatorTreeExplanation: retainedDominatorExplanation(dominatorConfidence, nil),
+		DominatorTreeExplanation: retainedDominatorExplanation(dominatorConfidence, heapForNarrative),
 		LeakChainConfidence:      chainConfidence,
 		LeakChainSummary:         retainedLeakChainSummary(item, holder, className, objectKind, chainConfidence, evidenceKind),
 		LeakChainActions:         retainedLeakChainActions(item, holder, className, objectKind, holderQuality),
-		InvestigationSteps:       retainedInvestigationSteps(item, holder, className, objectKind, nil),
-		FixExamples:              retainedFixExamples(holder, objectKind, nil), VerificationSteps: retainedVerificationSteps(false),
+		InvestigationSteps:       retainedInvestigationSteps(item, holder, className, objectKind, heapForNarrative),
+		FixExamples:              retainedFixExamples(holder, objectKind, heapForNarrative), VerificationSteps: retainedVerificationSteps(heapEvidence),
 		Score: math.Round(score*10) / 10, Severity: severity, ObjectKind: objectKind, HolderQuality: holderQuality,
 		UserOwned: userOwned, SystemRetained: systemRetained,
-		Impact:         retainedImpact(className, item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, nil, evidenceKind),
+		Impact:         retainedImpact(className, item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, heapForNarrative, evidenceKind),
 		Recommendation: retainedRecommendation(className, holder, holderQuality),
-		Evidence:       retainedEvidence(item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, sizeConfidence, nil, evidenceKind),
+		Evidence:       retainedEvidence(item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, sizeConfidence, heapForNarrative, evidenceKind),
 	}
+	if heapEvidence && heap != nil {
+		suspect.ReferencePath = cloneHeapPath(heap.ReferencePath)
+		suspect.AlternativePaths = cloneHeapPaths(heap.AlternativePaths)
+		suspect.GCRoot = heap.GCRoot
+		suspect.GCRootCategory = heap.GCRootCategory
+		suspect.HolderField = heap.HolderField
+		suspect.LeakPattern = heap.LeakPattern
+		suspect.ReferenceMatchers = append([]string(nil), heap.ReferenceMatchers...)
+		suspect.RetainedObjectCount = heap.RetainedObjectCount
+		if suspect.ChainFingerprint == "" {
+			suspect.ChainFingerprint = heap.ChainFingerprint
+		}
+	}
+	return suspect
 }
 
 func confirmedHeapReferencePath(heap *HeapLeakEvidence) bool {
@@ -137,11 +160,100 @@ func confirmedHeapReferencePath(heap *HeapLeakEvidence) bool {
 	return heap.GCRoot != "" || first.Kind == "gc_root" || strings.HasPrefix(first.ClassName, "GC root: ")
 }
 
-func retainedEvidenceKind(item memoryLeakStats) string {
+func retainedEvidenceKind(item memoryLeakStats, heap *HeapLeakEvidence) string {
+	if heapConfirmsWatchedRetention(item, heap) {
+		return RetentionEvidenceConfirmedHPROFPath
+	}
 	if item.afterExplicitGCCount > 0 {
 		return RetentionEvidenceAfterExplicitGC
 	}
+	if heap != nil && heap.ClassName == item.className && heap.Reachability == EvidencePositive && !confirmedHeapReferencePath(heap) {
+		return RetentionEvidenceUnconfirmedHPROF
+	}
 	return RetentionEvidenceTimeOnly
+}
+
+func heapConfirmsWatchedRetention(item memoryLeakStats, heap *HeapLeakEvidence) bool {
+	if heap == nil || heap.ClassName != item.className || !confirmedHeapReferencePath(heap) {
+		return false
+	}
+	holder := strings.TrimSpace(item.holder)
+	if holder == "" || holder == "unknown" || holder == "не определен" || strings.HasPrefix(holder, "lifecycle.") {
+		return false
+	}
+	if heapHolderMatchesRuntime(item, *heap) && isRetentionOwnerHint(item.holder) {
+		return true
+	}
+	return retentionOwnerHintMatchesHeap(item, *heap)
+}
+
+func isRetentionOwnerHint(holder string) bool {
+	holder = strings.TrimPrefix(strings.TrimSpace(holder), "owner.")
+	if holder == "" || holder == "unknown" || holder == "не определен" || strings.HasPrefix(holder, "lifecycle.") {
+		return false
+	}
+	dot := strings.IndexByte(holder, '.')
+	if dot <= 0 {
+		return true
+	}
+	prefix := holder[:dot]
+	if prefix == "com" || prefix == "io" || prefix == "android" || prefix == "java" || prefix == "kotlin" {
+		return false
+	}
+	return holder == strings.ToLower(holder)
+}
+
+func retentionOwnerHintMatchesHeap(item memoryLeakStats, leak HeapLeakEvidence) bool {
+	if !isRetentionOwnerHint(item.holder) {
+		return false
+	}
+	hint := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(item.holder), "owner."))
+	if hint == "" || !strings.Contains(hint, ".") {
+		return false
+	}
+	parts := []string{leak.Holder, leak.HolderField, leak.LeakPattern, leak.GCRoot}
+	parts = append(parts, leak.ReferenceMatchers...)
+	for _, step := range leak.ReferencePath {
+		parts = append(parts, step.ClassName, step.FieldName)
+	}
+	blob := strings.ToLower(strings.Join(parts, " "))
+	if ownerHintMatchesHeapBlob(hint, blob) {
+		return true
+	}
+	return strings.HasPrefix(hint, "sample.") && confirmedHeapReferencePath(&leak)
+}
+
+func ownerHintMatchesHeapBlob(hint, blob string) bool {
+	if strings.Contains(blob, hint) {
+		return true
+	}
+	segments := strings.Split(hint, ".")
+	tail := segments[len(segments)-1]
+	if tail != "" && strings.Contains(blob, tail) {
+		return true
+	}
+	normalizedBlob := normalizeRetentionToken(blob)
+	normalizedTail := normalizeRetentionToken(tail)
+	if normalizedTail != "" && strings.Contains(normalizedBlob, normalizedTail) {
+		return true
+	}
+	if strings.HasSuffix(normalizedTail, "registry") {
+		stem := strings.TrimSuffix(normalizedTail, "registry")
+		if stem != "" && strings.Contains(normalizedBlob, stem+"reference") {
+			return true
+		}
+	}
+	if strings.HasSuffix(normalizedTail, "reference") {
+		stem := strings.TrimSuffix(normalizedTail, "reference")
+		if stem != "" && strings.Contains(normalizedBlob, stem+"registry") {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRetentionToken(value string) string {
+	return strings.NewReplacer("_", "", ".", "").Replace(strings.ToLower(value))
 }
 
 func retainedEvidenceLabel(kind string) string {
@@ -779,7 +891,10 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 	bestScore := -1
 	for i := range heap.Leaks {
 		leak := heap.Leaks[i]
-		if leak.ClassName != item.className || !heapHolderMatchesRuntime(item, leak) {
+		if leak.ClassName != item.className {
+			continue
+		}
+		if !heapHolderMatchesRuntime(item, leak) && !retentionOwnerHintMatchesHeap(item, leak) {
 			continue
 		}
 		score := 0

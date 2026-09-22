@@ -21,6 +21,16 @@ internal class RuntimeHttpTelemetry(
             event,
             flags or access.uiVisibleFlag(),
         )
+        activeWriter.counter("network.request.started.count", 1)
+        if (httpEventFailed(event, flags)) {
+            activeWriter.counter("network.request.failed.count", 1)
+        }
+    }
+
+    private fun httpEventFailed(event: JankHunterHttpEvent, flags: Long): Boolean {
+        if (flags and JankHunterNetworkEventFlags.HTTP_FAILED != 0L) return true
+        val status = event.statusCode
+        return status in 500..599
     }
 
     private companion object {
