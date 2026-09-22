@@ -9,7 +9,7 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-var version = "1.0.4"
+var version = "1.0.11"
 
 func main() {
 	configureCLIGarbageCollector()

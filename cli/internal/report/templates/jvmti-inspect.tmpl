@@ -59,6 +59,14 @@
       <div class="guide-card"><strong>Блокировки</strong>{{agentContentionConclusion .Summary.Agent.Contention}}</div>
       <div class="guide-card"><strong>Как принимать решение</strong>Исправляйте не самый большой внутренний показатель, а вывод, где задержка, поток и метод совпали во времени. Затем повторите тот же сценарий и проверьте, исчезла ли связь.</div>
     </div>
+    {{if .Summary.Agent.ConnectionGuide}}
+    <div class="report-guide">
+      {{range .Summary.Agent.ConnectionGuide}}<p class="warning">{{.}}</p>{{end}}
+    </div>
+    {{end}}
+    {{if .Summary.Agent.CapabilityGaps}}
+    <p class="quality-notice"><b>Недоступные capabilities на устройстве:</b> {{join .Summary.Agent.CapabilityGaps ", "}}</p>
+    {{end}}
   </section>
 
   <section id="findings" class="panel">
@@ -109,7 +117,7 @@
   <section id="quality" class="panel">
     <div class="panel-head"><div><h2>Можно ли доверять выводам</h2><div class="panel-kicker">Потери событий и несогласованные часы снижают силу временного сопоставления.</div></div><span class="pill">часы согласованы: {{agentBooleanLabel .Summary.Agent.Quality.CompatibleClockCalibration}}</span></div>
     {{range .Summary.Agent.DataGaps}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Известных потерь в данных агента нет.</p>{{end}}
-    <details class="fold" open><summary>Ограничения интерпретации</summary><div class="fold-body">{{range .Summary.Agent.Limitations}}<p class="quality-notice">{{.}}</p>{{end}}</div></details>
+    <details class="fold" open><summary>Ограничения интерпретации</summary><div class="fold-body">{{range .Summary.Agent.Limitations}}<p class="quality-notice">{{.}}</p>{{end}}{{range .Summary.Agent.PlatformLimits}}<p class="quality-notice">{{.}}</p>{{end}}</div></details>
   </section>
 
   <details id="technical" class="fold">

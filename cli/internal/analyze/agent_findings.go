@@ -409,12 +409,20 @@ func symptomDescription(value agentSymptom) string {
 func qualityPenalty(summary AgentSummary) int {
 	penalty := 0
 	if summary.Quality.SequenceGaps > 0 {
-		penalty += 15
+		penalty += min(15, 5+int(minUint64(summary.Quality.SequenceGaps, 10)))
 	}
-	if summary.Quality.QueueFullTotal+
-		summary.Quality.AdmissionContentionTotal+
-		summary.Quality.OtherNativeLossTotal > 0 {
-		penalty += 15
+	nativeLoss := summary.Quality.QueueFullTotal +
+		summary.Quality.AdmissionContentionTotal +
+		summary.Quality.OtherNativeLossTotal
+	if nativeLoss > 0 {
+		switch {
+		case nativeLoss >= 32:
+			penalty += 15
+		case nativeLoss >= 8:
+			penalty += 10
+		default:
+			penalty += 5
+		}
 	}
 	if summary.Stacks.MissingDefinitions > 0 {
 		penalty += 10

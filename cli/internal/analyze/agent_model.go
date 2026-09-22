@@ -115,6 +115,9 @@ type AgentSummary struct {
 	Findings          []AgentFinding
 	DataGaps          []string
 	Limitations       []string
+	ConnectionGuide   []string
+	PlatformLimits    []string
+	CapabilityGaps    []string
 }
 
 type AgentComparison struct {
