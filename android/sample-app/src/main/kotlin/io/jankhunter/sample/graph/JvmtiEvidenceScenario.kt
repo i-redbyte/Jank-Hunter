@@ -52,7 +52,6 @@ internal class JvmtiEvidenceScenario {
         synchronized(monitor) { Unit }
         val waitDurationMs = SystemClock.elapsedRealtime() - waitStartedAt
         val decodedWidth = decodeSyntheticImageOnMainThread()
-        ArtTiDiagnostics.captureCurrentThreadStack()
 
         holder.join(HOLDER_JOIN_TIMEOUT_MS)
         check(!holder.isAlive) { "JVMTI evidence monitor holder did not stop" }
@@ -61,7 +60,9 @@ internal class JvmtiEvidenceScenario {
     }
 
     private fun decodeSyntheticImageOnMainThread(): Int {
-        return BitmapFactory.decodeStream(ByteArrayInputStream(MINIMAL_PNG))?.width ?: 0
+        val bitmap = BitmapFactory.decodeStream(ByteArrayInputStream(MINIMAL_PNG))
+        ArtTiDiagnostics.captureCurrentThreadStack()
+        return bitmap?.width ?: 0
     }
 
     private companion object {
