@@ -61,7 +61,7 @@ class JankHunterPlugin : Plugin<Project> {
             val runtime = configuration.runtime
             val instrumentation = configuration.instrumentation
             val retainedHeapDump = configuration.retainedHeapDump
-            val effectiveArtTi = EffectiveArtTiConfigResolver.resolve(extension.artTi)
+            val effectiveArtTi = EffectiveArtTiConfigResolver.resolve(extension.artTi, configuration.profile)
             val artTiEnabledForVariant = applicationProject && effectiveArtTi.enabled &&
                 VariantBuildTypeMatcher.isEnabled(
                     variantName = variant.name,

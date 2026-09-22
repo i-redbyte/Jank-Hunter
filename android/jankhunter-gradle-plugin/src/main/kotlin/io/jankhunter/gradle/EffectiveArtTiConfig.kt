@@ -80,8 +80,16 @@ internal data class EffectiveArtTiConfig(
 }
 
 internal object EffectiveArtTiConfigResolver {
-    fun resolve(dsl: JankHunterExtension.ArtTi): EffectiveArtTiConfig {
-        val mode = dsl.mode.getOrElse(ArtTiMode.OFF)
+    fun resolve(
+        dsl: JankHunterExtension.ArtTi,
+        profile: JankHunterProfile = JankHunterProfile.MINIMAL,
+    ): EffectiveArtTiConfig {
+        val dslMode = dsl.mode.getOrElse(ArtTiMode.OFF)
+        val mode = when {
+            dslMode != ArtTiMode.OFF -> dslMode
+            profile == JankHunterProfile.MINIMAL || profile == JankHunterProfile.RELEASE_SAFE -> ArtTiMode.OFF
+            else -> ArtTiMode.LIGHT
+        }
         val preset = preset(mode)
         if (mode == ArtTiMode.CUSTOM) requireCustomProperties(dsl)
         val candidate = preset.copy(

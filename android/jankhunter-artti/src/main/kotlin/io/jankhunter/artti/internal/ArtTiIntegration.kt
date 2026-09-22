@@ -33,9 +33,6 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     private var config: ArtTiRuntimeConfig? = null
 
     @Volatile
-    private var triggerBudget: ArtTiTriggerBudget? = null
-
-    @Volatile
     private var eventSink: JankHunterAgentEventSink? = null
 
     override fun start(context: Context, eventSink: JankHunterAgentEventSink) {
@@ -101,10 +98,6 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         // Long-contention stacks are captured on the blocked thread with a related producer
         // sequence. Stall-hook stacks only see integration frames and steal the same budget.
         if (runtimeConfig.triggerPolicy.onLongContention) return
-        if (triggerBudget?.tryAcquire(SystemClock.elapsedRealtime()) != true) {
-            report(Reason.STACK_BUDGET_DROP)
-            return
-        }
         val token = contextToken(
             context.screen,
             context.owner,
@@ -144,10 +137,6 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 return
             }
             config = runtimeConfig
-            triggerBudget = ArtTiTriggerBudget(
-                runtimeConfig.triggerPolicy.minTriggerIntervalMs,
-                runtimeConfig.triggerPolicy.maxSamplesPerMinute,
-            )
             phase = ControlPhase.LIBRARY_LOAD
             if (ArtTiNativeBridge.loadLibrary().isFailure) {
                 lifecycle.set(Lifecycle.DISABLED)
@@ -313,10 +302,6 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         runtimeConfig: ArtTiRuntimeConfig,
     ) {
         if (!runtimeConfig.triggerPolicy.onLongContention) return
-        if (triggerBudget?.tryAcquire(SystemClock.elapsedRealtime()) != true) {
-            report(Reason.STACK_BUDGET_DROP)
-            return
-        }
         val result = ArtTiNativeBridge.nativeCaptureStackForToken(
             threadToken = threadToken,
             trigger = STACK_TRIGGER_LONG_CONTENTION,
@@ -401,24 +386,8 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         .filter { it.isLetterOrDigit() || it == '_' }
         .take(MAX_FAILURE_CLASS_LENGTH)
 
-    private fun contextToken(screen: String?, owner: String?, flow: String?, step: String?): Long {
-        var hash = FNV_OFFSET_BASIS
-        fun add(value: String?) {
-            if (value == null) {
-                hash = (hash xor NULL_MARKER) * FNV_PRIME
-            } else {
-                value.forEach { character ->
-                    hash = (hash xor character.code.toLong()) * FNV_PRIME
-                }
-            }
-            hash = (hash xor FIELD_SEPARATOR) * FNV_PRIME
-        }
-        add(screen)
-        add(owner)
-        add(flow)
-        add(step)
-        return if (hash == 0L) 1L else hash
-    }
+    private fun contextToken(screen: String?, owner: String?, flow: String?, step: String?): Long =
+        ArtTiContextTokens.token(screen, owner, flow, step)
 
     private enum class Lifecycle { UNINITIALIZED, ATTACHING, ACTIVE, DEGRADED, DISABLED, FAILED, STOPPING, STOPPED }
 
@@ -483,10 +452,6 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         const val NANOS_PER_MS = 1_000_000L
         const val STACK_TRIGGER_MAIN_THREAD_STALL = 1
         const val STACK_TRIGGER_LONG_CONTENTION = 2
-        const val FNV_OFFSET_BASIS = -3750763034362895579L
-        const val FNV_PRIME = 1099511628211L
-        const val NULL_MARKER = 0xffL
-        const val FIELD_SEPARATOR = 0xfeL
         const val SDK_STATUS_CONFIG_APPLIED = 0x100
         const val SDK_STATUS_REASON_BASE = 0x1_000
     }

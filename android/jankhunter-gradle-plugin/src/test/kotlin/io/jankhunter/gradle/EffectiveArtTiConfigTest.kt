@@ -15,6 +15,10 @@ class EffectiveArtTiConfigTest {
         val dsl = artTi()
 
         assertFalse(EffectiveArtTiConfigResolver.resolve(dsl).enabled)
+        assertTrue(EffectiveArtTiConfigResolver.resolve(dsl, JankHunterProfile.BALANCED).enabled)
+        assertFalse(
+            EffectiveArtTiConfigResolver.resolve(dsl, JankHunterProfile.BALANCED).monitorContentionEnabled,
+        )
 
         dsl.mode.set(ArtTiMode.CAUSAL)
         dsl.stackSampling.maxDepth.set(96)

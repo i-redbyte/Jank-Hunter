@@ -37,12 +37,8 @@ Status NativeEngine::BeginStop() noexcept {
 
 void NativeEngine::MarkStopped() noexcept {
   gc_intervals_.Reset();
-  const auto incomplete_contentions = monitor_intervals_.Reset();
-  if (incomplete_contentions > 0U) {
-    quality_.Add(QualityCounter::kContentionOrphanFinish, incomplete_contentions);
-  }
-  const auto active_threads = threads_.Reset();
-  if (active_threads > 0U) quality_.Add(QualityCounter::kThreadUnknownEnd, active_threads);
+  monitor_intervals_.Reset();
+  threads_.Reset();
   state_.store(EngineState::kStopped, std::memory_order_release);
 }
 
