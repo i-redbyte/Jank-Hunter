@@ -86,6 +86,8 @@ const (
 )
 
 type StreamResult struct {
+	ProcessFile              bool                 `json:"process_file,omitempty"`
+	Segments                 []StreamResult       `json:"segments,omitempty"`
 	FormatVersion            string               `json:"format_version,omitempty"`
 	Source                   string               `json:"source"`
 	Header                   SegmentHeader        `json:"header"`
@@ -1227,6 +1229,9 @@ const (
 	QualityRuntimeGraphStorageSkippedEntryTotal    uint64 = 0x204a
 	QualityCollectionWindowStartElapsedMS          uint64 = 0x204b
 	QualityCollectionWindowEndElapsedMS            uint64 = 0x204c
+	QualitySessionArchivedTotal                    uint64 = 0x204d
+	QualitySessionRecoveredTotal                   uint64 = 0x204e
+	QualitySessionIncompleteTotal                  uint64 = 0x204f
 )
 
 type QualityLossReason uint64
@@ -1321,6 +1326,12 @@ func QualityCounterName(id uint64) string {
 		return "collection_window_start_elapsed_ms"
 	case QualityCollectionWindowEndElapsedMS:
 		return "collection_window_end_elapsed_ms"
+	case QualitySessionArchivedTotal:
+		return "session_archived_total"
+	case QualitySessionRecoveredTotal:
+		return "session_archive_recovered_total"
+	case QualitySessionIncompleteTotal:
+		return "session_archive_incomplete_total"
 	case QualityRuntimeGraphStorageSkippedEntryTotal:
 		return "runtime_graph_storage_skipped_entry_total"
 	case QualityHandlerPostContextUnavailable:
@@ -1445,6 +1456,7 @@ func IsKnownQualityCounter(id uint64) bool {
 		QualityRuntimeGraphGenerationSkippedEntryTotal,
 		QualityRuntimeGraphStorageSkippedEntryTotal,
 		QualityCollectionWindowStartElapsedMS, QualityCollectionWindowEndElapsedMS,
+		QualitySessionArchivedTotal, QualitySessionRecoveredTotal, QualitySessionIncompleteTotal,
 		QualityHandlerPostContextUnavailable,
 		QualityAsyncCompletionStale,
 		QualityAsyncCompletionDuplicate,

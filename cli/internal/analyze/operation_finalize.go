@@ -11,6 +11,9 @@ func (a *operationAnalysisAccumulator) finalize() *OperationAnalysis {
 		return nil
 	}
 	result := &OperationAnalysis{
+		Profiles:                  a.profileRows(),
+		DroppedProfileSamples:     a.droppedProfileSamples,
+		InvalidProfileSamples:     a.invalidProfileSamples,
 		Started:                   a.started,
 		Completed:                 a.completed,
 		MissingFinish:             uint64(len(a.active) + len(a.ignoredActive)),
@@ -111,6 +114,8 @@ func (a *operationAnalysisAccumulator) release() {
 	a.freeActive = nil
 	a.completedContexts.release()
 	a.operations = nil
+	a.profiles = nil
+	a.profileOwners = nil
 	a.timeSlots = nil
 	a.dimensions = nil
 	a.stages = nil
@@ -127,9 +132,11 @@ func operationStats(key operationGroupKey, aggregate *operationAggregate) Operat
 		QuantilesApproximated: aggregate.durationsMS.approximated(),
 		MaxMS:                 aggregate.durationsMS.max, TotalMS: aggregate.totalMS,
 		Budgeted: aggregate.budgeted, BudgetBreaches: aggregate.budgetBreaches,
-		CorrelatedHTTP:            aggregate.signals.httpCount,
-		CorrelatedHTTPFailures:    aggregate.signals.httpFailures,
-		CorrelatedHTTPDurationMS:  aggregate.signals.httpDurationMS,
+		CorrelatedHTTP:           aggregate.signals.httpCount,
+		CorrelatedHTTPFailures:   aggregate.signals.httpFailures,
+		CorrelatedHTTPDurationMS: aggregate.signals.httpDurationMS,
+		CorrelatedHTTPRxBytes:    aggregate.signals.httpRxBytes, CorrelatedHTTPTxBytes: aggregate.signals.httpTxBytes,
+		CorrelatedHTTPBytesKnown:  aggregate.signals.httpBytesKnown,
 		CorrelatedWebSocket:       aggregate.signals.webSocketCount,
 		CorrelatedWebSocketErrors: aggregate.signals.webSocketErrors,
 		CorrelatedDatabase:        aggregate.signals.databaseCount,
@@ -149,6 +156,9 @@ func operationStats(key operationGroupKey, aggregate *operationAggregate) Operat
 		CorrelatedIO:              aggregate.signals.ioCount,
 		CorrelatedIODurationUS:    aggregate.signals.ioDurationUS,
 		CorrelatedIOBytes:         aggregate.signals.ioBytes,
+		CorrelatedIOBytesKnown:    aggregate.signals.ioBytesKnown,
+		CorrelatedCPUSumX100:      aggregate.signals.cpuSumX100,
+		CorrelatedCPUSamples:      aggregate.signals.cpuSamples,
 		CorrelatedProblems:        aggregate.signals.problemCount,
 		CorrelatedLogRecords:      aggregate.signals.logRecords,
 		CorrelatedRuntimeCalls:    aggregate.signals.runtimeCalls,

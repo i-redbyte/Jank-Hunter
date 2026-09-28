@@ -122,7 +122,7 @@
                 <div class="table-metric">Верхние 5% задержек сети<strong>{{.NetworkMS}} мс</strong></div>
                 <div class="table-metric">Медленные кадры<strong>{{.UIJank}}</strong></div>
                 <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
-                <div class="table-metric">Макс. оценка удержанной памяти<strong>{{.MemoryPressure}} КБ</strong></div>
+                <div class="table-metric">Макс. оценка удержанной памяти<strong>{{dataSize .MemoryPressure}}</strong></div>
               </div>
             </td>
             <td>{{join .Reasons ", "}}</td>

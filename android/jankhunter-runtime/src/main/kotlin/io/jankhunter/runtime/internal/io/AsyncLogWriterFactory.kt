@@ -10,8 +10,12 @@ import java.util.Locale
 
 /** Creates fully initialized asynchronous sessions; the writer owns only active-session behavior. */
 internal class AsyncLogWriterFactory(
+    private val recording: ProcessRecordingSession? = null,
     private val currentTimeMs: RuntimeLongSource = RuntimeLongSource(System::currentTimeMillis),
 ) {
+
+    fun resolveDirectory(requested: File): File = recording?.resolveDirectory(requested) ?: requested.absoluteFile
+
     fun open(
         directory: File,
         config: JankHunterConfig,
@@ -21,11 +25,16 @@ internal class AsyncLogWriterFactory(
         onTerminalStop: AsyncWriterTerminalObserver = AsyncWriterTerminalObserver.NONE,
         buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
     ): AsyncLogWriter {
+        val selectedDirectory = if (config.storagePolicy() != null) {
+            resolveDirectory(directory)
+        } else {
+            directory
+        }
         val sessionStartMs = currentTimeMs.getAsLong().coerceAtLeast(0L)
         val localDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(sessionStartMs))
         val quality = LogQualityCounters()
         return AsyncLogWriter(
-            directory = directory,
+            directory = selectedDirectory,
             config = config,
             processName = processName,
             expectedProcesses = expectedProcesses,
@@ -36,10 +45,11 @@ internal class AsyncLogWriterFactory(
             currentTimeMs = currentTimeMs,
             quality = quality,
             prepareSession = {
-                prepareSession(directory, config, processName, expectedProcesses, rosterDeclarationComplete)
+                prepareSession(selectedDirectory, config, processName, expectedProcesses, rosterDeclarationComplete)
             },
             onTerminalStop = onTerminalStop,
             buildIdentity = buildIdentity,
+            recording = recording,
         )
     }
 

@@ -248,16 +248,13 @@ func TestInspectExplainsUICauseCandidatesWithoutInventingTemporalCausality(t *te
 	}
 	html := string(payload)
 	for _, want := range []string{
-		"Разобрать проблему",
+		"Доказательства и план проверки",
 		"Что произошло",
 		"Что подтверждено",
-		"Почему это важно",
 		"Как связаны события",
 		"Возможные причины",
-		"Чего не хватает",
 		"ComponentFactoryImpl.create",
 		"ArrayLinkedVariables.add",
-		"не доказывает совпадение по времени",
 		"Как проверить исправление",
 	} {
 		if !strings.Contains(html, want) {
@@ -388,7 +385,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertCurrentReportStyle(t, inspectPath)
-	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск по всему отчёту", "Поиск по всем данным страницы", "Закрытые разделы тоже учитываются", "Введите запрос или выберите фильтры", "Что делать", "Расчёт приоритета и ограничения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Связанные сигналы", "Спам логами", "Проблемные окна", "Связи вызовов", "Где искать в коде", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "Открыть разбор удержаний памяти", "FeedPresenter", "Индекс приоритета расследования", "Главный вывод", "jh-tooltip", "GET /feed", "Подтормаживания интерфейса", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Подробный анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск по всему отчёту", "Поиск по всем данным страницы", "Закрытые разделы тоже учитываются", "Введите запрос или выберите фильтры", "Что делать", "Расчёт приоритета", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Связанные сигналы", "Спам логами", "Проблемные окна", "Связи вызовов", "Где искать в коде", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "Открыть разбор удержаний памяти", "FeedPresenter", "Индекс приоритета расследования", "Главный вывод", "jh-tooltip", "GET /feed", "Подтормаживания интерфейса", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Подробный анализ", `href="inspect-math.html"`)
 	assertHTMLContains(t, inspectPath, "Подробный сетевой анализ", "Максимальная одновременность", "Запросы по месту вызова и контексту", "feed-api", "FeedViewModel.load", "Фазы маршрутов", "TTFB", "Повторы без перенаправлений", "Точные HTTP-коды", "503", "network-route-table wide-analysis-table", "network-call-table wide-analysis-table", "min-width: 2440px", "word-break: keep-all", "WebSocket: соединения, сообщения и обрывы", "GET /socket", "RealtimeRepository", "websocket-connection-table wide-analysis-table", "тайм-аут")
 	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "descriptiveBlock", ".problem-card[hidden]", "minmax(min(100%, 340px), 1fr)", "indexDeferredScript", "report-search-deferred", "revealDeferredSearchEntry", "details.parentElement?.closest('details')")
 	assertHTMLContains(t, inspectPath, "Задержка верхних 5% кадров", "Плавность UI и возможные причины", "Итог анализа", "Наиболее сильные проблемные элементы и факторы", "Уровень связи", "возможная причина в коде", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
@@ -416,7 +413,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
 	assertCurrentReportStyle(t, comparePath)
-	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Где искать изменения в коде", "Открыть сравнение кода", "Сравнение сигналов удержания памяти", "Открыть сравнение удержаний памяти", "Шкала сравнения", "дельта", "В каких данных есть изменения", "Связанные сигналы", "Сводная панель сравнения", "Условия запусков", "Детали по каждому журналу", "Итог по всем сигналам", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Подробный анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="measurement_unavailable"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Где искать изменения в коде", "Открыть сравнение кода", "Сравнение сигналов удержания памяти", "Открыть сравнение удержаний памяти", "Шкала сравнения", "дельта", "В каких данных есть изменения", "Связанные сигналы", "Сводная панель сравнения", "Условия запусков", "Детали по каждому журналу", "Итог по всем сигналам", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Подробный анализ", `href="compare-math.html"`)
 	assertHTMLNotContains(t, comparePath, `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр сравнительного реестра проблем кода", "Фильтр сравнительного реестра утечек памяти", `id="collection-quality"`, "Полнота записи включённых источников", "известных потерь")
 
 	assertHTMLContains(t, comparePath, "p95 кадров проверяемого")
@@ -976,7 +973,7 @@ func TestReportDatesUseDayMonthYearDisplayFormat(t *testing.T) {
 	}
 	html := string(data)
 	for _, expected := range []string{
-		"создан 08.08.2026, 14:05:06",
+		"Создан 08.08.2026, 14:05:06",
 		"патч безопасности 09.07.2026",
 	} {
 		if !strings.Contains(html, expected) {

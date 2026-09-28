@@ -55,26 +55,36 @@ type operationAttributeValue struct {
 }
 
 type activeOperation struct {
-	key            operationInstanceKey
-	parentID       uint64
-	group          operationGroupKey
-	startUnixMS    uint64
-	offsetMin      int64
-	budgetUS       uint64
-	firstAttribute operationAttributeValue
-	moreAttributes []operationAttributeValue
-	attributeCount uint8
-	inclusive      operationSignals
-	database       operationDatabaseSignals
-	included       bool
+	profileSteps           []OperationProfileStep
+	profileDigest          uint64
+	profilePendingStages   uint32
+	profileStageRegistered bool
+	profileStepIndex       int
+	profileRun             jhlog.ID128
+	profileProcessName     string
+	profileValid           bool
+	profileAggregate       *operationProfileAggregate
+	key                    operationInstanceKey
+	parentID               uint64
+	group                  operationGroupKey
+	startUnixMS            uint64
+	offsetMin              int64
+	budgetUS               uint64
+	firstAttribute         operationAttributeValue
+	moreAttributes         []operationAttributeValue
+	attributeCount         uint8
+	inclusive              operationSignals
+	database               operationDatabaseSignals
+	included               bool
 }
 
 type completedOperationContext struct {
-	parentID      uint64
-	name          string
-	included      bool
-	aggregate     *operationAggregate
-	slotAggregate *operationAggregate
+	profileAggregate *operationProfileAggregate
+	parentID         uint64
+	name             string
+	included         bool
+	aggregate        *operationAggregate
+	slotAggregate    *operationAggregate
 }
 
 type completedOperationEntry struct {

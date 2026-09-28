@@ -45,3 +45,25 @@ func TestAutoDiscoveredHeapMessageHasInformationalProvenance(t *testing.T) {
 	}
 	t.Fatalf("auto discovery has no informational provenance: %s", data)
 }
+
+func TestResolvedSessionHeapDumpsRemainAssociatedWithoutAmbiguity(t *testing.T) {
+	directory := t.TempDir()
+	first := filepath.Join(directory, "first.hprof")
+	second := filepath.Join(directory, "second.hprof")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("heap"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths, auto, err := comparisonHeapDumpPaths(
+		"baseline",
+		heapInputFlags{resolvedDumps: []string{first, second}},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auto || len(paths) != 2 {
+		t.Fatalf("paths=%v auto=%v", paths, auto)
+	}
+}

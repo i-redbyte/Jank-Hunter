@@ -1103,6 +1103,19 @@ func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
 	}
 }
 
+func TestSessionArchiveQualityCountersKeepWireNames(t *testing.T) {
+	tests := map[uint64]string{
+		QualitySessionArchivedTotal:   "session_archived_total",
+		QualitySessionRecoveredTotal:  "session_archive_recovered_total",
+		QualitySessionIncompleteTotal: "session_archive_incomplete_total",
+	}
+	for id, want := range tests {
+		if !IsKnownQualityCounter(id) || QualityCounterName(id) != want {
+			t.Fatalf("counter %x: known=%t name=%q, want %q", id, IsKnownQualityCounter(id), QualityCounterName(id), want)
+		}
+	}
+}
+
 func TestBufferedRuntimeGraphQualityCountersKeepWireNames(t *testing.T) {
 	cases := map[uint64]string{
 		QualityRuntimeGraphShutdownLoss:          "runtime_graph_shutdown_loss_total",

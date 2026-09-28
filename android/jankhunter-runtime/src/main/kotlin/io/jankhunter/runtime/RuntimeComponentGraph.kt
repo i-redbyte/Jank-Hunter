@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
+import io.jankhunter.runtime.internal.io.ProcessRecordingSession
 import io.jankhunter.runtime.internal.system.isRuntimeMainThread
 import java.util.concurrent.TimeUnit
 
@@ -97,7 +98,8 @@ internal class RuntimeComponentGraph(
         retentionTelemetry::bindWatcher,
     )
     val storageValve = RuntimeStorageValve(state)
-    private val writerFactory = AsyncLogWriterFactory()
+    private val recording = ProcessRecordingSession()
+    private val writerFactory = AsyncLogWriterFactory(recording = recording)
     val session: RuntimeSessionController = RuntimeSessionController(
         state,
         coordinator,
@@ -110,6 +112,7 @@ internal class RuntimeComponentGraph(
         collectors,
         writerFactory,
         nowMs,
+        recording::releaseAfterEpoch,
     )
     val lifecycle = RuntimeLifecycleController(state, coordinator, session, metrics, nowMs)
     val networkAdapterTelemetry = RuntimeNetworkAdapterTelemetry(

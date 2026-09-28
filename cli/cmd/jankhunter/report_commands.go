@@ -25,17 +25,19 @@ func runExport(args []string) error {
 	if format != "jsonl" {
 		return fmt.Errorf("unsupported export format %q", format)
 	}
-	paths, err := resolveLogArgs(remaining)
+	inputs, err := openLogArgs(remaining)
 	if err != nil {
 		return err
 	}
+	defer inputs.Close()
+	paths := inputs.Logs
 	if len(paths) == 0 {
 		return fmt.Errorf("export needs at least one log file")
 	}
 	if out == "" {
 		return writeExportEvents(os.Stdout, paths)
 	}
-	if err := rejectOutputInputOverlap(out, paths); err != nil {
+	if err := rejectOutputInputOverlap(out, resolvedInputPaths(inputs)); err != nil {
 		return err
 	}
 	return atomicfile.Write(out, 0o644, func(file *os.File) error {
@@ -61,10 +63,12 @@ func runSize(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths, err := resolveLogArgs(remaining)
+	inputs, err := openLogArgs(remaining)
 	if err != nil {
 		return err
 	}
+	defer inputs.Close()
+	paths := inputs.Logs
 	if len(paths) == 0 {
 		return fmt.Errorf("size needs at least one log file")
 	}
@@ -165,12 +169,18 @@ func runProblems(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths, err := resolveLogArgs(remaining)
+	inputs, err := openLogArgs(remaining)
 	if err != nil {
 		return err
 	}
+	defer inputs.Close()
+	paths := inputs.Logs
 	if len(paths) == 0 {
 		return fmt.Errorf("problems needs at least one log file")
+	}
+	heap.resolvedDumps = inputs.HeapDumps
+	if err := rejectOutputInputOverlap(out, resolvedInputPaths(inputs)); err != nil {
+		return err
 	}
 	builder.outputPath = out
 	heap.outputPath = out

@@ -9,6 +9,8 @@ import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.Jhlog
 import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
 import io.jankhunter.runtime.internal.io.QualityCounterId
+import io.jankhunter.runtime.internal.io.SessionArchiveExporter
+import io.jankhunter.runtime.internal.io.SessionStorageDirectory
 import io.jankhunter.runtime.internal.monotonicDeadlineAfterMillis
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
@@ -28,9 +30,11 @@ internal class RuntimeSessionController(
     private val collectors: RuntimeCollectorService,
     private val writerFactory: AsyncLogWriterFactory,
     private val elapsedRealtimeMs: RuntimeLongSource,
+    private val releaseRecording: () -> Unit = {},
 ) {
     private val crashDrainInProgress = AtomicBoolean()
     private val buildIdentityResolver = RuntimeBuildIdentityResolver()
+    private var storageDirectory: SessionStorageDirectory? = null
 
     fun start(
         appContext: Context,
@@ -135,6 +139,7 @@ internal class RuntimeSessionController(
         }
         RuntimeHookGuard.swallow { restoreCrashFlushHandler() }
         reset(clearInit)
+        if (clearInit) releaseOwnedStorage()
     }
 
     fun flush() {
@@ -152,12 +157,26 @@ internal class RuntimeSessionController(
 
     fun captureLogSnapshot(): JankHunterLogSnapshot? {
         if (isRuntimeMainThread()) return null
-        return captureLogSnapshotBlocking()
+        return captureMaterializedSnapshot()
     }
 
     fun captureLogSnapshotAsync(callback: JankHunterCaptureCallback<JankHunterLogSnapshot>): Boolean {
         val scheduler = state.maintenanceScheduler ?: return false
-        return scheduler.execute { callback.onComplete(captureLogSnapshotBlocking()) }
+        return scheduler.execute { callback.onComplete(captureMaterializedSnapshot()) }
+    }
+
+    private fun captureMaterializedSnapshot(): JankHunterLogSnapshot? {
+        val context = state.initContext ?: return null
+        val snapshot = captureLogSnapshotBlocking() ?: return null
+        return try {
+            io.jankhunter.runtime.internal.io.SnapshotFileCache.materialize(
+                snapshot, File(context.cacheDir, "jankhunter-snapshots"), state.config?.sessionLogSizeLimitBytes() ?: 0L,
+            )
+        } catch (error: Throwable) {
+            RuntimeHookGuard.rethrowFatal(error)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
+            null
+        }
     }
 
     private fun captureLogSnapshotBlocking(): JankHunterLogSnapshot? {
@@ -182,6 +201,63 @@ internal class RuntimeSessionController(
         return scheduler.execute { callback.onComplete(captureLogArchiveBlocking(destination)) }
     }
 
+    fun captureSessionArchives(destinationDirectory: File): List<String>? =
+        captureSessionArchives(destinationDirectory, includeHeapDumps = true)
+
+    fun captureSessionArchives(destinationDirectory: File, includeHeapDumps: Boolean): List<String>? {
+        if (isRuntimeMainThread()) return null
+        return captureSessionArchivesBlocking(destinationDirectory, includeHeapDumps)
+    }
+
+    fun captureSessionArchives(destinationDirectory: File, maxBytesIncludingHeapDumps: Long): List<String>? {
+        require(maxBytesIncludingHeapDumps >= 0L) { "Heap dump export budget must not be negative" }
+        if (isRuntimeMainThread()) return null
+        return captureSessionArchivesBlocking(destinationDirectory, includeHeapDumps = true, maxBytesIncludingHeapDumps)
+    }
+
+    fun captureSessionArchivesAsync(
+        destinationDirectory: File,
+        callback: JankHunterCaptureCallback<List<String>>,
+    ): Boolean {
+        val scheduler = state.maintenanceScheduler ?: return false
+        return scheduler.execute { callback.onComplete(captureSessionArchivesBlocking(destinationDirectory, includeHeapDumps = true)) }
+    }
+
+    fun captureSessionArchiveArtifacts(destinationDirectory: File): List<JankHunterSessionArchive>? {
+        if (isRuntimeMainThread()) return null
+        val context = state.initContext ?: return null
+        val config = state.config ?: return null
+        val recording = state.writer != null || state.logSnapshotCoordinator != null
+        val snapshot = captureLogSnapshotBlocking()
+        if (snapshot == null && (recording || state.writer != null || state.logSnapshotCoordinator != null)) return null
+        return try {
+            SessionArchiveExporter.exportArtifacts(logDirectory(context, config), destinationDirectory, snapshot)
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
+            null
+        }
+    }
+
+    private fun captureSessionArchivesBlocking(
+        destinationDirectory: File,
+        includeHeapDumps: Boolean,
+        maxBytesIncludingHeapDumps: Long = Long.MAX_VALUE,
+    ): List<String>? {
+        val context = state.initContext ?: return null
+        val config = state.config ?: return null
+        val snapshot = captureLogSnapshotBlocking()
+        return try {
+            SessionArchiveExporter.export(
+                logDirectory(context, config), destinationDirectory, snapshot, includeHeapDumps, maxBytesIncludingHeapDumps,
+            )
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
+            null
+        }
+    }
+
     private fun captureLogArchiveBlocking(destination: File): JankHunterLogArchive? {
         val snapshot = captureLogSnapshotBlocking() ?: return null
         return try {
@@ -194,7 +270,18 @@ internal class RuntimeSessionController(
     }
 
     fun logDirectory(appContext: Context, config: JankHunterConfig): File {
-        return config.logDirectory() ?: File(appContext.filesDir, "jankhunter")
+        val fallback = config.logDirectory() ?: File(appContext.filesDir, "jankhunter")
+        val policy = config.storagePolicy()
+        // Standalone/external-storage callers keep their original directory semantics. A persisted
+        // host selection is still consulted before late policy binding on the next app launch.
+        val noBackup: File? = appContext.noBackupFilesDir
+        if (policy == null && noBackup == null) return fallback
+        val stateDirectory = File(noBackup ?: appContext.filesDir, "jankhunter-storage")
+        if (policy == null && storageDirectory == null && !File(stateDirectory, "storage-directory.bin").isFile) {
+            return fallback
+        }
+        val selection = storageDirectory ?: SessionStorageDirectory(stateDirectory).also { storageDirectory = it }
+        return writerFactory.resolveDirectory(selection.resolve(fallback, policy?.rootDirectory))
     }
 
     fun recordRuntimeDisabledStatus() {
@@ -207,7 +294,7 @@ internal class RuntimeSessionController(
                 null
             }
         }
-        val directory = state.config?.logDirectory() ?: appContext?.filesDir?.let { File(it, "jankhunter") }
+        val directory = appContext?.let { context -> state.config?.let { logDirectory(context, it) } }
         coordinator.recordInitStatus("runtime_disabled", state.initAttempts.get(), processName, directory)
     }
 
@@ -244,7 +331,7 @@ internal class RuntimeSessionController(
         if (!hookEvents.flushBlocking(remainingTimeoutMs(deadlineNs))) return null
         if (!callGraph.flushBlocking(remainingTimeoutMs(deadlineNs))) return null
         val snapshot = activeWriter.captureSnapshotBlocking(remainingTimeoutMs(deadlineNs)) ?: return null
-        return JankHunterLogSnapshot(snapshot.capturedAtMs, snapshot.logPaths)
+        return JankHunterLogSnapshot(snapshot.capturedAtMs, snapshot.logPaths, logByteLimits = snapshot.logByteLimits)
     }
 
     private fun onWriterTerminalStop(
@@ -260,6 +347,7 @@ internal class RuntimeSessionController(
             synchronized(state.lifecycleLock) {
                 if (state.writer !== stoppedWriter) return
                 stop(clearInit = false)
+                releaseOwnedStorage()
                 coordinator.recordInitFailure(terminalFailure, attempt, processName, logDirectory)
             }
         } catch (throwable: Throwable) {
@@ -296,6 +384,12 @@ internal class RuntimeSessionController(
             state.collectionInactiveSinceElapsedMs.set(0L)
             state.runtimeEnabled.set(true)
         }
+    }
+
+    private fun releaseOwnedStorage() {
+        RuntimeHookGuard.swallow { releaseRecording() }
+        RuntimeHookGuard.swallow { storageDirectory?.close() }
+        storageDirectory = null
     }
 
     private fun installCrashFlushHandler() {

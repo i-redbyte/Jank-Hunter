@@ -61,21 +61,31 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json|--csv] [--presentation] [--animated-background] [--thresholds thresholds.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text] [--baseline-mapping mapping.txt] [--candidate-mapping mapping.txt] [--baseline-artifacts-dir dir] [--candidate-artifacts-dir dir]
-  jankhunter export <logs...> --out events.jsonl
-  jankhunter size <logs...> [--json]
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <inputs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare (--baseline <inputs...>|--baseline-report inspect.html) (--candidate <inputs...>|--candidate-report inspect.html) --out compare.html [--json|--csv] [--presentation] [--animated-background] [--thresholds thresholds.json] [--identity-migration migration.json|--problem-aliases aliases.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text] [--baseline-mapping mapping.txt] [--candidate-mapping mapping.txt] [--baseline-artifacts-dir dir] [--candidate-artifacts-dir dir]
+  jankhunter export <inputs...> --out events.jsonl
+  jankhunter size <inputs...> [--json]
+  jankhunter problems <inputs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <inputs...> --candidate <inputs...> [--out scorecard.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--allow-unverified-mapping] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 
 CI thresholds:
   Numeric zero is an active limit; omit a field to leave it unconstrained.
   Unknown metric names, empty threshold files and unavailable requested comparisons fail.
+  Regression gates report pass, fail or inconclusive; inconclusive keeps the existing non-zero gate exit code.
+  Partial scenario coverage requires allow_partial_comparison=true in the threshold JSON.
   A global max_severity requires all comparison metrics; select metrics explicitly for partial instrumentation.
   Relative regression from a measured zero baseline requires an absolute threshold.
   leaks.require_heap_for_high needs a verified watched-object association; a class-only HPROF path cannot satisfy it.
   Current JHLOG retention records do not provide that association. Heap class paths and sizes remain separate evidence.
+
+Comparison output:
+  JSON uses jankhunter.comparison/v2 and includes scope, problem transitions and gate status.
+  CSV uses empty cells for unavailable numeric values; zero is emitted only when it was measured.
+
+Inputs:
+  Each input may be one standalone JHLOG, one session directory, or one .jhlog.zip archive.
+  Session inputs need no manifest; HPROF files inside them stay associated with that session.
 `)
 }
 

@@ -38,19 +38,27 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths, err := resolveLogArgs(remaining)
+	inputs, err := openLogArgs(remaining)
 	if err != nil {
 		return err
 	}
+	defer inputs.Close()
+	paths := inputs.Logs
+	heap.resolvedDumps = inputs.HeapDumps
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
-	if err := rejectOutputInputOverlap(out, paths); err != nil {
+	if err := rejectOutputInputOverlap(out, resolvedInputPaths(inputs)); err != nil {
 		return err
 	}
 	builder.outputPath = out
 	heap.outputPath = out
-	paths, sessionWarnings := selectLatestSessionLogs(paths, allSessions)
+	// One connected epoch container is already one user-selected process lifetime.
+	// Keep its earlier configuration epochs without expanding an unrelated mixed input.
+	paths, sessionWarnings := selectLatestSessionLogs(
+		paths,
+		allSessions || (len(inputs.Sources) == 1 && inputs.MultiRunEpochs),
+	)
 	options, err := builder.buildForLogs(paths)
 	if err != nil {
 		return err

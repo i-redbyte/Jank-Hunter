@@ -63,3 +63,20 @@ func TestProblemDiagnosisHidesInternalCollectionCounters(t *testing.T) {
 		}
 	}
 }
+
+func TestProblemQualityNotesMoveActionableLimitsToTheQualityAppendix(t *testing.T) {
+	notes := problemQualityNotes(analyze.Summary{Problems: []analyze.ProblemFinding{{
+		Title: "Повторные SQL-вызовы",
+		Limitations: []string{
+			"writer отклонил batch runtime-графа: 16",
+			"Значения параметров SQL намеренно не записываются.",
+		},
+	}}})
+	if len(notes) != 1 || notes[0].Area != "Повторные SQL-вызовы" ||
+		!strings.Contains(notes[0].Detail, "Значения параметров SQL") {
+		t.Fatalf("quality notes = %+v", notes)
+	}
+	if strings.Contains(notes[0].Detail, "writer") {
+		t.Fatalf("internal collection detail leaked into reader-facing quality note: %+v", notes)
+	}
+}

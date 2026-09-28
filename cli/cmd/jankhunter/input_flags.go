@@ -6,7 +6,41 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/i-redbyte/jank-hunter/cli/internal/sessioninput"
 )
+
+func openLogArgs(args []string) (*sessioninput.Resolved, error) {
+	if err := rejectUnknownOptions(args); err != nil {
+		return nil, err
+	}
+	return openLogInputs(expandArgs(args))
+}
+
+func openLogComma(raw string) (*sessioninput.Resolved, error) {
+	return openLogInputs(expandComma(raw))
+}
+
+func openLogInputs(inputs []string) (*sessioninput.Resolved, error) {
+	resolved, err := sessioninput.Resolve(inputs)
+	if err != nil {
+		return nil, err
+	}
+	resolved.Logs, err = canonicalizeLogInputs(resolved.Logs)
+	if err != nil {
+		resolved.Close()
+		return nil, err
+	}
+	return resolved, nil
+}
+
+func resolvedInputPaths(resolved *sessioninput.Resolved) []string {
+	paths := make([]string, 0, len(resolved.Sources)+len(resolved.Logs)+len(resolved.HeapDumps))
+	paths = append(paths, resolved.Sources...)
+	paths = append(paths, resolved.Logs...)
+	paths = append(paths, resolved.HeapDumps...)
+	return paths
+}
 
 func takeStringFlag(args []string, name, fallback string) (string, []string, error) {
 	long := "--" + name

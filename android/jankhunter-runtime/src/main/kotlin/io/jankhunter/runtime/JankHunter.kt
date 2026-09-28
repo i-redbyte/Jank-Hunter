@@ -98,7 +98,8 @@ object JankHunter {
     fun initDiagnostics(): JankHunterInitDiagnostics = runtime.lifecycle.diagnostics()
 
     /**
-     * Seals a coordinated vector frontier and immediately continues collection in new segments.
+     * Captures immutable file copies without splitting the process recording into additional files.
+     * Close the snapshot after consuming its paths to release compatibility copies from the app cache.
      * Returns `null` on the main thread; use [captureLogSnapshotAsync] from UI code.
      */
     @JvmStatic
@@ -126,6 +127,51 @@ object JankHunter {
         callback: JankHunterCaptureCallback<JankHunterLogArchive>,
     ): Boolean {
         return runtime.session.captureLogArchiveAsync(destination, callback)
+    }
+
+    /**
+     * Exports retained history plus the current coordinated frontier as one `.jhlog.zip` per
+     * logical session. Source session directories and archives remain untouched.
+     * Returns `null` on the main thread; use [captureSessionArchivesAsync] from UI code.
+     */
+    @JvmStatic
+    fun captureSessionArchives(destinationDirectory: File): List<String>? {
+        return runtime.session.captureSessionArchives(destinationDirectory)
+    }
+
+    /**
+     * Exports session archives with content metadata verified while copying this snapshot.
+     * Completed heap dumps remain inside their owning session archive. Call on a worker thread.
+     */
+    @JvmStatic
+    fun captureSessionArchiveArtifacts(destinationDirectory: File): List<JankHunterSessionArchive>? {
+        return runtime.session.captureSessionArchiveArtifacts(destinationDirectory)
+    }
+
+    /** Exports session logs with optional managed heap dumps for transport size control. */
+    @JvmStatic
+    fun captureSessionArchives(destinationDirectory: File, includeHeapDumps: Boolean): List<String>? {
+        return runtime.session.captureSessionArchives(destinationDirectory, includeHeapDumps)
+    }
+
+    /**
+     * Includes managed heap dumps only when all exported ZIPs fit [maxBytesIncludingHeapDumps].
+     * Oversized payloads skip dumps before copying; ZIP overhead can trigger a logs-only retry.
+     * JHLOG files are never truncated or omitted, even if they alone exceed this budget.
+     * Source dumps remain unchanged. Hosts must reserve space for their other attachments.
+     */
+    @JvmStatic
+    fun captureSessionArchives(destinationDirectory: File, maxBytesIncludingHeapDumps: Long): List<String>? {
+        return runtime.session.captureSessionArchives(destinationDirectory, maxBytesIncludingHeapDumps)
+    }
+
+    /** Exports session archives on Jank Hunter's maintenance worker. */
+    @JvmStatic
+    fun captureSessionArchivesAsync(
+        destinationDirectory: File,
+        callback: JankHunterCaptureCallback<List<String>>,
+    ): Boolean {
+        return runtime.session.captureSessionArchivesAsync(destinationDirectory, callback)
     }
 
     @JvmStatic

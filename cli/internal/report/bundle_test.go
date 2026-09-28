@@ -46,13 +46,13 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 		`РАЗДЕЛЫ ОТЧЁТА`,
 		`--shell-forest: #006400`,
 		`--shell-attention: #FF4500`,
-		`--shell-paper: #FFFFE0`,
-		`--shell-critical: #8B0000`,
-		`--shell-danger: #DC143C`,
+		`--shell-critical: #FF8A95`,
+		`--shell-danger: #FF6B7A`,
 		`--shell-medium: #FF8A3D`,
-		`--shell-low: #F4D35E`,
+		`--shell-rail: #0D1A11`,
 		`--shell-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif`,
-		`box-shadow: inset 3px 0 var(--shell-low), inset -3px 0 var(--shell-low)`,
+		`border-right: 1px solid var(--shell-line)`,
+		`filter: brightness(0) invert(1)`,
 		`grid-template-columns: clamp(210px, 16.18vw, 260px) minmax(0, 1fr)`,
 		`id="jankhunter-report-pages"`,
 		`"id":"overview"`,
@@ -72,6 +72,18 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	}
 	if strings.Contains(html, "#4B0082") || strings.Contains(html, "#4b0082") {
 		t.Fatal("bundle still contains the removed purple accent")
+	}
+	for _, forbidden := range []string{
+		`#FFFFE0`,
+		`#F4D35E`,
+		`--shell-rail: var(--shell-paper)`,
+		`border-right: 3px solid var(--shell-low)`,
+		`border-bottom: 3px solid var(--shell-low)`,
+		`box-shadow: inset 3px 0 var(--shell-low), inset -3px 0 var(--shell-low)`,
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("bundle still contains yellow shell strip %q", forbidden)
+		}
 	}
 	if strings.Contains(html, "data-report-style") {
 		t.Fatal("bundle contains removed report-style selection marker")
@@ -108,6 +120,45 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	if !strings.Contains(firstPage, "details.open = true") ||
 		!strings.Contains(firstPage, "jankhunter-report:scroll-fragment") {
 		t.Fatal("embedded navigation does not reveal targets inside closed details")
+	}
+}
+
+func TestWriteBundleEmbedsSingleSafeComparisonSnapshotOutsidePages(t *testing.T) {
+	snapshot, err := analyze.NewComparisonSnapshot(analyze.Summary{Title: `x </script>`, LogCount: 1}, "2026-09-23T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := analyze.ComparisonSnapshotDocument{Schema: analyze.ComparisonSnapshotDocumentSchema, Kind: analyze.ComparisonSnapshotInspect, Snapshots: []analyze.ComparisonSnapshot{snapshot}}
+	path := filepath.Join(t.TempDir(), "report.html")
+	if err := WriteBundleWithComparisonSnapshot(path, []BundlePage{{ID: "overview", Title: "Обзор", Href: "report.html", HTML: []byte("<html><body>page</body></html>")}}, document); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(payload)
+	marker := `<script id="jankhunter-comparison-snapshot" type="application/json">`
+	if strings.Count(html, marker) != 1 {
+		t.Fatalf("snapshot element count = %d", strings.Count(html, marker))
+	}
+	start := strings.Index(html, marker) + len(marker)
+	end := strings.Index(html[start:], "</script>")
+	if end < 0 {
+		t.Fatal("snapshot closing tag is missing")
+	}
+	var restored analyze.ComparisonSnapshotDocument
+	if err := json.Unmarshal([]byte(html[start:start+end]), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Kind != analyze.ComparisonSnapshotInspect || len(restored.Snapshots) != 1 {
+		t.Fatalf("embedded document = %+v", restored)
+	}
+	if _, err := analyze.ValidateComparisonSnapshot(restored.Snapshots[0]); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html[start:start+end], `</script>`) {
+		t.Fatal("snapshot payload can terminate its raw-text element")
 	}
 }
 

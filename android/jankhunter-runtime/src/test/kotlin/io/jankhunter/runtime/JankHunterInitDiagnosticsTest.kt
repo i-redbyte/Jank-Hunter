@@ -162,7 +162,7 @@ class JankHunterInitDiagnosticsTest {
         JankHunterTelemetry.counter("storage.valve.after", 1L)
         JankHunter.shutdown()
         assertTrue(bootstrap.jhlogs().isEmpty())
-        assertTrue(target.directory.jhlogs().size >= 2)
+        assertEquals(1, target.directory.jhlogs().size)
     }
 
     @Test
@@ -217,7 +217,7 @@ class JankHunterInitDiagnosticsTest {
         JankHunter.shutdown()
 
         assertTrue(bootstrap.jhlogs().isEmpty())
-        assertTrue(target.directory.jhlogs().size >= 3)
+        assertEquals(1, target.directory.jhlogs().size)
     }
 
     @Test
@@ -389,12 +389,20 @@ class JankHunterInitDiagnosticsTest {
 
         assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(target))
         JankHunterTelemetry.counter("storage.valve.external", 1L)
-        assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(null))
+        val restore = JankHunter.switchBinaryStorage(null)
+        assertTrue(
+            "Restoring built-in storage must be completed or executing: $restore",
+            restore == JankHunterStorageSwitchResult.SWITCHED || restore == JankHunterStorageSwitchResult.IN_PROGRESS,
+        )
         JankHunterTelemetry.counter("storage.valve.internal", 1L)
         JankHunter.shutdown()
 
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L)
+        while ((target.directory.jhlogs().isNotEmpty() || bootstrap.jhlogs().size != 1) &&
+            System.nanoTime() < deadline
+        ) Thread.sleep(10L)
         assertTrue(target.directory.jhlogs().isEmpty())
-        assertTrue(bootstrap.jhlogs().size >= 3)
+        assertEquals(1, bootstrap.jhlogs().size)
     }
 
     @Test
@@ -480,7 +488,7 @@ class JankHunterInitDiagnosticsTest {
         override fun close() = output.close()
     }
 
-    private fun File.jhlogs(): List<File> = listFiles { file -> file.isFile && file.extension == "jhlog" }
-        .orEmpty()
+    private fun File.jhlogs(): List<File> = walkTopDown()
+        .filter { file -> file.isFile && file.extension == "jhlog" }
         .toList()
 }

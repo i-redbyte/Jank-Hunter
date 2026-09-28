@@ -192,11 +192,44 @@ func writeCSVTable(output io.Writer, table csvTable) error {
 	return writer.Error()
 }
 
-func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
+type comparisonJSONDocument struct {
+	analyze.Comparison
+	Gate analyze.GateResult `json:"gate"`
+}
+
+func writeComparisonJSON(writer io.Writer, comparison analyze.Comparison, gate analyze.GateResult) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(comparisonJSONDocument{Comparison: comparison, Gate: gate})
+}
+
+func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison, gateResult ...analyze.GateResult) error {
 	table := csvTable{header: []string{
 		"record_type", "name", "operation", "baseline", "candidate", "change",
-		"severity", "confidence", "comparable", "note",
+		"severity", "confidence", "comparable", "note", "comparability", "eligibility",
+		"observation", "evidence", "baseline_matched", "candidate_matched", "baseline_total",
+		"candidate_total", "reason_codes", "gate_status", "exact_match_groups", "common_subpath_groups",
+		"baseline_duration_matched_ms", "candidate_duration_matched_ms", "baseline_duration_total_ms", "candidate_duration_total_ms",
+		"interval_lower", "interval_upper", "baseline_groups", "candidate_groups", "metric_scope", "stage",
 	}}
+	gate := analyze.GateResult{Status: analyze.GateDisabled}
+	if len(gateResult) > 0 {
+		gate = gateResult[0]
+	}
+	table.rows = append(table.rows, comparisonScopeCSVRow(comparison, gate.Status))
+	for _, change := range comparison.Scope.Changes {
+		table.rows = append(table.rows, comparisonScopeMetricCSVRow(change, comparison.Scope.Comparability, gate.Status))
+	}
+	for _, delta := range comparison.ProblemComparison.Deltas {
+		table.rows = append(table.rows, comparisonProblemCSVRow(delta, comparison.Scope.Comparability, gate.Status))
+	}
+	if len(gate.Checks) == 0 {
+		table.rows = append(table.rows, comparisonGateCSVRow(analyze.GateCheck{Status: gate.Status}))
+	} else {
+		for _, check := range gate.Checks {
+			table.rows = append(table.rows, comparisonGateCSVRow(check))
+		}
+	}
 	beforeTiming, afterTiming := comparison.Baseline.CollectionQuality.HTTPFirstByte, comparison.Candidate.CollectionQuality.HTTPFirstByte
 	if beforeTiming != nil || afterTiming != nil {
 		for _, name := range []string{"known", "unknown", "legacy"} {
@@ -278,7 +311,81 @@ func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
 			operation.Note,
 		})
 	}
+	for index := range table.rows {
+		if missing := len(table.header) - len(table.rows[index]); missing > 0 {
+			table.rows[index] = append(table.rows[index], make([]string, missing)...)
+		}
+	}
 	return writeCSVTable(writer, table)
+}
+
+func comparisonScopeCSVRow(comparison analyze.Comparison, gate analyze.GateStatus) []string {
+	scope := comparison.Scope
+	return []string{
+		"comparison_scope", "overall", "", "", "", string(comparison.Outcome), "", "", "", "",
+		string(scope.Comparability), "", "", "", fmt.Sprint(scope.Baseline.Matched), fmt.Sprint(scope.Candidate.Matched),
+		knownCoverageText(scope.Baseline), knownCoverageText(scope.Candidate), "", string(gate),
+		fmt.Sprint(scope.ExactMatchGroups), fmt.Sprint(scope.CommonSubpathGroups),
+		fmt.Sprint(scope.Baseline.MatchedDurationMS), fmt.Sprint(scope.Candidate.MatchedDurationMS),
+		knownCoverageDurationText(scope.Baseline), knownCoverageDurationText(scope.Candidate),
+		"", "", "", "", "", "",
+	}
+}
+
+func comparisonScopeMetricCSVRow(change analyze.MetricChange, comparability analyze.ScenarioComparability, gate analyze.GateStatus) []string {
+	row := []string{
+		"scope_metric", change.Name, "", optionalFloatText(change.Before), optionalFloatText(change.After), string(change.Change), "",
+		string(change.Confidence), fmt.Sprint(change.Eligibility.State == analyze.EligibilityEligible), change.Unit,
+		string(comparability), string(change.Eligibility.State), "", string(change.Evidence), "", "", "", "",
+		string(change.Eligibility.Reason), string(gate),
+	}
+	row = append(row, "", "", "", "", "", "")
+	if change.Interval != nil {
+		row = append(row, fmt.Sprint(change.Interval.Lower), fmt.Sprint(change.Interval.Upper), fmt.Sprint(change.Interval.BaselineGroups), fmt.Sprint(change.Interval.CandidateGroups))
+	} else {
+		row = append(row, "", "", "", "")
+	}
+	return append(row, change.Scope, change.Stage)
+}
+
+func comparisonProblemCSVRow(delta analyze.ProblemDelta, comparability analyze.ScenarioComparability, gate analyze.GateStatus) []string {
+	return []string{
+		"problem_transition", delta.Fingerprint, "", problemFingerprint(delta.Baseline), problemFingerprint(delta.Candidate), string(delta.Change), "",
+		string(delta.Confidence), fmt.Sprint(delta.Comparable), delta.Note, string(comparability), "", string(delta.Observation), string(delta.Evidence),
+		"", "", "", "", "", string(gate),
+	}
+}
+
+func comparisonGateCSVRow(check analyze.GateCheck) []string {
+	return []string{"gate_check", "gate", "", "", "", "", "", "", "", check.Message, "", "", "", "", "", "", "", "", "", string(check.Status)}
+}
+
+func knownCoverageText(coverage analyze.ScenarioCoverage) string {
+	if !coverage.TotalKnown {
+		return ""
+	}
+	return fmt.Sprint(coverage.Total)
+}
+
+func knownCoverageDurationText(coverage analyze.ScenarioCoverage) string {
+	if !coverage.DurationKnown {
+		return ""
+	}
+	return fmt.Sprint(coverage.TotalDurationMS)
+}
+
+func optionalFloatText(value *float64) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(*value)
+}
+
+func problemFingerprint(finding *analyze.ProblemFinding) string {
+	if finding == nil {
+		return ""
+	}
+	return finding.Fingerprint
 }
 
 func httpFirstByteCoverageText(quality *analyze.HTTPFirstByteQuality, name string) string {

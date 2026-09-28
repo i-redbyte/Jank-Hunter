@@ -38,6 +38,8 @@ type ReportOptions struct {
 	AnimatedBackground bool
 	GeneratedAt        string
 	Links              ReportLinks
+	// SourcePaths keeps file names intact, including commas, in the inspect header.
+	SourcePaths []string
 	// TransientOutput skips durability barriers for companion pages created inside a private
 	// temporary directory and immediately consumed by WriteBundle. Standalone and final reports
 	// keep the default durable atomic write path.
@@ -85,6 +87,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 	return execute(path, cachedInspectTemplate, map[string]any{
 		"GeneratedAt":                   options.generatedAt(),
 		"Summary":                       summary,
+		"SourcePaths":                   options.SourcePaths,
 		"LogGrowthJSON":                 logGrowthJSON(summary.LogGrowth),
 		"Analysis":                      inspectAnalysis(summary, lang),
 		"MathReportHref":                options.Links.Math,
@@ -110,6 +113,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 	return execute(path, cachedCompareTemplate, map[string]any{
 		"GeneratedAt": options.generatedAt(),
 		"Comparison":  comparison,
+		"Overview":    comparisonOverview(comparison),
 		"LogGroups": []logReportGroup{
 			{Title: "Логи базы", Empty: "Детали логов базы не встроены.", Logs: baselineLogs},
 			{Title: "Логи проверяемого прогона", Empty: "Данные логов проверяемого прогона не встроены.", Logs: candidateLogs},

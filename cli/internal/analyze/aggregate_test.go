@@ -2981,6 +2981,7 @@ func TestRequireCleanCohortsDoesNotMisclassifyCollectionLoss(t *testing.T) {
 		},
 	}
 	comparison := Compare(baseline, candidate)
+	comparison.Scope.Comparability = ScenarioFull
 	if len(comparison.CohortWarnings) != 0 || len(comparison.QualityWarnings) == 0 {
 		t.Fatalf("warning classes = cohort:%+v quality:%+v", comparison.CohortWarnings, comparison.QualityWarnings)
 	}

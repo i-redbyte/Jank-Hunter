@@ -30,19 +30,17 @@
 
 {{- define "problem-diagnosis" -}}
 {{$finding := .Finding}}{{$diagnosis := .Diagnosis}}
-<div class="problem-diagnosis-preview"><strong>Проблема:</strong><span>{{$diagnosis.Verdict}}</span></div>
 <details class="problem-explanation">
-  <summary>Разобрать проблему · {{problemClaimLabel $finding.Why.ClaimLevel}}</summary>
+  <summary>Доказательства и план проверки</summary>
   <div class="problem-explanation-grid problem-diagnosis-grid">
     <div class="problem-diagnosis-verdict span-all"><h4>Что произошло</h4><p>{{$diagnosis.Verdict}}</p></div>
-    <div><h4>Что подтверждено</h4>{{range $diagnosis.Proven}}<p>{{.}}</p>{{else}}<p class="muted">Данных недостаточно, чтобы точно назвать причину.</p>{{end}}</div>
-    <div class="problem-impact"><h4>Почему это важно</h4>{{range $finding.Impact}}<p>{{.}}</p>{{else}}<p class="muted">Возможный вред зависит от силы и длительности сигнала.</p>{{end}}</div>
+    {{if $diagnosis.Proven}}<div><h4>Что подтверждено</h4>{{range $diagnosis.Proven}}<p>{{.}}</p>{{end}}</div>{{end}}
+    {{if $finding.Impact}}<div class="problem-impact"><h4>Почему это важно</h4>{{range $finding.Impact}}<p>{{.}}</p>{{end}}</div>{{end}}
     {{if $diagnosis.CausalChain}}<div class="problem-causal-chain span-all"><h4>Как связаны события</h4>{{range $diagnosis.CausalChain}}<div class="problem-chain-step state-{{.State}}"><strong>{{.Label}}</strong><span>{{.Text}}</span></div>{{end}}</div>{{end}}
-    <div class="problem-root-causes span-all"><h4>Возможные причины</h4>{{if $diagnosis.Causes}}<div class="problem-cause-grid">{{range $diagnosis.Causes}}<article class="problem-cause-card relation-{{.RelationClass}}"><div class="problem-cause-head"><strong>{{.Title}}</strong><span>{{.Relation}}</span></div><p class="problem-cause-evidence">{{.Evidence}}</p><p>{{.Explanation}}</p><dl><div><dt>Где искать</dt><dd>{{.Where}}</dd></div><div><dt>Что проверить</dt><dd>{{.Action}}</dd></div></dl></article>{{end}}</div>{{else}}<p class="muted">Точная причина пока не определена. Начните с мест и факторов ниже.</p>{{range $finding.Why.Factors}}<p>{{.}}</p>{{end}}{{end}}</div>
-    <div><h4>Где искать в коде</h4>{{range $diagnosis.Locations}}<p class="problem-location-row"><strong>{{.Scope}}</strong><span>{{.Text}}</span></p>{{else}}<p class="muted">Точное место в коде не попало в журнал.</p>{{end}}</div>
-    <div><h4>Чего не хватает</h4>{{range $diagnosis.MissingProof}}<p class="warning">{{.}}</p>{{end}}</div>
+    {{if or $diagnosis.Causes $finding.Why.Factors}}<div class="problem-root-causes span-all"><h4>Возможные причины</h4>{{if $diagnosis.Causes}}<div class="problem-cause-grid">{{range $diagnosis.Causes}}<article class="problem-cause-card relation-{{.RelationClass}}"><div class="problem-cause-head"><strong>{{.Title}}</strong><span>{{.Relation}}</span></div><p class="problem-cause-evidence">{{.Evidence}}</p><p>{{.Explanation}}</p><dl><div><dt>Где искать</dt><dd>{{.Where}}</dd></div><div><dt>Что проверить</dt><dd>{{.Action}}</dd></div></dl></article>{{end}}</div>{{else}}{{range $finding.Why.Factors}}<p>{{.}}</p>{{end}}{{end}}</div>{{end}}
+    {{if $diagnosis.Locations}}<div><h4>Где искать в коде</h4>{{range $diagnosis.Locations}}<p class="problem-location-row"><strong>{{.Scope}}</strong><span>{{.Text}}</span></p>{{end}}</div>{{end}}
     <div class="problem-validation-plan span-all"><h4>Как проверить исправление</h4>{{range $diagnosis.Plan}}<p><strong>{{.Number}}</strong><span>{{.Action}}</span></p>{{else}}<p class="muted">Повторите тот же сценарий с профилировщиком. Сравните метрику до и после изменения.</p>{{end}}</div>
-    <details class="problem-technical-details span-all"><summary>Расчёт приоритета и ограничения</summary><div class="problem-technical-grid"><div><h4>Из чего сложился приоритет</h4>{{range $finding.PriorityBreakdown}}<div class="problem-priority-row"><span>{{problemPriorityComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range $diagnosis.TechnicalLimitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой проблемы нет.</p>{{end}}</div></div></details>
+    {{if $finding.PriorityBreakdown}}<details class="problem-technical-details span-all"><summary>Расчёт приоритета</summary><div><h4>Из чего сложился приоритет</h4>{{range $finding.PriorityBreakdown}}<div class="problem-priority-row"><span>{{problemPriorityComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div></details>{{end}}
   </div>
 </details>
 {{- end -}}
@@ -73,7 +71,7 @@
 {{range .}}{{if .Work}}<h3>Математический анализ остановлен по лимиту вычислительной работы</h3>
 <p class="quality-notice">Общий бюджет спектрального анализа: {{.Work.LimitOperations}} единиц работы. Использовано {{.Work.ConsumedOperations}}, следующему вычислению нужно {{.Work.RequestedOperations}}. Это счётчик алгоритмической работы, не время CPU. Частичные математические оценки не опубликованы; исходные проблемы приложения и полнота доставки событий сохраняются.</p>
 {{else}}<h3>Математический анализ остановлен по лимиту памяти</h3>
-<p class="quality-notice">Для временных накопителей установлен общий лимит {{.LimitBytes}} байт. При зарезервированных {{.ReservedBytes}} байтах потребовалось ещё {{.RequestedBytes}}. Частичные математические оценки не опубликованы; исходные проблемы приложения и полнота доставки событий сохраняются.</p>{{end}}{{end}}
+<p class="quality-notice">Для временных накопителей установлен общий лимит {{dataSizeBytes .LimitBytes}}. При зарезервированных {{dataSizeBytes .ReservedBytes}} потребовалось ещё {{dataSizeBytes .RequestedBytes}}. Частичные математические оценки не опубликованы; исходные проблемы приложения и полнота доставки событий сохраняются.</p>{{end}}{{end}}
 {{- end -}}
 
 {{- define "acquisition-quality" -}}
@@ -145,6 +143,10 @@
       <h3>Ограничения отдельных анализаторов</h3>
       <div class="finding-list">{{range .}}<div class="finding"><strong>{{.Area}}</strong><div class="muted">{{.Detail}}</div></div>{{end}}</div>
       {{end}}
+      {{with problemQualityNotes .}}
+      <h3>Ограничения данных по найденным проблемам</h3>
+      <div class="finding-list">{{range .}}<div class="finding"><strong>{{.Area}}</strong><div class="muted">{{.Detail}}</div></div>{{end}}</div>
+      {{end}}
       {{range dataQualityNotices .}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Служебных замечаний к исходным данным нет.</p>{{end}}{{range heapInformation .}}<p class="quality-notice">{{.}}</p>{{end}}
       {{end}}
     </div>
@@ -165,6 +167,13 @@
  {{with httpCountCoverageExplanation .Candidate.Timeline}}<p class="quality-notice">{{.}}</p>{{end}}
  {{with networkLoopAttributionExplanation .Candidate.NetworkLoops}}<p class="quality-notice">{{.}}</p>{{end}}
       {{with .Comparison}}
+      <div id="comparison-basis">
+      <h3>Основания сравнения</h3>
+      <p class="quality-notice"><strong>Область:</strong> {{.Scope.Comparability}} · итог {{.Outcome}} · сопоставлено операций {{.Scope.Baseline.Matched}} / {{.Scope.Candidate.Matched}}.</p>
+      {{range .Scope.Metrics}}<p class="quality-notice"><strong>{{.Domain}}:</strong> {{.State}}{{if .Reason}} · {{.Reason}}{{end}}</p>{{end}}
+      {{range .CohortWarnings}}<p class="warning">{{.}}</p>{{end}}
+      {{range .ExposureWarnings}}<p class="warning">{{.}}</p>{{end}}
+      </div>
       <h3>Базовый прогон</h3>{{template "mapping-identity" .Baseline.MappingIdentity}}{{template "artifact-identity" .Baseline.ArtifactIdentity}}{{template "http-collection-quality" .Baseline}}
       <h3>Проверяемый прогон</h3>{{template "mapping-identity" .Candidate.MappingIdentity}}{{template "artifact-identity" .Candidate.ArtifactIdentity}}{{template "http-collection-quality" .Candidate}}
       <p class="help-text">Раздел предназначен для проверки методики сравнения. Он не меняет найденные дельты: ограничения применяются только к показателям, которым нужен соответствующий источник.</p>

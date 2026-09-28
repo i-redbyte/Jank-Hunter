@@ -38,8 +38,9 @@ internal class BinaryLogWriter private constructor(
         maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
         maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = defaultFileHeader(),
@@ -56,8 +57,9 @@ internal class BinaryLogWriter private constructor(
         maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
         logGrowth: LogGrowthSessionBinding? = null,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,
@@ -88,8 +90,9 @@ internal class BinaryLogWriter private constructor(
         maxPhysicalBytes: Long = 0L,
         logGrowth: LogGrowthSessionBinding? = null,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(writer, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(writer, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,

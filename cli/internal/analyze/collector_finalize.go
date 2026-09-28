@@ -10,6 +10,10 @@ import (
 func (c *collector) finish() Summary {
 	c.finalizeCollectionQuality()
 	summary := c.summary
+	if c.filter.Active() {
+		filter := c.filter
+		summary.AnalysisFilter = &filter
+	}
 	if count := summary.MappingIdentity.UnknownOriginReferences; count > 0 {
 		summary.Warnings = append(summary.Warnings, fmt.Sprintf("Качество символов: %d ссылок имеют неизвестное происхождение; их строки сохранены без применения mapping. Совпадение identity сборки не подтверждает происхождение отдельных строк.", count))
 	}

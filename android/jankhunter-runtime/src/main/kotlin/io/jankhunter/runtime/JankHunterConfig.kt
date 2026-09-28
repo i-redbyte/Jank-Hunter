@@ -63,6 +63,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
     private val binaryStorage = builder.binaryStorage
+    private val storagePolicy = builder.storagePolicy
     private val symbolNamespace = builder.symbolNamespace.copyOf()
 
     fun enabled(): Boolean = enabled
@@ -233,6 +234,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun binaryStorage(): JankHunterBinaryStorage? = binaryStorage
 
+    fun storagePolicy(): JankHunterStoragePolicy? = storagePolicy
+
     internal fun symbolNamespace(): ByteArray = symbolNamespace.copyOf()
 
     fun toBuilder(): Builder {
@@ -296,6 +299,7 @@ class JankHunterConfig private constructor(builder: Builder) {
             .allowedProcesses(allowedProcesses)
             .processNameRedactor(processNameRedactor)
             .binaryStorage(binaryStorage)
+            .storagePolicy(storagePolicy)
             .symbolNamespace(symbolNamespace)
     }
 
@@ -365,6 +369,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
         internal var binaryStorage: JankHunterBinaryStorage? = null
+        internal var storagePolicy: JankHunterStoragePolicy? = null
         internal var symbolNamespace: ByteArray = ByteArray(0)
 
         fun enabled(value: Boolean) = apply { enabled = value }
@@ -505,11 +510,18 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun binaryStorage(value: JankHunterBinaryStorage?) = apply { binaryStorage = value }
 
+        fun storagePolicy(value: JankHunterStoragePolicy?) = apply { storagePolicy = value }
+
         internal fun symbolNamespace(value: ByteArray?) = apply {
             symbolNamespace = value?.takeIf { it.size == SYMBOL_NAMESPACE_BYTES }?.copyOf() ?: ByteArray(0)
         }
 
-        fun build(): JankHunterConfig = JankHunterConfig(this)
+        fun build(): JankHunterConfig {
+            require(storagePolicy == null || binaryStorage == null) {
+                "storagePolicy and binaryStorage cannot both own Jank Hunter storage"
+            }
+            return JankHunterConfig(this)
+        }
     }
 
 

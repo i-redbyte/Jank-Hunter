@@ -102,12 +102,25 @@ internal class RuntimeCollectorService(
             RuntimeHookGuard.run {
                 val heapDumpEnabled = config.retainedHeapDumpEnabled()
                 if (heapDumpEnabled) {
+                    val explicitHeapDumpDirectory = config.retainedHeapDumpDirectory()
+                        .takeIf { config.storagePolicy() == null }
                     state.retainedHeapDumper = RetainedHeapDumper(
-                        config.retainedHeapDumpDirectory() ?: logDirectory,
+                        explicitHeapDumpDirectory ?: logDirectory,
                         config.binaryStorage(),
                         config.retainedHeapDumpMinIntervalMs(),
                         config.retainedHeapDumpMaxCount(),
                         config.retainedHeapDumpMinRetainedAgeMs(),
+                        managedDirectoryProvider = if (explicitHeapDumpDirectory == null) {
+                            {
+                                checkNotNull(state.writer?.awaitSessionProcessDirectory(HEAP_DUMP_SCOPE_TIMEOUT_MS)) {
+                                    "Jank Hunter session artifact scope is unavailable"
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        storagePolicy = config.storagePolicy(),
+                        storageRoot = logDirectory,
                     )
                 }
                 val retention = bindRetentionWatcher()
@@ -238,6 +251,7 @@ internal class RuntimeCollectorService(
 
     private companion object {
         const val DEFAULT_STOP_TIMEOUT_MS = 5_000L
+        const val HEAP_DUMP_SCOPE_TIMEOUT_MS = 5_000L
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 
