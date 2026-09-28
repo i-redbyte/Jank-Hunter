@@ -10,9 +10,9 @@
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
-      <div class="eyebrow">Jank Hunter · Изменения проблем</div>
-      <h1>{{if .Comparison.ProblemComparison.SchemaVersion}}{{.Comparison.ProblemComparison.Summary.Headline}}{{else}}Панель контроля регрессий{{end}}</h1>
-      <div class="subhead">создан {{.GeneratedAt}} · база и проверяемый прогон</div>
+      <div class="eyebrow">Jank Hunter · Сравнение отчётов</div>
+      <h1>{{.Overview.Headline}}</h1>
+      <div class="subhead">{{.Overview.ScopeLine}} · создан {{.GeneratedAt}}</div>
     </div>
     <div class="report-hero-lower">
       <div class="report-hero-context">
@@ -55,13 +55,34 @@
   <a href="#analysis">Итог</a>
 </nav>
 <main>
+  <section id="comparison-overview" class="panel problem-first-panel">
+    <div class="analysis-banner {{severityClass .Overview.Tone}}">
+      <div class="eyebrow">Результат сравнения</div>
+      <div class="analysis-status">{{.Overview.Headline}}</div>
+      <div class="muted">{{.Overview.ScopeLine}}</div>
+    </div>
+    <div class="problem-verdict-counts" aria-label="Баланс изменений">
+      <span class="sev-low">{{.Overview.Balance.Improved}}<small>стало лучше</small></span>
+      <span class="sev-high">{{.Overview.Balance.Regressed}}<small>стало хуже</small></span>
+      <span class="sev-medium">{{.Overview.Balance.Mixed}}<small>разные направления</small></span>
+      <span>{{.Overview.Balance.Unchanged}}<small>без заметных изменений</small></span>
+      <span>{{.Overview.Balance.Excluded}}<small>не вошло в сравнение</small></span>
+    </div>
+    {{if gt .Overview.Balance.NotObservedAfter 0}}<p class="help-text">{{.Overview.Balance.NotObservedAfter}} проблем не наблюдались после изменений. Это наблюдение не считается доказательством устранения без одинакового выполнения целевого сценария.</p>{{end}}
+    <div class="comparison-overview-groups">
+      <details class="fold" open><summary>Изменилось</summary><div class="fold-body finding-list">{{range .Overview.Changed}}<div class="finding {{severityClass .Tone}}"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Сопоставимых изменений не найдено.</div>{{end}}</div></details>
+      <details class="fold"><summary>Без заметных изменений</summary><div class="fold-body finding-list">{{range .Overview.Unchanged}}<div class="finding"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Нет достаточно измеренных показателей в практической полосе.</div>{{end}}</div></details>
+      <details class="fold"><summary>Не вошло в сравнение</summary><div class="fold-body finding-list">{{range .Overview.Excluded}}<div class="finding"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Все доступные показатели вошли в сравнение.</div>{{end}}</div></details>
+    </div>
+    {{if .MathReportHref}}<p class="help-text"><a href="{{.MathReportHref}}#comparison-basis">Математический анализ → Основания сравнения</a></p>{{end}}
+  </section>
+
   <section id="problem-changes" class="panel problem-first-panel" data-problem-inbox>
     <div class="problem-verdict verdict-{{problemReportVerdict .Comparison.ProblemComparison.Summary}}">
-      <div><div class="eyebrow">Главный вывод</div><h2>{{problemReportHeadline .Comparison.ProblemComparison.Summary}}</h2><p>Проблемы сопоставлены между прогонами. Сначала показаны новые и усилившиеся.</p><p class="problem-analysis-boundary">Причина указана как факт только при прямом подтверждении. Иначе это место для проверки.</p></div>
+      <div><div class="eyebrow">Проблемы приложения</div><h2>{{problemReportHeadline .Comparison.ProblemComparison.Summary}}</h2>{{if or (eq .Comparison.Scope.Comparability "full") (eq .Comparison.Scope.Comparability "partial")}}<p>Показаны переходы проблем внутри сопоставленной части сценария.</p>{{else}}<p>Показаны наблюдения из двух записей без утверждений о появлении или устранении проблем.</p>{{end}}<p class="problem-analysis-boundary">Причина указана как факт только при прямом подтверждении. Иначе это место для проверки.</p></div>
       <div class="problem-verdict-counts"><span class="sev-critical">{{.Comparison.ProblemComparison.Summary.Critical}}<small>критичный приоритет</small></span><span class="sev-high">{{.Comparison.ProblemComparison.Summary.High}}<small>высокий приоритет</small></span><span class="sev-medium">{{.Comparison.ProblemComparison.Summary.Medium}}<small>средний приоритет</small></span><span class="sev-low">{{.Comparison.ProblemComparison.Summary.Low}}<small>низкий приоритет</small></span></div>
     </div>
     <div class="analysis-intro problem-priority-method"><strong>Индекс приоритета расследования: от 0 до 100.</strong> Чем выше число, тем раньше стоит изучить проблему. Это не вероятность ошибки. Расчёт раскрыт в карточке.</div>
-    {{range .Comparison.CohortWarnings}}<p class="warning"><strong>Сопоставимость ограничена.</strong> {{.}}</p>{{end}}
     {{$primaryCoverage := primaryCategoryCoverage .Comparison.Candidate.CategoryCoverage}}
     {{if $primaryCoverage}}<div class="problem-coverage-grid">{{range $primaryCoverage}}<button type="button" class="problem-coverage-card coverage-{{.Status}} coverage-severity-{{.WorstSeverity}}" data-problem-category-button="{{.Category}}" data-tip="{{problemCategoryLabel .Category}}. {{.Explanation}}" aria-pressed="false"><span>{{problemCategoryLabel .Category}}</span><strong>{{problemCoverageStatusLabel .Status}}</strong><small>{{ruCount .FindingCount "проблема" "проблемы" "проблем"}}</small><em>{{.Explanation}}</em></button>{{end}}</div>{{end}}
     {{with hiddenCoverageSummary .Comparison.Candidate.CategoryCoverage}}{{if $.MathReportHref}}<p class="coverage-hidden-summary"><a href="{{$.MathReportHref}}#data-quality">Методика охвата категорий и техническая справка</a></p>{{end}}{{end}}
@@ -100,8 +121,6 @@
       </div>
       <span class="pill">база → проверяемый прогон</span>
     </div>
-    {{range .Comparison.CohortWarnings}}<p class="warning">{{.}}</p>{{end}}
-    {{range .Comparison.ExposureWarnings}}<p class="warning">{{.}}</p>{{end}}
     <div class="compare-pair-grid">
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Задержка верхних 5% HTTP-запросов" "95% запросов завершились не дольше этого значения. Рост показывает ухудшение самых медленных сетевых запросов."}}</div>
@@ -115,7 +134,7 @@
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.MemoryCount 0}}{{.Comparison.Baseline.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Проверяемый</span><strong>{{if gt .Comparison.Candidate.MemoryCount 0}}{{.Comparison.Candidate.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div></div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.MemoryCount 0}}{{dataSize .Comparison.Baseline.MemoryMaxKB}}{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Проверяемый</span><strong>{{if gt .Comparison.Candidate.MemoryCount 0}}{{dataSize .Comparison.Candidate.MemoryMaxKB}}{{else}}нет данных{{end}}</strong></div></div>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">

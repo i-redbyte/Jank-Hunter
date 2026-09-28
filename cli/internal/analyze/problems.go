@@ -301,73 +301,77 @@ func buildProblemReportWithLambdaCaptures(
 }
 
 func CompareProblems(baseline, candidate Summary, cohortsComparable bool) ProblemComparison {
+	return compareProblemsWithAliases(baseline, candidate, cohortsComparable, nil)
+}
+
+func compareProblemsWithAliases(baseline, candidate Summary, cohortsComparable bool, aliases *ProblemAliases) ProblemComparison {
 	changedTiming := scheduledTimingTransitions(baseline.AsyncAnalysis, candidate.AsyncAnalysis)
 	baselineProblems := problemIncidentsOrFindings(baseline)
 	candidateProblems := problemIncidentsOrFindings(candidate)
-	before := make(map[string]ProblemFinding, len(baselineProblems))
-	after := make(map[string]ProblemFinding, len(candidateProblems))
-	for _, finding := range baselineProblems {
-		before[finding.Fingerprint] = finding
-	}
-	for _, finding := range candidateProblems {
-		after[finding.Fingerprint] = finding
-	}
-	keys := make([]string, 0, len(before)+len(after))
-	seen := map[string]struct{}{}
-	for key := range before {
-		seen[key] = struct{}{}
-		keys = append(keys, key)
-	}
-	for key := range after {
-		if _, ok := seen[key]; !ok {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	deltas := make([]ProblemDelta, 0, len(keys))
-	current := make([]ProblemFinding, 0, len(after))
-	for _, key := range keys {
-		baselineFinding, hasBaseline := before[key]
-		candidateFinding, hasCandidate := after[key]
-		delta := ProblemDelta{Fingerprint: key, Comparable: cohortsComparable}
-		switch {
-		case !hasBaseline:
-			delta.Status = "new"
-			candidateFinding.Status = "new"
-		case !hasCandidate:
-			delta.Status = "resolved"
-			baselineFinding.Status = "resolved"
-		case candidateFinding.InvestigationPriority >= baselineFinding.InvestigationPriority+10 || problemSeverityRank(candidateFinding.Severity) > problemSeverityRank(baselineFinding.Severity):
-			delta.Status = "regressed"
-			candidateFinding.Status = "regressed"
-		case candidateFinding.InvestigationPriority <= baselineFinding.InvestigationPriority-10 || problemSeverityRank(candidateFinding.Severity) < problemSeverityRank(baselineFinding.Severity):
-			delta.Status = "improved"
-			candidateFinding.Status = "improved"
-		default:
-			delta.Status = "persistent"
-			candidateFinding.Status = "persistent"
-		}
-		if !cohortsComparable {
-			delta.Note = "Состав прогонов различается; статус показан как наблюдаемое изменение, но не является доказанной регрессией."
-		}
-		if queueFindingUsesChangedTiming(baselineFinding, changedTiming) || queueFindingUsesChangedTiming(candidateFinding, changedTiming) {
-			delta.Comparable = false
-			delta.Status = "not_comparable"
-			baselineFinding.Status = "not_comparable"
-			candidateFinding.Status = "not_comparable"
-			if delta.Note != "" {
-				delta.Note += " "
+	scope := buildComparisonScope(baseline, candidate)
+	problemEligibility := eligibilityForDomain(scope.Metrics, DomainProblem)
+	groups := semanticProblemGroupsWithAliases(baselineProblems, candidateProblems, aliases)
+	deltas := make([]ProblemDelta, 0, len(groups))
+	current := make([]ProblemFinding, 0, len(candidateProblems))
+	for _, group := range groups {
+		before, after := problemGroupPrimary(group.baseline), problemGroupPrimary(group.candidate)
+		delta := ProblemDelta{Fingerprint: problemGroupFingerprint(group, before, after), Baseline: before, Candidate: after, BaselineChildren: group.baseline, CandidateChildren: group.candidate, Change: ChangeInsufficientData}
+		if delta.Fingerprint == "" {
+			if after != nil {
+				delta.Fingerprint = after.Fingerprint
+			} else if before != nil {
+				delta.Fingerprint = before.Fingerprint
 			}
-			delta.Note += "Старый wait_ms мог включать заданную задержку. После разделения задержки и опоздания изменение проблемы очереди не сравнивается."
 		}
-		if hasBaseline {
-			copy := baselineFinding
-			delta.Baseline = &copy
+		category := ""
+		target := before
+		if target == nil {
+			target = after
 		}
-		if hasCandidate {
-			copy := candidateFinding
-			delta.Candidate = &copy
-			current = append(current, candidateFinding)
+		if target != nil {
+			category = target.Category
+		}
+		legacyTiming := before != nil && queueFindingUsesChangedTiming(*before, changedTiming) || after != nil && queueFindingUsesChangedTiming(*after, changedTiming)
+		switch {
+		case group.ambiguous:
+			delta.Observation, delta.Status = ObservationAmbiguousMatch, string(ObservationAmbiguousMatch)
+		case legacyTiming:
+			delta.Observation, delta.Status = ObservationMeasurementUnavailable, "not_comparable"
+			delta.Note = "Старый wait_ms мог включать заданную задержку. После разделения задержки и опоздания изменение проблемы очереди не сравнивается."
+		case scope.Comparability == ScenarioNone:
+			delta.Observation, delta.Status = ObservationTargetNotExercised, string(ObservationTargetNotExercised)
+		case !cohortsComparable || problemEligibility.State != EligibilityEligible || !problemGroupDetectorCompatible(group.baseline, group.candidate) && before != nil && after != nil || !problemCategoryMeasured(baseline, category) || !problemCategoryMeasured(candidate, category):
+			delta.Observation, delta.Status = ObservationMeasurementUnavailable, string(ObservationMeasurementUnavailable)
+		case target == nil || !problemTargetExercised(*target, baseline, candidate, scope):
+			delta.Observation, delta.Status = ObservationTargetNotExercised, string(ObservationTargetNotExercised)
+		case before == nil:
+			delta.Observation, delta.Status, delta.Comparable = ObservationObservedOnlyAfter, string(ObservationObservedOnlyAfter), true
+		case after == nil:
+			delta.Observation, delta.Status, delta.Comparable = ObservationNotObservedAfter, string(ObservationNotObservedAfter), true
+			if problemAbsencePassesUpperBound(*before, baseline, candidate, scope) {
+				delta.Change, delta.Status = ChangeImproved, string(ChangeImproved)
+				delta.Note = "Проблема не наблюдалась; односторонняя 95% верхняя граница частоты ниже исходной наблюдаемой частоты при сопоставимом объёме выполненной работы."
+			}
+		default:
+			delta.Observation, delta.Comparable = ObservationBoth, true
+			effect := problemEffect(before, after)
+			delta.Change = effect.Change
+			switch effect.Change {
+			case ChangeImproved, ChangeRegressed:
+				delta.Status = string(effect.Change)
+			default:
+				delta.Status = "persistent"
+			}
+		}
+		delta.Evidence, delta.Confidence = comparisonEvidenceLevel(baseline, candidate)
+		if after != nil {
+			after.Status = delta.Status
+			current = append(current, *after)
+			delta.Candidate = after
+		}
+		if before != nil {
+			before.Status = delta.Status
+			delta.Baseline = before
 		}
 		deltas = append(deltas, delta)
 	}

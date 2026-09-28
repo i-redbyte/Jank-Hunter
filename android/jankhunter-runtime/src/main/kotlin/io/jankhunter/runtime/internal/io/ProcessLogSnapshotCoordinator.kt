@@ -156,7 +156,7 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                 broadcastPermission,
             )
             val local = captureLocalBefore(deadlineNs) ?: return null
-            results[self.id] = SnapshotResponse(local.capturedAtMs, local.logPaths)
+            results[self.id] = SnapshotResponse(local.capturedAtMs, local.logPaths, limits = local.logByteLimits)
             var nextParticipantCheckNs = System.nanoTime() + PARTICIPANT_RECHECK_NS
             while (true) {
                 val nowNs = System.nanoTime()
@@ -227,16 +227,21 @@ internal class ProcessLogSnapshotCoordinator private constructor(
     private fun combine(responses: Collection<SnapshotResponse>): JankHunterLogSnapshot {
         val pathCount = responses.sumOf { response -> response.paths.size.toLong() }
         if (pathCount > MAX_PATHS) throw IOException("Too many Jank Hunter snapshot paths")
-        val paths = responses.asSequence()
-            .flatMap { response -> response.paths.asSequence() }
-            .distinct()
-            .sorted()
-            .toList()
+        val frontiers = sortedMapOf<String, Long>()
+        for (response in responses) {
+            response.paths.forEachIndexed { index, path ->
+                val limit = response.limits.getOrElse(index) { -1L }
+                val previous = frontiers.put(path, limit)
+                if (previous != null && previous != limit) throw IOException("Conflicting process snapshot frontiers")
+            }
+        }
+        val paths = frontiers.keys.toList()
         val capturedAtMs = responses.maxOfOrNull(SnapshotResponse::capturedAtMs) ?: 0L
         val earliestAtMs = responses.minOfOrNull(SnapshotResponse::capturedAtMs) ?: capturedAtMs
         return JankHunterLogSnapshot(
             capturedAtMs = capturedAtMs,
             logPaths = paths,
+            logByteLimits = frontiers.values.toList(),
             processCount = responses.size,
             captureSkewMs = (capturedAtMs - earliestAtMs).coerceAtLeast(0L),
         )
@@ -338,16 +343,17 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                 val paths = snapshot?.logPaths.orEmpty()
                 require(paths.size <= MAX_PATHS) { "Too many Jank Hunter snapshot paths" }
                 output.writeInt(paths.size)
-                paths.forEach { path ->
+                paths.forEachIndexed { index, path ->
                     val bytes = path.toByteArray(StandardCharsets.UTF_8)
                     require(bytes.isNotEmpty() && bytes.size <= MAX_PATH_BYTES) {
                         "Jank Hunter snapshot path must contain 1..$MAX_PATH_BYTES UTF-8 bytes"
                     }
-                    require(body.size() + Int.SIZE_BYTES + bytes.size + Int.SIZE_BYTES <= MAX_RESPONSE_BYTES) {
+                    require(body.size() + Int.SIZE_BYTES + bytes.size + Long.SIZE_BYTES + Int.SIZE_BYTES <= MAX_RESPONSE_BYTES) {
                         "Jank Hunter snapshot response is too large"
                     }
                     output.writeInt(bytes.size)
                     output.write(bytes)
+                    output.writeLong(snapshot?.logByteLimits?.getOrElse(index) { -1L } ?: -1L)
                 }
             }
             val payload = body.toByteArray()
@@ -384,13 +390,17 @@ internal class ProcessLogSnapshotCoordinator private constructor(
                     throw IOException("Invalid Jank Hunter snapshot path count")
                 }
                 val paths = ArrayList<String>(count)
+                val limits = ArrayList<Long>(count)
                 repeat(count) {
                     val length = input.readInt()
                     if (length !in 1..MAX_PATH_BYTES) throw IOException("Invalid Jank Hunter snapshot path")
                     paths += String(ByteArray(length).also(input::readFully), StandardCharsets.UTF_8)
+                    val limit = input.readLong()
+                    if (limit < -1L) throw IOException("Invalid Jank Hunter snapshot frontier")
+                    limits += limit
                 }
                 if (input.available() != 0) throw IOException("Trailing Jank Hunter snapshot response bytes")
-                return SnapshotResponse(capturedAtMs, paths, succeeded)
+                return SnapshotResponse(capturedAtMs, paths, succeeded, limits)
             }
         }
 
@@ -470,7 +480,7 @@ internal class ProcessLogSnapshotCoordinator private constructor(
         private const val EXCHANGE_LOCK_FILE = ".jh-snapshot-exchange.lock"
         private const val RESPONSE_THREAD_NAME = "JankHunterSnapshot"
         private const val CAPTURE_THREAD_NAME = "JankHunterSnapshotCapture"
-        private const val SCHEMA = 1
+        private const val SCHEMA = 2
         private const val TOKEN_HEX_LENGTH = 32
         private const val MAX_PATHS = 16_384
         private const val MAX_PATH_BYTES = 64 * 1024
@@ -488,6 +498,7 @@ internal class ProcessLogSnapshotCoordinator private constructor(
         val capturedAtMs: Long,
         val paths: List<String>,
         val succeeded: Boolean = true,
+        val limits: List<Long> = emptyList(),
     )
 
     internal data class DeadlineResult<T>(val completed: Boolean, val value: T?)

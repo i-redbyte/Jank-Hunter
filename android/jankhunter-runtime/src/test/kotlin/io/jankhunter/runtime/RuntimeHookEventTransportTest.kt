@@ -61,7 +61,7 @@ class RuntimeHookEventTransportTest {
 
             assertEquals(1L, transport.acceptedForTest())
             assertEquals(1L, transport.emittedForTest())
-            val file = directory.listFiles { candidate -> candidate.extension == "jhlog" }.orEmpty().single()
+            val file = directory.walkTopDown().single { candidate -> candidate.isFile && candidate.extension == "jhlog" }
             val decoded = decodedChunks(file.readBytes())
             assertTrue(
                 "stable symbol tokens were not embedded",

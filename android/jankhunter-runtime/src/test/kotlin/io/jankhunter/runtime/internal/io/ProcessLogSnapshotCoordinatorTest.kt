@@ -22,6 +22,7 @@ class ProcessLogSnapshotCoordinatorTest {
             logPaths = listOf("/data/a.jhlog", "/data/process-remote.jhlog"),
             processCount = 2,
             captureSkewMs = 3L,
+            logByteLimits = listOf(1024L, 4096L),
         )
 
         val decoded = ProcessLogSnapshotCoordinator.decodeResponse(
@@ -31,6 +32,7 @@ class ProcessLogSnapshotCoordinatorTest {
         assertTrue(decoded.succeeded)
         assertEquals(42L, decoded.capturedAtMs)
         assertEquals(snapshot.logPaths, decoded.paths)
+        assertEquals(snapshot.logByteLimits, decoded.limits)
     }
 
     @Test

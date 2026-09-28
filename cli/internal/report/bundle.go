@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/atomicfile"
 )
 
@@ -67,11 +68,7 @@ const bundledPageBridge = `<script>
     if (!anchor || window.parent === window) return;
     var href = anchor.getAttribute("href") || "";
     if (!href) return;
-    if (href.charAt(0) === "#") {
-      event.preventDefault();
-      scrollToFragment(href);
-      return;
-    }
+    if (href.charAt(0) === "#") return;
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return;
     event.preventDefault();
     window.parent.postMessage({type: "jankhunter-report:navigate", href: href}, "*");
@@ -80,6 +77,10 @@ const bundledPageBridge = `<script>
 </script>`
 
 func WriteBundle(path string, pages []BundlePage) error {
+	return writeBundle(path, pages, nil)
+}
+
+func writeBundle(path string, pages []BundlePage, snapshot *analyze.ComparisonSnapshotDocument) error {
 	manifest, err := encodeBundlePages(pages)
 	if err != nil {
 		return err
@@ -93,6 +94,27 @@ func WriteBundle(path string, pages []BundlePage) error {
 		}
 		if _, err := io.WriteString(file, "</script>\n"); err != nil {
 			return fmt.Errorf("close report page manifest: %w", err)
+		}
+		if snapshot != nil {
+			payload, err := json.Marshal(snapshot)
+			if err != nil {
+				return fmt.Errorf("encode comparison snapshot: %w", err)
+			}
+			if len(payload) > comparisonSnapshotSizeLimit {
+				return fmt.Errorf("comparison snapshot exceeds %d bytes", comparisonSnapshotSizeLimit)
+			}
+			if _, err := fmt.Fprintf(file, `<script id="%s" type="application/json">`, comparisonSnapshotElementID); err != nil {
+				return fmt.Errorf("write comparison snapshot header: %w", err)
+			}
+			if err := writeAll(file, payload); err != nil {
+				return fmt.Errorf("write comparison snapshot: %w", err)
+			}
+			if _, err := io.WriteString(file, "\n"); err != nil {
+				return fmt.Errorf("terminate comparison snapshot: %w", err)
+			}
+			if _, err := io.WriteString(file, "</script>\n"); err != nil {
+				return fmt.Errorf("close comparison snapshot: %w", err)
+			}
 		}
 		for index, page := range pages {
 			if _, err := fmt.Fprintf(
@@ -360,27 +382,27 @@ const singleHTMLBundlePrefix = `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Jank Hunter · отчет</title>
   <style>
-    :root { color-scheme: dark; --shell-forest: #006400; --shell-attention: #FF4500; --shell-paper: #FFFFE0; --shell-critical: #8B0000; --shell-danger: #DC143C; --shell-medium: #FF8A3D; --shell-low: #F4D35E; --shell-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif; --shell-bg: #071107; --shell-panel: #102014; --shell-line: rgba(255, 255, 224, .22); --shell-text: var(--shell-paper); --shell-muted: #c4c4ae; --shell-rail: var(--shell-paper); --shell-rail-text: #102017; --shell-active: var(--shell-forest); --shell-space-2: .809rem; --shell-space-3: 1.309rem; --shell-space-4: 2.118rem; }
+    :root { color-scheme: dark; --shell-forest: #006400; --shell-attention: #FF4500; --shell-critical: #FF8A95; --shell-danger: #FF6B7A; --shell-medium: #FF8A3D; --shell-locator: #5BC0EB; --shell-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif; --shell-bg: #071107; --shell-panel: #102014; --shell-line: rgba(230, 238, 232, .16); --shell-text: #f4f1e8; --shell-muted: #b8c0b7; --shell-rail: #0D1A11; --shell-rail-text: var(--shell-text); --shell-active: #145A1F; --shell-space-2: .809rem; --shell-space-3: 1.309rem; --shell-space-4: 2.118rem; }
     * { min-width: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--shell-bg); color: var(--shell-text); font-family: var(--shell-font-ui); font-synthesis: none; text-rendering: optimizeLegibility; }
     button, input, select, textarea { font: inherit; }
     .report-shell { width: 100%; height: 100%; display: grid; grid-template-columns: clamp(210px, 16.18vw, 260px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-    .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: var(--shell-space-4) var(--shell-space-3); color: var(--shell-rail-text); background: var(--shell-rail); border-right: 3px solid var(--shell-low); z-index: 2; }
-    .report-brand { flex: 0 0 auto; padding: 0 0 var(--shell-space-3); border-bottom: 1px solid rgba(0, 100, 0, .28); font-family: var(--shell-font-ui); font-size: 13px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; overflow-wrap: anywhere; }
-    .report-logo { display: block; width: 100%; max-width: 184px; height: auto; max-height: 114px; object-fit: contain; object-position: left center; }
+    .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: var(--shell-space-4) var(--shell-space-3); color: var(--shell-rail-text); background: var(--shell-rail); border-right: 1px solid var(--shell-line); z-index: 2; }
+    .report-brand { flex: 0 0 auto; padding: 0 0 var(--shell-space-3); border-bottom: 1px solid var(--shell-line); font-family: var(--shell-font-ui); font-size: 13px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; overflow-wrap: anywhere; }
+    .report-logo { display: block; width: 100%; max-width: 184px; height: auto; max-height: 114px; object-fit: contain; object-position: left center; filter: brightness(0) invert(1); opacity: .92; }
     .report-tabs { display: grid; gap: var(--shell-space-2); min-width: 0; margin-top: var(--shell-space-3); }
-    .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 0 .5rem; color: rgba(16, 32, 23, .66); font-family: var(--shell-font-ui); font-size: 11px; font-weight: 650; letter-spacing: .08em; }
-    .report-tab { width: 100%; min-width: 0; appearance: none; border: 1px solid transparent; border-radius: 6px; padding: var(--shell-space-2); background: transparent; color: rgba(16, 32, 23, .78); font-weight: 500; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease; }
-    .report-tab:hover, .report-tab:focus-visible { color: var(--shell-rail-text); background: rgba(0, 100, 0, .10); border-color: rgba(0, 100, 0, .24); outline: 2px solid transparent; }
-    .report-tab:focus-visible { border-color: var(--shell-attention); }
-    .report-tab[aria-selected="true"] { color: var(--shell-text); background: var(--shell-active); border-color: var(--shell-active); box-shadow: inset 3px 0 var(--shell-low), inset -3px 0 var(--shell-low); }
+    .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 0 .5rem; color: var(--shell-muted); font-family: var(--shell-font-ui); font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+    .report-tab { width: 100%; min-width: 0; appearance: none; border: 1px solid transparent; border-radius: 6px; padding: var(--shell-space-2); background: transparent; color: var(--shell-muted); font-weight: 500; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease; }
+    .report-tab:hover, .report-tab:focus-visible { color: var(--shell-rail-text); background: rgba(20, 90, 31, .28); border-color: var(--shell-line); outline: 2px solid transparent; }
+    .report-tab:focus-visible { border-color: var(--shell-locator); }
+    .report-tab[aria-selected="true"] { color: var(--shell-text); background: var(--shell-active); border-color: rgba(255, 255, 255, .08); }
     .report-frames { position: relative; min-width: 0; min-height: 0; background: var(--shell-bg); }
     .report-frame { display: none; width: 100%; height: 100%; border: 0; background: var(--shell-bg); }
     .report-frame.active { display: block; }
     .report-error { display: grid; place-items: center; height: 100%; padding: 24px; color: var(--shell-muted); text-align: center; }
     @media (max-width: 820px) {
       .report-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-      .report-toolbar { padding: var(--shell-space-3); border-right: 0; border-bottom: 3px solid var(--shell-low); }
+      .report-toolbar { padding: var(--shell-space-3); border-right: 0; border-bottom: 1px solid var(--shell-line); }
       .report-brand { display: flex; align-items: center; justify-content: center; padding: 0 0 14px; }
       .report-logo { width: 132px; max-height: 80px; }
       .report-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: var(--shell-space-2); }

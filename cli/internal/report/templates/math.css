@@ -5,7 +5,7 @@
   box-shadow: 0 14px 36px rgba(0,0,0,0.22);
 }
 .math-page .panel {
-  scroll-margin-top: 116px;
+  scroll-margin-top: var(--report-anchor-offset, 116px);
 }
 .math-page .section-status {
   display: inline-flex;
@@ -33,7 +33,7 @@
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 16px;
 }
-.section-overview-heading { scroll-margin-top: 110px; }
+.section-overview-heading { scroll-margin-top: var(--report-anchor-offset, 110px); }
 .section-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
@@ -1033,7 +1033,7 @@
     flex: 0 0 auto;
     white-space: nowrap;
   }
-  .math-page .panel { scroll-margin-top: 72px; }
+  .math-page .panel { scroll-margin-top: var(--report-anchor-offset, 72px); }
   .math-page .math-summary { grid-template-columns: 1fr; }
   .section-overview-grid { grid-template-columns: 1fr; }
   .timeline-grid { grid-template-columns: 1fr; }

@@ -6,6 +6,10 @@ import (
 
 type operationAnalysisAccumulator struct {
 	header                    jhlog.SegmentHeader
+	profileOwners             map[operationGroupKey]*operationProfileAggregate
+	profiles                  map[operationProfileKey]*operationProfileAggregate
+	droppedProfileSamples     uint64
+	invalidProfileSamples     uint64
 	active                    map[operationInstanceKey]*activeOperation
 	ignoredActive             map[operationInstanceKey]struct{}
 	freeActive                []*activeOperation
@@ -81,7 +85,8 @@ func (a *operationAnalysisAccumulator) recordLifecycle(
 	switch operation.Phase {
 	case jhlog.OperationPhaseStarted:
 		a.started++
-		if _, exists := a.active[key]; exists {
+		if previous, exists := a.active[key]; exists {
+			previous.profileValid = false
 			a.duplicateStart++
 			return
 		}
@@ -98,6 +103,7 @@ func (a *operationAnalysisAccumulator) recordLifecycle(
 		}
 		name := attrValue(jhlog.ResolveSymbol(dict, operation.NameRef))
 		active := a.acquireActive()
+		active.profileStepIndex = -1
 		active.key = key
 		active.parentID = operation.ParentID
 		active.group = operationGroupKey{name: name, kind: operationKindName(operation.Kind), screen: attrValue(screen)}
@@ -106,7 +112,11 @@ func (a *operationAnalysisAccumulator) recordLifecycle(
 		active.budgetUS = operation.BudgetUS
 		active.included = containsFilter(screen, filter.ScreenContains)
 		active.setAttributes(dict, operation.Attributes)
+		active.profileRun = a.header.RunID
+		active.profileProcessName = a.header.ProcessName
+		active.profileValid = profileSymbolsKnown(dict, operation)
 		a.active[key] = active
+		a.startProfileStage(active)
 	case jhlog.OperationPhaseFinished:
 		active := a.active[key]
 		if active == nil {
@@ -136,7 +146,9 @@ func (a *operationAnalysisAccumulator) recordLifecycle(
 			operation.ParentID != active.parentID || operation.BudgetUS != active.budgetUS ||
 			!active.attributesEqual(dict, operation.Attributes) {
 			a.inconsistentLifecycle++
+			active.profileValid = false
 		}
+		a.finishProfileStage(active, operation)
 		a.complete(active, operation)
 		delete(a.active, key)
 		a.recycleActive(active)
@@ -218,6 +230,16 @@ func (a *operationAnalysisAccumulator) recycleActive(active *activeOperation) {
 	active.inclusive = operationSignals{}
 	active.database = operationDatabaseSignals{}
 	active.included = false
+	active.profileValid = false
+	active.profileRun = jhlog.ID128{}
+	active.profileProcessName = ""
+	active.profileAggregate = nil
+	clear(active.profileSteps)
+	active.profileSteps = active.profileSteps[:0]
+	active.profileDigest = 0
+	active.profilePendingStages = 0
+	active.profileStageRegistered = false
+	active.profileStepIndex = -1
 	a.freeActive = append(a.freeActive, active)
 }
 
@@ -229,6 +251,7 @@ func (a *operationAnalysisAccumulator) complete(active *activeOperation, finish 
 		var retained bool
 		aggregate, retained = boundedOperationAggregateFor(a.operations, active.group, operationGroupLimit)
 		if !retained {
+			a.recordProfile(active, finish, durationMS, nil)
 			a.droppedOperationSamples++
 			a.retainIncident(operationIncident(active, finish, durationMS))
 			a.rememberCompletedContext(active, nil, nil)
@@ -236,6 +259,7 @@ func (a *operationAnalysisAccumulator) complete(active *activeOperation, finish 
 			a.rollUpToParent(active, durationMS)
 			return
 		}
+		a.recordProfile(active, finish, durationMS, aggregate)
 		aggregate.add(
 			durationMS, finish.DurationUS, active.budgetUS, finish.Outcome, active.inclusive, active.database,
 		)
@@ -269,11 +293,12 @@ func (a *operationAnalysisAccumulator) rememberCompletedContext(
 	slotAggregate *operationAggregate,
 ) {
 	context := completedOperationContext{
-		parentID:      active.parentID,
-		name:          active.group.name,
-		included:      active.included,
-		aggregate:     aggregate,
-		slotAggregate: slotAggregate,
+		parentID:         active.parentID,
+		name:             active.group.name,
+		included:         active.included,
+		aggregate:        aggregate,
+		slotAggregate:    slotAggregate,
+		profileAggregate: active.profileAggregate,
 	}
 	if a.completedContexts.put(active.key, context) {
 		a.completedContextEvictions++

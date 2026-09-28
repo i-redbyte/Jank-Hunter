@@ -10,8 +10,26 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
+type ComparisonOptions struct {
+	ProblemAliases    *ProblemAliases
+	IdentityMigration *IdentityMigration
+}
+
 func Compare(baseline, candidate Summary) Comparison {
-	comparison := Comparison{Baseline: baseline, Candidate: candidate}
+	return CompareWithOptions(baseline, candidate, ComparisonOptions{})
+}
+
+func CompareWithOptions(baseline, candidate Summary, options ComparisonOptions) Comparison {
+	scopeBaseline := baseline
+	scopeBaseline.OperationAnalysis = migratedBaselineAnalysis(baseline.OperationAnalysis, options.IdentityMigration)
+	scope := buildComparisonScope(scopeBaseline, candidate)
+	comparison := Comparison{SchemaVersion: ComparisonSchemaVersion, Baseline: baseline, Candidate: candidate, Scope: scope, Outcome: scope.Outcome}
+	if options.ProblemAliases != nil {
+		comparison.ProblemAliasesSHA256 = options.ProblemAliases.SHA256
+	}
+	if options.IdentityMigration != nil {
+		comparison.IdentityMigrationSHA256 = options.IdentityMigration.SHA256
+	}
 	confidence := confidence(baseline, candidate)
 	environmentSamples := uint64(min(AcquisitionEvidenceFor(baseline).IndependentGroups, AcquisitionEvidenceFor(candidate).IndependentGroups))
 	baselineLogSpam := totalLogSpam(baseline)
@@ -59,7 +77,23 @@ func Compare(baseline, candidate Summary) Comparison {
 		comparison.QualityWarnings = append(comparison.QualityWarnings, "Android Components/IPC: "+comparison.AndroidComponents.Note)
 	}
 	comparison.Warnings = append(append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...), comparison.ExposureWarnings...)
-	comparison.ProblemComparison = CompareProblems(baseline, candidate, len(comparison.CohortWarnings) == 0)
+	problemAliases := options.ProblemAliases
+	if migrated := problemAliasesFromMigration(options.IdentityMigration); migrated != nil {
+		problemAliases = migrated
+	}
+	comparison.ProblemComparison = compareProblemsWithAliases(baseline, candidate, true, problemAliases)
+	if scope.Comparability == ScenarioFull || scope.Comparability == ScenarioPartial {
+		var outcome comparisonOutcome
+		for _, change := range comparison.Scope.Changes {
+			outcome.add(change.Change)
+		}
+		for _, delta := range comparison.ProblemComparison.Deltas {
+			if delta.Comparable {
+				outcome.add(delta.Change)
+			}
+		}
+		comparison.Outcome = outcome.change()
+	}
 	return comparison
 }
 

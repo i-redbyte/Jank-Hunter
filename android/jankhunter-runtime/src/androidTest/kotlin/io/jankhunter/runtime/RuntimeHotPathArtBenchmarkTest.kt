@@ -9,6 +9,7 @@ import androidx.metrics.performance.FrameData
 import androidx.metrics.performance.JankStats
 import io.jankhunter.runtime.integration.JankHunterJankStats
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
+import io.jankhunter.runtime.internal.io.ProcessRecordingSession
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.LogQualityCounters
 import io.jankhunter.runtime.internal.io.QualityCounterId
@@ -43,8 +44,15 @@ class RuntimeHotPathArtBenchmarkTest {
         for (onMain in booleanArrayOf(true, false)) {
             val directory = File(instrumentation.targetContext.cacheDir, "art-writer-$label-$onMain")
             val config = JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000L)
-                .metricAggregationEnabled(true).metricAggregationWindowMs(60_000L).build()
-            val writer = AsyncLogWriterFactory().open(directory, config, "instrumentation")
+                .metricAggregationEnabled(true).metricAggregationWindowMs(60_000L)
+                .apply {
+                    if (arguments.getString("jankhunterHostStoragePolicy") == "true") {
+                        storagePolicy(JankHunterStoragePolicy(directory, 64L shl 20, 128L shl 20,
+                            setOf("jhlog", "hprof"), setOf("hprof"), 32_768, true))
+                    }
+                }.build()
+            val recording = if (arguments.getString("jankhunterProcessRecording") == "true") ProcessRecordingSession() else null
+            val writer = AsyncLogWriterFactory(recording = recording).open(directory, config, "instrumentation")
             val graph = RuntimeComponentGraph(nowMs = { 1L }, nowUs = { 1L })
             val scheduler = RuntimeMaintenanceScheduler()
             graph.state.config = config
@@ -82,6 +90,7 @@ class RuntimeHotPathArtBenchmarkTest {
                 scheduler.shutdown(1_000L)
                 graph.metrics.reset()
                 writer.close(5_000L)
+                recording?.close()
                 directory.deleteRecursively()
             }
         }

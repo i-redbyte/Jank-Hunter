@@ -25,7 +25,19 @@ func (lifecycle *mathStallLifecycle) stream(path string, symbols *mathSymbolReso
 }
 
 func (lifecycle *mathStallLifecycle) streamWithResult(path string, symbols *mathSymbolResolver, consume jhlog.EventHandler) (jhlog.StreamResult, error) {
-	return jhlog.StreamFileWithResult(path, func(event jhlog.Event, dict map[uint64]string) error {
+	return lifecycle.streamUsing(func(handle jhlog.EventHandler) (jhlog.StreamResult, error) {
+		return jhlog.StreamFileWithResult(path, handle)
+	}, symbols, consume)
+}
+
+func (lifecycle *mathStallLifecycle) streamInputWithResult(input analyze.SessionInput, symbols *mathSymbolResolver, consume jhlog.EventHandler) (jhlog.StreamResult, error) {
+	return lifecycle.streamUsing(func(handle jhlog.EventHandler) (jhlog.StreamResult, error) {
+		return jhlog.StreamFileSegment(input.Path, input.Segment, handle)
+	}, symbols, consume)
+}
+
+func (lifecycle *mathStallLifecycle) streamUsing(stream func(jhlog.EventHandler) (jhlog.StreamResult, error), symbols *mathSymbolResolver, consume jhlog.EventHandler) (jhlog.StreamResult, error) {
+	return stream(func(event jhlog.Event, dict map[uint64]string) error {
 		if event.Stall == nil || event.Stall.IncidentID == 0 {
 			return consume(event, dict)
 		}

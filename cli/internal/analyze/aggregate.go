@@ -73,7 +73,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 			collector.operationAnalysis.startLog(input.Header)
 		}
 		lastDictSize := 0
-		result, err := jhlog.StreamFileWithResult(input.Path, func(event jhlog.Event, dict map[uint64]string) error {
+		result, err := jhlog.StreamFileSegment(input.Path, input.Segment, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
 				collector.summary.Dictionary += len(dict) - lastDictSize
 				lastDictSize = len(dict)
@@ -117,8 +117,9 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 }
 
 type SessionInput struct {
-	Path   string
-	Header jhlog.SegmentHeader
+	Path    string
+	Header  jhlog.SegmentHeader
+	Segment jhlog.FileSegment
 }
 
 // OrderedSessionInputs keeps independent sessions in the caller's first-seen order while
@@ -129,22 +130,25 @@ func OrderedSessionInputs(paths []string) ([]SessionInput, error) {
 	groups := make([][]SessionInput, 0, len(paths))
 	groupBySession := make(map[jhlog.ID128]int, len(paths))
 	for _, path := range paths {
-		header, err := jhlog.ReadSessionHeader(path)
+		segments, err := jhlog.ReadFileSegments(path)
 		if err != nil {
 			return nil, err
 		}
-		input := SessionInput{Path: path, Header: header}
-		if header.SessionID.IsZero() {
-			groups = append(groups, []SessionInput{input})
-			continue
+		for _, segment := range segments {
+			header := segment.Header
+			input := SessionInput{Path: path, Header: header, Segment: segment}
+			if header.SessionID.IsZero() {
+				groups = append(groups, []SessionInput{input})
+				continue
+			}
+			groupIndex, exists := groupBySession[header.SessionID]
+			if !exists {
+				groupIndex = len(groups)
+				groupBySession[header.SessionID] = groupIndex
+				groups = append(groups, nil)
+			}
+			groups[groupIndex] = append(groups[groupIndex], input)
 		}
-		groupIndex, exists := groupBySession[header.SessionID]
-		if !exists {
-			groupIndex = len(groups)
-			groupBySession[header.SessionID] = groupIndex
-			groups = append(groups, nil)
-		}
-		groups[groupIndex] = append(groups[groupIndex], input)
 	}
 
 	ordered := make([]SessionInput, 0, len(paths))
@@ -1006,7 +1010,9 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 			}
 		}
 		last := chain.segments[len(chain.segments)-1]
-		if last.SegmentEnd != nil && last.SegmentEnd.Reason == jhlog.SegmentEndRotation {
+		// A process file is one captured byte frontier, not a set of separately supplied
+		// segment files. A sealed rotation at its frontier does not imply a missing file.
+		if !last.ProcessFile && last.SegmentEnd != nil && last.SegmentEnd.Reason == jhlog.SegmentEndRotation {
 			issues = append(issues, fmt.Sprintf(
 				"session %x обрывается после rotation segment %d; ожидаемый следующий сегмент не передан",
 				sessionID,

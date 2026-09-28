@@ -1,6 +1,8 @@
 package report
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -11,8 +13,8 @@ func TestReportStylesheetContainsCurrentTheme(t *testing.T) {
 		"--forest: #006400",
 		"--attention: #FF4500",
 		"--paper: #FFFFE0",
-		"--critical: #8B0000",
-		"--danger: #DC143C",
+		"--critical: #FF8A95",
+		"--danger: #FF6B7A",
 		"--medium: #FF8A3D",
 		"--low: #F4D35E",
 		"--locator: #5BC0EB",
@@ -43,7 +45,7 @@ func TestReportStylesheetContainsCurrentTheme(t *testing.T) {
 			t.Fatalf("stylesheet still contains removed purple color %q", forbidden)
 		}
 	}
-	assertCSSBlockContains(t, modernCSS, `.nav a.active {`, "border-inline: 3px solid var(--low)")
+	assertCSSBlockContains(t, modernCSS, `.nav a.active {`, "border-color: var(--locator)")
 	assertCSSBlockContains(t, modernCSS, `.problem-location-row {`, "border-inline-start: 4px solid var(--locator)")
 	assertCSSBlockContains(t, modernCSS, `.problem-verdict-counts > .sev-medium {`, "border-top-color: var(--medium)")
 	assertCSSBlockContains(t, modernCSS, `.problem-verdict-counts > .sev-low {`, "border-top-color: var(--low)")
@@ -53,6 +55,78 @@ func TestReportStylesheetContainsCurrentTheme(t *testing.T) {
 	if !strings.Contains(stylesheet, compactStylesheet(mathCSS)) {
 		t.Fatal("stylesheet is missing math CSS")
 	}
+}
+
+func TestReportSeverityTextColorsMeetWCAGContrast(t *testing.T) {
+	t.Parallel()
+
+	for name, foreground := range map[string]string{
+		"critical": "#FF8A95",
+		"danger":   "#FF6B7A",
+	} {
+		for surface, background := range map[string]string{
+			"panel":  "#102014",
+			"card":   "#18221B",
+			"subtle": "#111A14",
+		} {
+			if ratio := contrastRatio(foreground, background); ratio < 4.5 {
+				t.Fatalf("%s text contrast on %s = %.2f, want at least 4.5", name, surface, ratio)
+			}
+		}
+	}
+}
+
+func contrastRatio(foreground, background string) float64 {
+	foregroundLuminance := relativeLuminance(foreground)
+	backgroundLuminance := relativeLuminance(background)
+	return (max(foregroundLuminance, backgroundLuminance) + 0.05) /
+		(min(foregroundLuminance, backgroundLuminance) + 0.05)
+}
+
+func relativeLuminance(hex string) float64 {
+	component := func(offset int) float64 {
+		value, err := strconv.ParseUint(hex[offset:offset+2], 16, 8)
+		if err != nil {
+			panic(err)
+		}
+		normalized := float64(value) / 255
+		if normalized <= 0.04045 {
+			return normalized / 12.92
+		}
+		return math.Pow((normalized+0.055)/1.055, 2.4)
+	}
+	return 0.2126*component(1) + 0.7152*component(3) + 0.0722*component(5)
+}
+
+func TestReportVisualSystemUsesCalmSemanticSurfaces(t *testing.T) {
+	for _, marker := range []string{
+		"--surface-card:",
+		"--surface-subtle:",
+		"background: var(--surface-card) !important",
+		"outline: 2px solid var(--locator) !important",
+	} {
+		if !strings.Contains(modernCSS, marker) {
+			t.Fatalf("calm report surface contract is missing %q", marker)
+		}
+	}
+	for _, forbidden := range []string{
+		"border-inline: 3px solid var(--low)",
+		"background: rgba(212, 174, 100, .10) !important",
+		`.problem-location-row::before {\n  content: "!"`,
+		`.problem-impact h4::before,`,
+		`.status-note.sev-medium::before {`,
+	} {
+		if strings.Contains(modernCSS, forbidden) {
+			t.Fatalf("report still uses warning decoration %q for neutral content", forbidden)
+		}
+	}
+	for _, marker := range []string{"display: flex", "flex-wrap: wrap", "margin-bottom: 0"} {
+		assertCSSBlockContains(t, modernCSS, `.executive-summary-grid {`, marker)
+	}
+	for _, marker := range []string{"display: inline-flex", "padding: 6px 10px"} {
+		assertCSSBlockContains(t, modernCSS, `.executive-summary-item {`, marker)
+	}
+	assertCSSBlockContains(t, modernCSS, `.executive-summary-item strong {`, "font-size: 16px")
 }
 
 func TestCompactStylesheetPreservesStringsAndSelectorBoundaries(t *testing.T) {

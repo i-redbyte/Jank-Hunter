@@ -13,7 +13,8 @@ import java.util.TimeZone
 
 /** Creates one physical JHLOG segment and owns all segment-opening policy. */
 internal class AsyncLogSessionFactory(
-    private val directory: File,
+    private val coordinationDirectory: File,
+    private val processDirectory: File,
     private val config: JankHunterConfig,
     private val processName: String,
     private val expectedProcesses: Set<String>,
@@ -22,6 +23,7 @@ internal class AsyncLogSessionFactory(
     private val quality: LogQualityCounters,
     private val logGrowthManager: LogGrowthManager?,
     private val buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
+    private val recording: ProcessRecordingSession? = null,
 ) {
     fun open(
         localDate: String,
@@ -36,7 +38,11 @@ internal class AsyncLogSessionFactory(
         storage: JankHunterBinaryStorage?,
     ): OpenedLogSession {
         val archiveLimit = effectiveArchiveLimitBytes(config, storage)
-        val physicalLimit = storage?.fileSizeLimitBytes
+        val policy = config.storagePolicy()
+        if (policy != null && !policy.allowsExtension("jhlog")) {
+            throw IOException("JHLOG collection is disabled by the host storage policy")
+        }
+        val physicalLimit = (policy?.fileSizeLimitBytes ?: storage?.fileSizeLimitBytes)
             ?.takeIf { limit -> limit < Long.MAX_VALUE }
             ?: 0L
         val exactAdmission = config.exactEventCollectionEnabled()
@@ -53,7 +59,7 @@ internal class AsyncLogSessionFactory(
         }
         val header = BinaryLogFileHeader(
             runId = runId,
-            processInstanceId = PROCESS_INSTANCE_ID,
+            processInstanceId = recording?.processInstanceId() ?: ProcessInstanceIdentity.id(),
             sessionId = sessionId,
             segmentIndex = segmentIndex,
             osPid = Process.myPid().toLong().coerceAtLeast(0L),
@@ -81,6 +87,21 @@ internal class AsyncLogSessionFactory(
         val logGrowth = logGrowthManager?.let { manager ->
             LogGrowthSessionBinding(manager, localDate, archiveLimit, baseStats)
         }
+        if (recording != null) {
+            val budget = openArchiveBudget(storage, runId, archiveLimit)
+            try {
+                return recording.openEpoch(
+                    coordinationDirectory, processDirectory, localDate, runId, dailySessionIndex, storage, physicalLimit,
+                    beforeFirstWrite = { budget?.claim(ProcessRecordingSession.MAGIC.size.toLong(), terminal = false) },
+                ) { output, remainingBytes ->
+                    BinaryLogWriter(output, dictionaryEntries, dictionaryValueBytes, header, quality,
+                        remainingBytes, logGrowth, budget, policy?.bufferSize ?: 32 * 1024)
+                }
+            } catch (error: Throwable) {
+                budget?.close()
+                throw error
+            }
+        }
         var attempts = 0
         var minimumSegmentIndex = 0L
         while (attempts < MAX_OPEN_ATTEMPTS) {
@@ -89,7 +110,7 @@ internal class AsyncLogSessionFactory(
                 runCatching { binaryStorage.listFiles() }.getOrNull()
             }
             val allocation = SessionLogAllocator.reserve(
-                directory = directory,
+                directory = coordinationDirectory,
                 localDate = localDate,
                 runId = runId,
                 dailySessionIndex = dailySessionIndex,
@@ -103,7 +124,8 @@ internal class AsyncLogSessionFactory(
             var binaryWriter: BinaryLogWriter? = null
             try {
                 if (storage == null) {
-                    val candidate = File(directory, allocation.fileName)
+                    ensureProcessDirectory()
+                    val candidate = File(processDirectory, allocation.fileName)
                     if (!candidate.createNewFile()) {
                         minimumSegmentIndex = nextSegmentIndex(allocation.segmentIndex)
                         allocation.close()
@@ -120,6 +142,7 @@ internal class AsyncLogSessionFactory(
                         physicalLimit,
                         logGrowth = logGrowth,
                         archiveBudget = archiveBudget,
+                        bufferSize = policy?.bufferSize ?: 32 * 1024,
                     )
                 } else {
                     val candidate = storage.openWriter(allocation.fileName)
@@ -140,6 +163,7 @@ internal class AsyncLogSessionFactory(
                         physicalLimit,
                         logGrowth,
                         archiveBudget,
+                        policy?.bufferSize ?: 32 * 1024,
                     )
                     protection = storage.protect(allocation.fileName)
                 }
@@ -166,20 +190,21 @@ internal class AsyncLogSessionFactory(
         runId: ByteArray,
         archiveLimit: Long,
     ): RunArchiveBudget? {
+        config.storagePolicy()?.let { return SessionStorageBudget.open(coordinationDirectory, it) }
         if (archiveLimit <= 0L || archiveLimit == Long.MAX_VALUE) return null
         val runIdHex = SessionLogName.runIdHex(runId)
-        fun paths(): List<String> = storage?.listFiles() ?: directory.listFiles { file -> file.isFile }
+        fun paths(): List<String> = storage?.listFiles() ?: processDirectory.listFiles { file -> file.isFile }
             .orEmpty()
             .map(File::getAbsolutePath)
         return RunArchiveBudget.open(
-            directory = directory,
+            directory = coordinationDirectory,
             runId = runIdHex,
             limitBytes = archiveLimit,
             actualArchiveBytes = { RunArchiveBudget.retainedJhlogBytes(paths()) },
             reclaimBytesTo = { targetBytes ->
-                val protectedPaths = SessionLogAllocator.activeLeases(directory).protectedPaths
+                val protectedPaths = SessionLogAllocator.activeLeases(coordinationDirectory).protectedPaths
                 val result = if (storage == null) {
-                    SessionLogRetention.enforce(directory, runIdHex, protectedPaths, targetBytes)
+                    SessionLogRetention.enforce(processDirectory, runIdHex, protectedPaths, targetBytes)
                 } else {
                     SessionLogRetention.enforce(storage, runIdHex, protectedPaths, targetBytes)
                 }
@@ -194,11 +219,15 @@ internal class AsyncLogSessionFactory(
         return current + 1L
     }
 
+    private fun ensureProcessDirectory() {
+        if (processDirectory.isDirectory) return
+        if (processDirectory.mkdirs() || processDirectory.isDirectory) return
+        throw IOException("Cannot create Jank Hunter process artifact directory: $processDirectory")
+    }
+
     companion object {
         private const val MAX_OPEN_ATTEMPTS = 1_024
         private const val PROCESS_SCOPE_FINGERPRINT_BYTES = 32
-        private val PROCESS_INSTANCE_ID = BinaryLogFileHeader.randomId()
-
         internal fun processScopeFingerprint(allowedProcesses: Set<String>): ByteArray {
             if (allowedProcesses.isEmpty()) return ByteArray(0)
             val digest = MessageDigest.getInstance("SHA-256")
@@ -217,6 +246,12 @@ internal class AsyncLogSessionFactory(
     }
 }
 
+internal object ProcessInstanceIdentity {
+    private val value = BinaryLogFileHeader.randomId()
+
+    fun id(): ByteArray = value.copyOf()
+}
+
 internal class OpenedLogSession(
     val allocation: SessionLogAllocator.Allocation,
     val writer: BinaryLogWriter,
@@ -227,6 +262,7 @@ internal fun effectiveArchiveLimitBytes(
     config: JankHunterConfig,
     storage: JankHunterBinaryStorage?,
 ): Long {
+    config.storagePolicy()?.let { return it.archivesSizeLimitBytes }
     val configured = config.sessionLogSizeLimitBytes()
     val storageLimit = storage?.archivesSizeLimitBytes?.takeIf { limit -> limit < Long.MAX_VALUE } ?: 0L
     if (configured <= 0L) return storageLimit

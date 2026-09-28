@@ -166,7 +166,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	if event.Operation != nil {
 		c.operationAnalysis.recordLifecycle(dict, event, c.currentAttrScreen, c.filter)
 	} else if event.Database == nil && event.DatabaseTransaction == nil && event.Stall == nil {
-		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner)
+		metricName := ""
+		if event.Metric != nil {
+			metricName = attrValue(jhlog.ResolveSymbol(dict, event.Metric.MetricRef))
+		}
+		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner, metricName)
 	}
 	switch {
 	case event.Session != nil:

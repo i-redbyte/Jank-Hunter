@@ -33,6 +33,7 @@ func TestGateRejectsUnknownAndNonNumericMetricConstraints(t *testing.T) {
 
 func TestGateExplicitZeroIsEnforcedAndOmittedLimitIsInactive(t *testing.T) {
 	comparison := Compare(Summary{HTTPCount: 5, HTTPP95MS: 100}, Summary{HTTPCount: 5, HTTPP95MS: 200})
+	comparison.Scope.Comparability = ScenarioFull
 	for _, body := range []string{
 		`{"metrics":{"HTTP p95":{"max_regression_abs":0}}}`,
 		`{"metrics":{"HTTP p95":{"max_regression_pct":0}}}`,
@@ -157,13 +158,16 @@ func TestGateZeroAndOmittedLimitsSurviveJSONRoundTrip(t *testing.T) {
 func TestGateAbsoluteLimitCanMeasureNewMetricAndUnchangedZero(t *testing.T) {
 	for _, candidate := range []uint64{0, 100} {
 		comparison := Compare(Summary{HTTPCount: 1}, Summary{HTTPCount: 1, HTTPP95MS: candidate})
+		comparison.Scope.Comparability = ScenarioFull
 		config := ThresholdConfig{Metrics: map[string]MetricThreshold{"HTTP p95": {MaxRegressionAbs: floatPointer(100)}}}
 		if result := EvaluateGate(comparison, config); result.Failed {
 			t.Fatalf("measured absolute delta refused: %+v", result)
 		}
 	}
 	config := ThresholdConfig{Metrics: map[string]MetricThreshold{"HTTP p95": {MaxRegressionPct: floatPointer(0)}}}
-	if result := EvaluateGate(Compare(Summary{HTTPCount: 1}, Summary{HTTPCount: 1}), config); result.Failed {
+	comparison := Compare(Summary{HTTPCount: 1}, Summary{HTTPCount: 1})
+	comparison.Scope.Comparability = ScenarioFull
+	if result := EvaluateGate(comparison, config); result.Failed {
 		t.Fatal("unchanged measured zero is not a regression")
 	}
 }
@@ -197,6 +201,7 @@ func TestUIDTrafficGateRequiresExactDirectionAndAcceptsKnownZero(t *testing.T) {
 		summary := Summary{ContextCount: 2, CollectionQuality: CollectionQuality{Traffic: &traffic.Evidence{RX: traffic.DirectionEvidence{State: state, Intervals: 1}, TX: traffic.DirectionEvidence{State: "exact", Intervals: 1}}}}
 		for _, name := range []string{"UID RX delta", "UID TX delta"} {
 			comparison := Compare(summary, summary)
+			comparison.Scope.Comparability = ScenarioFull
 			config := ThresholdConfig{Metrics: map[string]MetricThreshold{name: {MaxRegressionAbs: floatPointer(0)}}}
 			got := EvaluateGate(comparison, config)
 			wantFailed := name == "UID RX delta" && state != "exact"

@@ -4,6 +4,7 @@ import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.internal.concurrent.CoalescedWakeSignal
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Semaphore
 import java.util.concurrent.locks.ReentrantLock
 
@@ -71,7 +72,7 @@ internal class AsyncWriterConsumer(
     @JvmField
     var completedSequence = 0L
     @JvmField
-    val segmentLedger = SessionSegmentLedger(directory, processName)
+    var segmentLedger: SessionSegmentLedger? = null
     @JvmField
     var writer: BinaryLogWriter? = null
     @JvmField
@@ -82,6 +83,11 @@ internal class AsyncWriterConsumer(
     var runLocalDate = sessionLocalDate
     @JvmField
     var dailySessionIndex = 0L
+    @JvmField
+    @Volatile
+    var sessionArtifactScope: SessionArtifactPath.Scope? = null
+    @JvmField
+    val sessionArtifactScopeReady = CountDownLatch(1)
     @JvmField
     val sessionId = BinaryLogFileHeader.randomId()
     @JvmField

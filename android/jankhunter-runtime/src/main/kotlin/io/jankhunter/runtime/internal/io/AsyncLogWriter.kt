@@ -44,6 +44,7 @@ internal class AsyncLogWriter internal constructor(
     private val onTerminalStop: AsyncWriterTerminalObserver,
     private val workerThreadFactory: (Runnable, String) -> Thread = ::Thread,
     private val buildIdentity: RuntimeBuildIdentity = RuntimeBuildIdentity.Unknown(RuntimeBuildIdentity.Reason.MISSING),
+    private val recording: ProcessRecordingSession? = null,
 ) : OperationEventSink {
     @Volatile
     private var logGrowthManager: LogGrowthManager? = null
@@ -1019,22 +1020,43 @@ internal class AsyncLogWriter internal constructor(
         storage: JankHunterBinaryStorage? = consumer.binaryStorage,
         terminalOnFailure: Boolean = true,
     ): Boolean {
-        val activeSessionFactory = sessionFactory ?: createSessionFactory().also { sessionFactory = it }
         return try {
             if (consumer.runCohortLease == null) {
+                try {
+                    LegacyFlatArtifactCleaner.clean(directory)
+                } catch (error: Throwable) {
+                    if (error.isFatal()) throw error
+                }
                 val authoritativeStoragePaths = storage?.let { activeStorage ->
                     runCatching { activeStorage.listFiles() }.getOrNull()
                 }
-                consumer.runCohortLease = ProcessRunCohort.join(
+                consumer.runCohortLease = (recording?.join(directory, sessionLocalDate, sessionStartMs) ?: ProcessRunCohort.join(
                     directory,
                     sessionLocalDate,
                     authoritativeStoragePaths,
-                ).also { lease ->
+                    sessionStartMs,
+                )).also { lease ->
                     consumer.runId = lease.runId()
                     consumer.runLocalDate = lease.localDate()
                     consumer.dailySessionIndex = lease.dailySessionIndex()
+                    consumer.sessionArtifactScope = SessionArtifactPath.scope(
+                        root = directory,
+                        startedAtUnixMs = lease.startedAtUnixMs(),
+                        dailySessionIndex = lease.dailySessionIndex(),
+                        runId = consumer.runId,
+                        processInstanceId = recording?.processInstanceId() ?: ProcessInstanceIdentity.id(),
+                    )
+                    consumer.segmentLedger = recording?.ledger(
+                        checkNotNull(consumer.sessionArtifactScope).processDirectory, processName, directory,
+                    ) ?: SessionSegmentLedger(
+                        directory = checkNotNull(consumer.sessionArtifactScope).processDirectory,
+                        processName = processName,
+                        coordinationDirectory = directory,
+                    )
+                    consumer.sessionArtifactScopeReady.countDown()
                 }
             }
+            val activeSessionFactory = sessionFactory ?: createSessionFactory().also { sessionFactory = it }
             val opened = activeSessionFactory.open(
                 localDate = consumer.runLocalDate,
                 dailySessionIndex = consumer.dailySessionIndex,
@@ -1051,10 +1073,16 @@ internal class AsyncLogWriter internal constructor(
                 },
                 storage = storage,
             )
-            consumer.segmentLedger.register(opened, storage)
+            val protection = checkNotNull(consumer.segmentLedger).register(opened, storage)
+            recording?.adoptProtection(protection)
             consumer.binaryStorage = storage
             consumer.writer = opened.writer
             true
+        } catch (error: LogSizeLimitReachedException) {
+            if (terminalOnFailure) {
+                stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_SIZE_LIMIT, failure = error)
+            }
+            false
         } catch (error: StorageBudgetExhaustedException) {
             if (terminalOnFailure) {
                 stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_STORAGE_BUDGET, failure = error)
@@ -1072,8 +1100,31 @@ internal class AsyncLogWriter internal constructor(
 
     private fun createSessionFactory(): AsyncLogSessionFactory {
         logGrowthManager = prepareSession()
+        val artifactScope = checkNotNull(consumer.sessionArtifactScope)
+        try {
+            val result = SessionArchiveCoordinator.maintain(
+                directory, SessionLogName.runIdHex(consumer.runId), policy = config.storagePolicy(),
+            )
+            quality.add(QualityCounterId.SESSION_ARCHIVED_TOTAL, result.archived)
+            quality.add(QualityCounterId.SESSION_ARCHIVE_RECOVERED_TOTAL, result.recovered)
+            quality.add(QualityCounterId.SESSION_ARCHIVE_INCOMPLETE_TOTAL, result.incomplete)
+            val archiveBudgetBytes = if (config.storagePolicy() == null) config.sessionLogSizeLimitBytes() else 0L
+            if (archiveBudgetBytes > 0L) {
+                val retention = SessionArchiveRetention.enforce(directory, archiveBudgetBytes)
+                quality.add(QualityCounterId.ARCHIVE_EVICTED_RUN_TOTAL, retention.deletedArchives)
+                quality.add(QualityCounterId.ARCHIVE_EVICTED_BYTES_TOTAL, retention.deletedBytes)
+                quality.add(
+                    QualityCounterId.SESSION_ARCHIVE_INCOMPLETE_TOTAL,
+                    retention.failed + if (retention.ledgerWriteFailed) 1L else 0L,
+                )
+            }
+        } catch (error: Throwable) {
+            if (error.isFatal()) throw error
+            quality.add(QualityCounterId.SESSION_ARCHIVE_INCOMPLETE_TOTAL)
+        }
         return AsyncLogSessionFactory(
-            directory = directory,
+            coordinationDirectory = directory,
+            processDirectory = artifactScope.processDirectory,
             config = config,
             processName = processName,
             expectedProcesses = expectedProcesses,
@@ -1082,7 +1133,21 @@ internal class AsyncLogWriter internal constructor(
             quality = quality,
             logGrowthManager = logGrowthManager,
             buildIdentity = buildIdentity,
+            recording = recording,
         )
+    }
+
+    internal fun awaitSessionProcessDirectory(timeoutMs: Long): File? {
+        require(timeoutMs >= 0L) { "session artifact scope timeout must be non-negative" }
+        consumer.sessionArtifactScope?.let { scope -> return scope.processDirectory }
+        val ready = try {
+            consumer.sessionArtifactScopeReady.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!ready) return null
+        return consumer.sessionArtifactScope?.processDirectory
     }
 
     private fun hasPendingEvents(): Boolean = producer.eventLanes.hasEvents()
@@ -1128,7 +1193,7 @@ internal class AsyncLogWriter internal constructor(
                 return false
             } catch (error: LogSizeLimitReachedException) {
                 val madeProgress = event.remainingEventCount < remainingBeforeWrite
-                if (!madeProgress && rotatedWithoutProgress) {
+                if (recording != null || config.storagePolicy() != null || !madeProgress && rotatedWithoutProgress) {
                     stopAndDrain(event, QualityCounterId.REASON_SIZE_LIMIT, error)
                     try {
                         activeWriter.sealSizeLimit()
@@ -1181,9 +1246,10 @@ internal class AsyncLogWriter internal constructor(
         val previousStorage = consumer.binaryStorage
         return try {
             sealSegment(activeWriter)
-            val handoff = consumer.segmentLedger.prepareHandoff(target)
+            val segmentLedger = checkNotNull(consumer.segmentLedger)
+            val handoff = segmentLedger.prepareHandoff(target)
             if (!openSessionWriter(target, terminalOnFailure = false)) {
-                consumer.segmentLedger.rollbackHandoff(target, handoff)
+                segmentLedger.rollbackHandoff(target, handoff)
                 if (!openSessionWriter(previousStorage, terminalOnFailure = false)) {
                     stopAndDrain(
                         currentEvent = null,
@@ -1193,7 +1259,7 @@ internal class AsyncLogWriter internal constructor(
                 }
                 JankHunterStorageSwitchResult.FAILED
             } else {
-                consumer.segmentLedger.commitHandoff(handoff)
+                segmentLedger.commitHandoff(handoff)
                 JankHunterStorageSwitchResult.SWITCHED
             }
         } catch (error: Throwable) {
@@ -1214,11 +1280,12 @@ internal class AsyncLogWriter internal constructor(
         consumer.completedSegmentStats = sealedStats.copy(
             segmentRotationCount = saturatedAdd(sealedStats.segmentRotationCount, 1L),
         )
-        consumer.segmentLedger.seal(activeWriter.path, consumer.binaryStorage)
+        checkNotNull(consumer.segmentLedger).seal(activeWriter.path, consumer.binaryStorage)
         consumer.retention.enforce(activeWriter, consumer.binaryStorage, consumer.runId)
         if (consumer.writer === activeWriter) consumer.writer = null
         if (consumer.segmentIndex == Long.MAX_VALUE) throw IOException("Jank Hunter segment index exhausted")
         consumer.segmentIndex++
+        recording?.completeEpoch(activeWriter)
     }
 
     private fun processReadyControls() {
@@ -1242,12 +1309,16 @@ internal class AsyncLogWriter internal constructor(
             val snapshotSucceeded = if (switchSucceeded && request.sealSnapshot) {
                 val capturedAtMs = currentTimeMs.getAsLong().coerceAtLeast(0L)
                 val activeWriter = consumer.writer
-                if (activeWriter != null && rotateSegment(activeWriter)) {
-                    request.snapshot = LogSnapshotResult(
-                        capturedAtMs = capturedAtMs,
-                        logPaths = consumer.segmentLedger.completedPaths(),
-                    )
-                    true
+                if (activeWriter != null) {
+                    sealSegment(activeWriter)
+                    val paths = checkNotNull(consumer.segmentLedger).completedPaths()
+                    val limits = if (recording != null) paths.map { File(it).length() } else emptyList()
+                    if (openSessionWriter()) {
+                        request.snapshot = LogSnapshotResult(capturedAtMs, paths, limits)
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -1311,6 +1382,14 @@ internal class AsyncLogWriter internal constructor(
         reason: Int,
         failure: Throwable? = null,
     ) {
+        val storagePolicy = config.storagePolicy()
+        if (failure != null && storagePolicy != null) {
+            try {
+                SessionStorageBudget.recoverDiskFull(directory, storagePolicy, failure)
+            } catch (recoveryError: Throwable) {
+                if (recoveryError.isFatal()) throw recoveryError
+            }
+        }
         lifecycle.recordTermination(reason, failure)
         producer.admissionLock.withLock {
             stopAccepting()
@@ -1391,8 +1470,16 @@ internal class AsyncLogWriter internal constructor(
         try {
             if (activeWriter != null) consumer.retention.enforce(activeWriter, consumer.binaryStorage, consumer.runId)
         } finally {
-            consumer.segmentLedger.finish()
-            consumer.runCohortLease?.close()
+            if (recording != null && activeWriter != null) {
+                try {
+                    consumer.segmentLedger?.seal(activeWriter.path, consumer.binaryStorage)
+                } finally {
+                    recording.completeEpoch(activeWriter)
+                }
+            }
+            if (recording == null) consumer.segmentLedger?.finish()
+            consumer.segmentLedger = null
+            if (recording == null) consumer.runCohortLease?.close()
             consumer.runCohortLease = null
         }
     }

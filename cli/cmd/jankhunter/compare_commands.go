@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/atomicfile"
+	"github.com/i-redbyte/jank-hunter/cli/internal/comparisoninput"
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
@@ -24,6 +26,16 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	baselineReport, remaining, err := takeStringFlag(remaining, "baseline-report", "")
+	if err != nil {
+		return err
+	}
+	candidateReport, remaining, err := takeStringFlag(remaining, "candidate-report", "")
+	if err != nil {
+		return err
+	}
+	baselineReport = strings.TrimSpace(baselineReport)
+	candidateReport = strings.TrimSpace(candidateReport)
 	baselineMapping, remaining, err := takeStringFlag(remaining, "baseline-mapping", "")
 	if err != nil {
 		return err
@@ -71,6 +83,14 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	problemAliasesPath, remaining, err := takeStringFlag(remaining, "problem-aliases", "")
+	if err != nil {
+		return err
+	}
+	identityMigrationPath, remaining, err := takeStringFlag(remaining, "identity-migration", "")
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -78,29 +98,69 @@ func runCompare(args []string) error {
 	if err := rejectUnexpectedArgs(remaining); err != nil {
 		return err
 	}
-	baselinePaths, err := resolveLogComma(baselineRaw)
+	if strings.TrimSpace(baselineRaw) != "" && baselineReport != "" {
+		return fmt.Errorf("compare accepts only one baseline input: --baseline or --baseline-report")
+	}
+	if strings.TrimSpace(candidateRaw) != "" && candidateReport != "" {
+		return fmt.Errorf("compare accepts only one candidate input: --candidate or --candidate-report")
+	}
+	baselineInput, err := openLogComma(baselineRaw)
 	if err != nil {
 		return fmt.Errorf("resolve baseline logs: %w", err)
 	}
-	candidatePaths, err := resolveLogComma(candidateRaw)
+	defer baselineInput.Close()
+	candidateInput, err := openLogComma(candidateRaw)
 	if err != nil {
 		return fmt.Errorf("resolve candidate logs: %w", err)
 	}
-	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
-		return fmt.Errorf("compare needs --baseline and --candidate")
+	defer candidateInput.Close()
+	baselinePaths := baselineInput.Logs
+	candidatePaths := candidateInput.Logs
+	baselineHeap.resolvedDumps = baselineInput.HeapDumps
+	candidateHeap.resolvedDumps = candidateInput.HeapDumps
+	if (len(baselinePaths) == 0 && baselineReport == "") || (len(candidatePaths) == 0 && candidateReport == "") {
+		return fmt.Errorf("compare needs one baseline and one candidate input; use logs or an inspect HTML report")
 	}
-	if err := rejectOutputInputOverlap(out, []string{thresholdsPath}); err != nil {
+	if strings.TrimSpace(problemAliasesPath) != "" && strings.TrimSpace(identityMigrationPath) != "" {
+		return fmt.Errorf("compare accepts only one identity mapping: --identity-migration or --problem-aliases")
+	}
+	outputInputs := []string{thresholdsPath, problemAliasesPath, identityMigrationPath, baselineReport, candidateReport}
+	outputInputs = append(outputInputs, resolvedInputPaths(baselineInput)...)
+	outputInputs = append(outputInputs, resolvedInputPaths(candidateInput)...)
+	if err := rejectOutputInputOverlap(out, outputInputs); err != nil {
 		return err
 	}
 	gateConfig, err := analyze.LoadThresholdConfig(thresholdsPath)
 	if err != nil {
 		return err
 	}
+	problemAliases, err := analyze.LoadProblemAliases(problemAliasesPath)
+	if err != nil {
+		return err
+	}
+	identityMigration, err := analyze.LoadIdentityMigration(identityMigrationPath)
+	if err != nil {
+		return err
+	}
 	builder.outputPath = out
 	baselineHeap.outputPath = out
 	candidateHeap.outputPath = out
-	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
+	baselineInputs := resolvedInputPaths(baselineInput)
+	candidateInputs := resolvedInputPaths(candidateInput)
+	if baselineReport != "" {
+		baselineInputs = append(baselineInputs, baselineReport)
+	}
+	if candidateReport != "" {
+		candidateInputs = append(candidateInputs, candidateReport)
+	}
+	if err := rejectLogInputOverlap("baseline", baselineInputs, "candidate", candidateInputs); err != nil {
 		return err
+	}
+	if baselineReport != "" && (baselineMapping != "" || baselineArtifacts != "" || baselineHeap.dumpRaw != "" || baselineHeap.evidenceRaw != "") {
+		return fmt.Errorf("baseline artifact, mapping, and heap options cannot be applied to --baseline-report")
+	}
+	if candidateReport != "" && (candidateMapping != "" || candidateArtifacts != "" || candidateHeap.dumpRaw != "" || candidateHeap.evidenceRaw != "") {
+		return fmt.Errorf("candidate artifact, mapping, and heap options cannot be applied to --candidate-report")
 	}
 	if err := rejectComparisonHeapInputOverlap(baselineHeap, baselinePaths, candidateHeap, candidatePaths); err != nil {
 		return err
@@ -118,41 +178,55 @@ func runCompare(args []string) error {
 	if candidateArtifacts != "" {
 		candidateBuilder.artifactsDir = candidateArtifacts
 	}
-	baselineOptions, err := baselineBuilder.buildForLogs(baselinePaths)
-	if err != nil {
-		return err
+	var baselineOptions, candidateOptions analyze.Options
+	var baseline, candidate analyze.Summary
+	if baselineReport != "" {
+		baseline, err = comparisoninput.ReadComparisonSnapshot(baselineReport)
+	} else {
+		baselineOptions, err = baselineBuilder.buildForLogs(baselinePaths)
+		if err == nil {
+			baselineOptions, err = baselineHeap.apply("baseline", baselinePaths, baselineOptions)
+		}
+		if err == nil {
+			baseline, err = analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
+		}
 	}
-	candidateOptions, err := candidateBuilder.buildForLogs(candidatePaths)
 	if err != nil {
-		return err
+		return fmt.Errorf("load baseline input: %w", err)
 	}
-	baselineOptions, err = baselineHeap.apply("baseline", baselinePaths, baselineOptions)
-	if err != nil {
-		return err
+	if candidateReport != "" {
+		candidate, err = comparisoninput.ReadComparisonSnapshot(candidateReport)
+	} else {
+		candidateOptions, err = candidateBuilder.buildForLogs(candidatePaths)
+		if err == nil {
+			candidateOptions, err = candidateHeap.apply("candidate", candidatePaths, candidateOptions)
+		}
+		if err == nil {
+			candidate, err = analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
+		}
 	}
-	candidateOptions, err = candidateHeap.apply("candidate", candidatePaths, candidateOptions)
 	if err != nil {
-		return err
+		return fmt.Errorf("load candidate input: %w", err)
+	}
+	if err := analyze.ValidateIdentityMigration(identityMigration, baseline, candidate); err != nil {
+		return fmt.Errorf("validate identity migration: %w", err)
 	}
 	options := candidateOptions
-	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
-	if err != nil {
-		return err
+	if candidateReport != "" {
+		options = baselineOptions
 	}
-	candidate, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
-	if err != nil {
-		return err
-	}
-	comparison := analyze.Compare(baseline, candidate)
+	comparison := analyze.CompareWithOptions(baseline, candidate, analyze.ComparisonOptions{ProblemAliases: problemAliases, IdentityMigration: identityMigration})
+	gate := analyze.EvaluateGate(comparison, gateConfig)
 	if jsonOut {
-		if err := printJSON(comparison); err != nil {
+		if err := writeComparisonJSON(os.Stdout, comparison, gate); err != nil {
 			return err
 		}
 	} else if csvOut {
-		if err := writeComparisonCSV(os.Stdout, comparison); err != nil {
+		if err := writeComparisonCSV(os.Stdout, comparison, gate); err != nil {
 			return err
 		}
 	} else {
+		printComparisonScope(os.Stdout, comparison, gate, thresholdsPath != "")
 		for _, warning := range comparison.Warnings {
 			fmt.Printf("warning: %s\n", warning)
 		}
@@ -186,13 +260,18 @@ func runCompare(args []string) error {
 			PresentationMode:   presentation,
 			AnimatedBackground: animatedBackground,
 		}
-		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions, baseline)
-		if err != nil {
-			return err
+		var baselineReports, candidateReports []report.LogReport
+		if len(baselinePaths) > 0 {
+			baselineReports, err = buildLogReports("baseline", baselinePaths, baselineOptions, baseline)
+			if err != nil {
+				return err
+			}
 		}
-		candidateReports, err := buildLogReports("candidate", candidatePaths, candidateOptions, candidate)
-		if err != nil {
-			return err
+		if len(candidatePaths) > 0 {
+			candidateReports, err = buildLogReports("candidate", candidatePaths, candidateOptions, candidate)
+			if err != nil {
+				return err
+			}
 		}
 		if err := writeCompareReportSet(out, comparison, baselineReports, candidateReports, baselinePaths, candidatePaths, baselineOptions, candidateOptions, options, reportOptions); err != nil {
 			return err
@@ -202,12 +281,91 @@ func runCompare(args []string) error {
 		}
 	}
 	if thresholdsPath != "" {
-		result := analyze.EvaluateGate(comparison, gateConfig)
-		if result.Failed {
-			return gateError{failures: result.Failures}
+		if gate.Failed {
+			return gateError{failures: gate.Failures}
 		}
 	}
 	return nil
+}
+
+func printComparisonScope(writer io.Writer, comparison analyze.Comparison, gate analyze.GateResult, gateEnabled bool) {
+	scope := comparison.Scope
+	fmt.Fprintln(writer, comparisonOutcomeCLIText(comparison.Outcome, scope.Comparability))
+	fmt.Fprintln(writer, "Область:", comparisonScopeCLIText(scope))
+	fmt.Fprintf(writer, "result=%s scope=%s baseline=%s candidate=%s\n",
+		comparison.Outcome,
+		scope.Comparability,
+		comparisonCoverageText(scope.Baseline),
+		comparisonCoverageText(scope.Candidate),
+	)
+	for _, change := range scope.Changes {
+		fmt.Fprintf(writer, "scope metric=%q change=%s eligibility=%s evidence=%s confidence=%s before=%s after=%s reason=%s\n",
+			change.Name,
+			change.Change,
+			change.Eligibility.State,
+			change.Evidence,
+			change.Confidence,
+			optionalFloatText(change.Before),
+			optionalFloatText(change.After),
+			change.Eligibility.Reason,
+		)
+	}
+	if gateEnabled {
+		fmt.Fprintf(writer, "gate=%s\n", gate.Status)
+	}
+}
+
+func comparisonOutcomeCLIText(outcome analyze.ComparisonChange, comparability analyze.ScenarioComparability) string {
+	switch outcome {
+	case analyze.ChangeImproved:
+		if comparability == analyze.ScenarioPartial {
+			return "В сопоставленной части стало лучше"
+		}
+		return "Стало лучше"
+	case analyze.ChangeRegressed:
+		if comparability == analyze.ScenarioPartial {
+			return "В сопоставленной части стало хуже"
+		}
+		return "Стало хуже"
+	case analyze.ChangeUnchanged:
+		return "Заметных изменений не обнаружено"
+	case analyze.ChangeMixed:
+		return "Результат смешанный"
+	case analyze.ChangeNotComparable:
+		return "В этих записях разные сценарии"
+	default:
+		return "Пока недостаточно данных для общего вывода"
+	}
+}
+
+func comparisonScopeCLIText(scope analyze.ComparisonScope) string {
+	switch scope.Comparability {
+	case analyze.ScenarioFull:
+		return "сценарии сопоставлены полностью"
+	case analyze.ScenarioPartial:
+		if scope.CommonSubpathGroups > 0 && scope.ExactMatchGroups == 0 {
+			return fmt.Sprintf("найдена общая последовательность действий; база %s, проверяемый прогон %s; метрики целых сценариев не сравниваются", comparisonCoverageText(scope.Baseline), comparisonCoverageText(scope.Candidate))
+		}
+		if scope.CommonSubpathGroups > 0 {
+			return fmt.Sprintf("сопоставлена часть сценариев; база %s, проверяемый прогон %s; общих подпутей:%d", comparisonCoverageText(scope.Baseline), comparisonCoverageText(scope.Candidate), scope.CommonSubpathGroups)
+		}
+		return fmt.Sprintf("сопоставлена часть сценариев; база %s, проверяемый прогон %s", comparisonCoverageText(scope.Baseline), comparisonCoverageText(scope.Candidate))
+	case analyze.ScenarioNone:
+		return "общей части нет; запишите одинаковый сценарий и повторите сравнение"
+	default:
+		return "область неизвестна; добавьте метки сценария или используйте новые записи"
+	}
+}
+
+func comparisonCoverageText(coverage analyze.ScenarioCoverage) string {
+	duration := fmt.Sprintf("duration:%d/total:unknown", coverage.MatchedDurationMS)
+	if coverage.DurationKnown {
+		duration = fmt.Sprintf("duration:%d/%dms", coverage.MatchedDurationMS, coverage.TotalDurationMS)
+	}
+	if !coverage.TotalKnown {
+		return fmt.Sprintf("matched:%d/total:unknown %s", coverage.Matched, duration)
+	}
+	return fmt.Sprintf("matched:%d/total:%d %s", coverage.Matched, coverage.Total, duration)
 }
 
 func runScorecard(args []string) error {
@@ -238,21 +396,31 @@ func runScorecard(args []string) error {
 	if err := rejectUnexpectedArgs(remaining); err != nil {
 		return err
 	}
-	baselinePaths, err := resolveLogComma(baselineRaw)
+	baselineInput, err := openLogComma(baselineRaw)
 	if err != nil {
 		return fmt.Errorf("resolve baseline logs: %w", err)
 	}
-	candidatePaths, err := resolveLogComma(candidateRaw)
+	defer baselineInput.Close()
+	candidateInput, err := openLogComma(candidateRaw)
 	if err != nil {
 		return fmt.Errorf("resolve candidate logs: %w", err)
 	}
+	defer candidateInput.Close()
+	baselinePaths := baselineInput.Logs
+	candidatePaths := candidateInput.Logs
+	baselineHeap.resolvedDumps = baselineInput.HeapDumps
+	candidateHeap.resolvedDumps = candidateInput.HeapDumps
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("scorecard needs --baseline and --candidate")
+	}
+	outputInputs := append(resolvedInputPaths(baselineInput), resolvedInputPaths(candidateInput)...)
+	if err := rejectOutputInputOverlap(out, outputInputs); err != nil {
+		return err
 	}
 	builder.outputPath = out
 	baselineHeap.outputPath = out
 	candidateHeap.outputPath = out
-	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
+	if err := rejectLogInputOverlap("baseline", resolvedInputPaths(baselineInput), "candidate", resolvedInputPaths(candidateInput)); err != nil {
 		return err
 	}
 	if err := rejectComparisonHeapInputOverlap(baselineHeap, baselinePaths, candidateHeap, candidatePaths); err != nil {

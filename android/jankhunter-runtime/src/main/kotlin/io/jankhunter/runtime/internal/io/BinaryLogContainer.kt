@@ -44,26 +44,34 @@ internal class SequentialJhlogContainer private constructor(
     initialBytesWritten: Long,
     maxPhysicalBytes: Long,
     private val archiveBudget: RunArchiveBudget?,
+    bufferSize: Int,
 ) : BinaryLogContainer {
-    constructor(file: File, maxPhysicalBytes: Long, archiveBudget: RunArchiveBudget? = null) : this(
+    constructor(file: File, maxPhysicalBytes: Long, archiveBudget: RunArchiveBudget? = null, bufferSize: Int = IO_BUFFER_BYTES) : this(
         file = file,
         path = file.absolutePath,
         output = FileOutputStream(file, false),
         initialBytesWritten = 0L,
         maxPhysicalBytes = maxPhysicalBytes,
         archiveBudget = archiveBudget,
+        bufferSize = bufferSize,
     )
 
-    constructor(writer: JankHunterBinaryWriter, maxPhysicalBytes: Long, archiveBudget: RunArchiveBudget? = null) : this(
+    constructor(
+        writer: JankHunterBinaryWriter,
+        maxPhysicalBytes: Long,
+        archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = IO_BUFFER_BYTES,
+    ) : this(
         file = null,
         path = writer.path,
         output = ExternalBinaryOutputStream(writer),
         initialBytesWritten = writer.bytesWritten(),
         maxPhysicalBytes = maxPhysicalBytes,
         archiveBudget = archiveBudget,
+        bufferSize = bufferSize,
     )
 
-    private val output = BufferedOutputStream(output, IO_BUFFER_BYTES)
+    private val output = BufferedOutputStream(output, bufferSize)
     private val digest = MessageDigest.getInstance("SHA-256")
     private val physicalByteLimit = maxPhysicalBytes.takeIf { it > 0L } ?: Long.MAX_VALUE
     private val chunkHeader = ByteArray(Jhlog.CHUNK_HEADER_BYTES).also { header ->

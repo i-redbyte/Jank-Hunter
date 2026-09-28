@@ -9,6 +9,13 @@
     "chunk_magic_hex": "4a484331",
     "commit_magic_hex": "4a48434d"
   },
+  "process_recording": {
+    "magic_hex": "4a484c4f470d0a82010000",
+    "layout": "One process-lifetime file: magic followed by append-only complete JHLOG segments. Every segment has its own header, dictionaries, quality and SHA-256. FINAL chunk commits delimit segments; the last segment may be open or torn.",
+    "identity": "All segments carry the same RunID and ProcessInstanceID. SDK reconfiguration changes SessionID, not the physical file or application run. Snapshot rotation preserves the collector epoch and digest chain.",
+    "snapshot": "A captured process file is a bounded byte frontier. A sealed rotation at this frontier does not prove that a separate file is missing. Torn bytes remain explicit; coverage still requires collection-window evidence.",
+    "compatibility": "Raw JHLOG 5.x files remain readable. Readers that do not support the process marker reject it before reading any events. No manifest or per-epoch extraction is required."
+  },
   "readable_legacy_header_schemas": [2],
   "build_identity_contract": {
     "header_schema": 3,

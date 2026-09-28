@@ -12,8 +12,16 @@ import (
 )
 
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
+	if reportOptions.GeneratedAt == "" {
+		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
+	}
+	snapshot, err := analyze.NewComparisonSnapshot(summary, reportOptions.GeneratedAt)
+	if err != nil {
+		return fmt.Errorf("build inspect comparison snapshot: %w", err)
+	}
+	document := analyze.ComparisonSnapshotDocument{Schema: analyze.ComparisonSnapshotDocumentSchema, Kind: analyze.ComparisonSnapshotInspect, Snapshots: []analyze.ComparisonSnapshot{snapshot}}
 	reportOptions.TransientOutput = true
-	return writeSingleHTMLReport(out, func(renderPath string) error {
+	return writeSingleHTMLReport(out, document, func(renderPath string) error {
 		return writeInspectReportSetUsing(renderPath, summary, paths, options, reportOptions, inspectReportSetWriters{
 			primary: report.WriteInspectWithOptions,
 			math:    report.WriteMathInspectWithOptions,
@@ -99,6 +107,7 @@ func writeInspectReportSetUsing(
 	}
 	summary.Warnings = append(append([]string(nil), summary.Warnings...), generationWarnings...)
 	reportOptions.Links = links
+	reportOptions.SourcePaths = paths
 	return writers.primary(reportPaths.Main, summary, reportOptions)
 }
 
@@ -114,8 +123,20 @@ func writeCompareReportSet(
 	options analyze.Options,
 	reportOptions report.ReportOptions,
 ) error {
+	if reportOptions.GeneratedAt == "" {
+		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
+	}
+	baselineSnapshot, err := analyze.NewComparisonSnapshot(comparison.Baseline, reportOptions.GeneratedAt)
+	if err != nil {
+		return fmt.Errorf("build baseline comparison snapshot: %w", err)
+	}
+	candidateSnapshot, err := analyze.NewComparisonSnapshot(comparison.Candidate, reportOptions.GeneratedAt)
+	if err != nil {
+		return fmt.Errorf("build candidate comparison snapshot: %w", err)
+	}
+	document := analyze.ComparisonSnapshotDocument{Schema: analyze.ComparisonSnapshotDocumentSchema, Kind: analyze.ComparisonSnapshotCompare, Snapshots: []analyze.ComparisonSnapshot{baselineSnapshot, candidateSnapshot}}
 	reportOptions.TransientOutput = true
-	return writeSingleHTMLReport(out, func(renderPath string) error {
+	return writeSingleHTMLReport(out, document, func(renderPath string) error {
 		return writeCompareReportSetFiles(
 			renderPath,
 			comparison,
@@ -213,7 +234,7 @@ func writeCompareReportSetFiles(
 	return report.WriteCompareReportWithOptions(reportPaths.Main, comparison, baselineReports, candidateReports, reportOptions)
 }
 
-func writeSingleHTMLReport(out string, writePages func(string) error) error {
+func writeSingleHTMLReport(out string, snapshot analyze.ComparisonSnapshotDocument, writePages func(string) error) error {
 	temporaryDirectory, err := os.MkdirTemp("", "jankhunter-report-")
 	if err != nil {
 		return fmt.Errorf("create temporary report directory: %w", err)
@@ -228,7 +249,7 @@ func writeSingleHTMLReport(out string, writePages func(string) error) error {
 	if err != nil {
 		return err
 	}
-	if err := report.WriteBundle(out, pages); err != nil {
+	if err := report.WriteBundleWithComparisonSnapshot(out, pages, snapshot); err != nil {
 		return fmt.Errorf("write single HTML report: %w", err)
 	}
 	return nil

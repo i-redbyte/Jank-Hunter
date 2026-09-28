@@ -1106,6 +1106,9 @@ type DiagnosticCompletenessComponent struct {
 // and nested stage work. Correlated signals are attributed by the operation instance ID carried
 // directly by each event; they are evidence of overlap, not proof of causality.
 type OperationAnalysis struct {
+	Profiles                  []OperationProfile        `json:"profiles,omitempty"`
+	DroppedProfileSamples     uint64                    `json:"dropped_profile_samples,omitempty"`
+	InvalidProfileSamples     uint64                    `json:"invalid_profile_samples,omitempty"`
 	Started                   uint64                    `json:"started"`
 	Completed                 uint64                    `json:"completed"`
 	MissingFinish             uint64                    `json:"missing_finish"`
@@ -1151,6 +1154,9 @@ type OperationStats struct {
 	CorrelatedHTTP            uint64                            `json:"correlated_http"`
 	CorrelatedHTTPFailures    uint64                            `json:"correlated_http_failures"`
 	CorrelatedHTTPDurationMS  uint64                            `json:"correlated_http_duration_ms"`
+	CorrelatedHTTPRxBytes     uint64                            `json:"correlated_http_rx_bytes"`
+	CorrelatedHTTPTxBytes     uint64                            `json:"correlated_http_tx_bytes"`
+	CorrelatedHTTPBytesKnown  uint64                            `json:"correlated_http_bytes_known"`
 	CorrelatedWebSocket       uint64                            `json:"correlated_websocket"`
 	CorrelatedWebSocketErrors uint64                            `json:"correlated_websocket_errors"`
 	CorrelatedDatabase        uint64                            `json:"correlated_database"`
@@ -1171,6 +1177,9 @@ type OperationStats struct {
 	CorrelatedIO              uint64                            `json:"correlated_io"`
 	CorrelatedIODurationUS    uint64                            `json:"correlated_io_duration_us"`
 	CorrelatedIOBytes         uint64                            `json:"correlated_io_bytes"`
+	CorrelatedIOBytesKnown    uint64                            `json:"correlated_io_bytes_known"`
+	CorrelatedCPUSumX100      uint64                            `json:"correlated_cpu_sum_x100"`
+	CorrelatedCPUSamples      uint64                            `json:"correlated_cpu_samples"`
 	CorrelatedProblems        uint64                            `json:"correlated_problems"`
 	CorrelatedLogRecords      uint64                            `json:"correlated_log_records"`
 	CorrelatedRuntimeCalls    uint64                            `json:"correlated_runtime_calls"`
@@ -1369,6 +1378,7 @@ type Summary struct {
 	MemoryMaxKB              uint64
 	Retained                 uint64
 	Environment              RunEnvironment
+	AnalysisFilter           *Filter `json:"analysis_filter,omitempty"`
 	Warnings                 []string
 	CollectionSegments       []CollectionSegment
 	CollectionQuality        CollectionQuality
@@ -1679,17 +1689,22 @@ type Delta struct {
 }
 
 type Comparison struct {
-	Baseline          Summary
-	Candidate         Summary
-	Deltas            []Delta
-	Warnings          []string
-	CohortWarnings    []string
-	QualityWarnings   []string
-	ExposureWarnings  []string
-	Database          DatabaseComparison         `json:"database"`
-	AndroidComponents AndroidComponentComparison `json:"android_components"`
-	OperationDeltas   []OperationDelta           `json:"operation_deltas,omitempty"`
-	ProblemComparison ProblemComparison          `json:"problem_comparison"`
+	SchemaVersion           string           `json:"schema_version"`
+	ProblemAliasesSHA256    string           `json:"problem_aliases_sha256,omitempty"`
+	IdentityMigrationSHA256 string           `json:"identity_migration_sha256,omitempty"`
+	Outcome                 ComparisonChange `json:"outcome"`
+	Scope                   ComparisonScope  `json:"scope"`
+	Baseline                Summary
+	Candidate               Summary
+	Deltas                  []Delta
+	Warnings                []string
+	CohortWarnings          []string
+	QualityWarnings         []string
+	ExposureWarnings        []string
+	Database                DatabaseComparison         `json:"database"`
+	AndroidComponents       AndroidComponentComparison `json:"android_components"`
+	OperationDeltas         []OperationDelta           `json:"operation_deltas,omitempty"`
+	ProblemComparison       ProblemComparison          `json:"problem_comparison"`
 }
 
 type AndroidComponentComparison struct {
@@ -1786,22 +1801,29 @@ type ProblemComparison struct {
 }
 
 type ProblemDelta struct {
-	Fingerprint string          `json:"fingerprint"`
-	Status      string          `json:"status"`
-	Comparable  bool            `json:"comparable"`
-	Note        string          `json:"note,omitempty"`
-	Baseline    *ProblemFinding `json:"baseline,omitempty"`
-	Candidate   *ProblemFinding `json:"candidate,omitempty"`
+	Fingerprint       string               `json:"fingerprint"`
+	Status            string               `json:"status"`
+	Comparable        bool                 `json:"comparable"`
+	Note              string               `json:"note,omitempty"`
+	Baseline          *ProblemFinding      `json:"baseline,omitempty"`
+	Candidate         *ProblemFinding      `json:"candidate,omitempty"`
+	Observation       ProblemObservation   `json:"observation"`
+	Change            ComparisonChange     `json:"change"`
+	Evidence          ComparisonEvidence   `json:"evidence"`
+	Confidence        ComparisonConfidence `json:"confidence"`
+	BaselineChildren  []ProblemFinding     `json:"baseline_children,omitempty"`
+	CandidateChildren []ProblemFinding     `json:"candidate_children,omitempty"`
 }
 
 type ThresholdConfig struct {
-	MaxSeverity         string                        `json:"max_severity"`
-	MinConfidence       string                        `json:"min_confidence"`
-	RequireCleanCohorts bool                          `json:"require_clean_cohorts"`
-	Metrics             map[string]MetricThreshold    `json:"metrics"`
-	Leaks               LeakThreshold                 `json:"leaks"`
-	Problems            ProblemGateThreshold          `json:"problems"`
-	AndroidComponents   AndroidComponentGateThreshold `json:"android_components"`
+	MaxSeverity            string                        `json:"max_severity"`
+	MinConfidence          string                        `json:"min_confidence"`
+	RequireCleanCohorts    bool                          `json:"require_clean_cohorts"`
+	AllowPartialComparison bool                          `json:"allow_partial_comparison,omitempty"`
+	Metrics                map[string]MetricThreshold    `json:"metrics"`
+	Leaks                  LeakThreshold                 `json:"leaks"`
+	Problems               ProblemGateThreshold          `json:"problems"`
+	AndroidComponents      AndroidComponentGateThreshold `json:"android_components"`
 }
 
 type AndroidComponentGateThreshold struct {
@@ -1851,7 +1873,23 @@ type LeakThreshold struct {
 	RequireHeapForHigh bool `json:"require_heap_for_high"`
 }
 
+type GateStatus string
+
+const (
+	GateDisabled     GateStatus = "disabled"
+	GatePass         GateStatus = "pass"
+	GateFail         GateStatus = "fail"
+	GateInconclusive GateStatus = "inconclusive"
+)
+
+type GateCheck struct {
+	Status  GateStatus `json:"status"`
+	Message string     `json:"message,omitempty"`
+}
+
 type GateResult struct {
-	Failed   bool     `json:"failed"`
-	Failures []string `json:"failures"`
+	Status   GateStatus  `json:"status"`
+	Failed   bool        `json:"failed"`
+	Failures []string    `json:"failures"`
+	Checks   []GateCheck `json:"checks,omitempty"`
 }

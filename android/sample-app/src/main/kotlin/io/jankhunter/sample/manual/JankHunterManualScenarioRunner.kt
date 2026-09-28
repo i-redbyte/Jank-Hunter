@@ -1,11 +1,12 @@
 package io.jankhunter.sample.manual
 
-import io.jankhunter.runtime.JankHunterTelemetry
-
 import io.jankhunter.sample.LeakCanaryBridge
 import io.jankhunter.sample.R
 import io.jankhunter.sample.SampleApplication
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.JankHunterOperationAttributes
+import io.jankhunter.runtime.JankHunterScenario
+import io.jankhunter.runtime.JankHunterTelemetry
 
 internal class JankHunterManualScenarioRunner(
     private val application: SampleApplication,
@@ -15,6 +16,11 @@ internal class JankHunterManualScenarioRunner(
     private val runtime = ManualRuntimeScenarios(text, stateSink)
     private val performance = ManualPerformanceScenarios(application, text, stateSink)
     private val retention = ManualRetentionScenarios(application, text, stateSink)
+    private val guidedComparisonScenario = JankHunterScenario.create(
+        id = "sample.guided.comparison",
+        revision = "1",
+        conditions = JankHunterOperationAttributes.of("flow", "manual"),
+    )
     private val handlers = mergeHandlers(
         runtime.handlers,
         performance.handlers,
@@ -51,20 +57,24 @@ internal class JankHunterManualScenarioRunner(
 
     private fun runCleanBaseline() {
         application.resetScenario()
-        JankHunterTelemetry.traceOperation("sample.guided.baseline.clean_probe") {
-            performance.recordCustomMetrics()
-            retention.recordCleanObject()
+        guidedComparisonScenario.trace {
+            guidedComparisonScenario.traceStage("probe") {
+                performance.recordCustomMetrics()
+                retention.recordCleanObject()
+            }
         }
         JankHunter.flush()
         status(text(R.string.status_baseline_recorded))
     }
 
     private fun runNoisyCandidate(activityReference: Any) {
-        JankHunterTelemetry.traceOperation("sample.guided.candidate.regression_pack") {
-            performance.recordUiStall()
-            performance.recordMemoryPressure()
-            retention.recordCacheEntries()
-            retention.recordLeakRegressionBurst(activityReference)
+        guidedComparisonScenario.trace {
+            guidedComparisonScenario.traceStage("probe") {
+                performance.recordUiStall()
+                performance.recordMemoryPressure()
+                retention.recordCacheEntries()
+                retention.recordLeakRegressionBurst(activityReference)
+            }
         }
         JankHunter.flush()
         status(text(R.string.status_candidate_recorded))
