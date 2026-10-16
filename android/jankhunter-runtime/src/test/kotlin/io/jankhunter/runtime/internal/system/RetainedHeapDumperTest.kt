@@ -14,6 +14,102 @@ import org.junit.Test
 
 class RetainedHeapDumperTest {
     @Test
+    fun emptyDumpIsNeverPublished() {
+        val directory = tempDir()
+        try {
+            val dumper = RetainedHeapDumper(directory, minIntervalMs = 0L, maxDumpCount = 1, dumpHprof = {})
+            assertTrue(dumper.maybeDump("Owner", null, 1L, 1L) is RetainedHeapDumper.Result.Failed)
+            assertTrue(directory.listFiles().isNullOrEmpty())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun managedDumpBecomesVisibleOnlyAfterDumpWriterCompletes() {
+        val directory = tempDir()
+        var visibleWhileWriting = false
+        val dumper = RetainedHeapDumper(
+            directory, minIntervalMs = 0L, maxDumpCount = 1,
+            clock = { 1_000L }, wallClock = { 42L },
+            dumpHprof = { path ->
+                File(path).writeText("partial heap")
+                visibleWhileWriting = directory.listFiles().orEmpty().any {
+                    RetainedHeapDumper.isManagedHeapDumpFileName(it.name)
+                }
+                File(path).appendText(" complete")
+            },
+        )
+        try {
+            val result = dumper.maybeDump("Owner", null, 1_000L, 1L)
+            assertTrue(result is RetainedHeapDumper.Result.Dumped)
+            assertFalse("An export must not discover a heap that is still being written", visibleWhileWriting)
+            val dump = (result as RetainedHeapDumper.Result.Dumped).file
+            assertEquals("partial heap complete", dump.readText())
+            assertEquals(listOf(dump), directory.listFiles().orEmpty().toList())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun standardDumpUsesCurrentSessionProcessDirectory() {
+        val root = tempDir()
+        val processDirectory = File(root, "session/process")
+        val fallback = File(root, "legacy-flat")
+        val dumper = RetainedHeapDumper(
+            directory = fallback,
+            minIntervalMs = 0L,
+            maxDumpCount = 1,
+            clock = { 1_000L },
+            wallClock = { 42L },
+            dumpHprof = { path -> File(path).writeText("hprof") },
+            managedDirectoryProvider = { processDirectory },
+        )
+        try {
+            val result = dumper.maybeDump("Owner", null, 1_000L, 1L)
+
+            assertTrue(result is RetainedHeapDumper.Result.Dumped)
+            assertTrue((result as RetainedHeapDumper.Result.Dumped).file.parentFile == processDirectory)
+            assertFalse(fallback.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unavailableSessionScopeFailsWithoutWritingLegacyFlatDumpAndCanRetry() {
+        val root = tempDir()
+        val fallback = File(root, "legacy-flat")
+        val processDirectory = File(root, "session/process")
+        var scopeAvailable = false
+        val dumper = RetainedHeapDumper(
+            directory = fallback,
+            minIntervalMs = 60_000L,
+            maxDumpCount = 1,
+            clock = { 1_000L },
+            wallClock = { 42L },
+            dumpHprof = { path -> File(path).writeText("hprof") },
+            managedDirectoryProvider = {
+                check(scopeAvailable) { "session scope unavailable" }
+                processDirectory
+            },
+        )
+        try {
+            assertEquals(
+                RetainedHeapDumper.Result.Failed("IllegalStateException"),
+                dumper.maybeDump("Owner", null, 1_000L, 1L),
+            )
+            assertFalse(fallback.exists())
+
+            scopeAvailable = true
+            assertTrue(dumper.maybeDump("Owner", null, 1_000L, 1L) is RetainedHeapDumper.Result.Dumped)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun fatalDumpFailureIsPropagatedAndReleasesTheReservation() {
         val directory = tempDir()
         val fatal = OutOfMemoryError("synthetic dump failure")
@@ -181,8 +277,9 @@ class RetainedHeapDumperTest {
         assertEquals(5_000L, dumped.ageMs)
         assertEquals(2L, dumped.count)
         assertEquals(1, paths.size)
-        assertTrue(File(paths.single()).exists())
-        assertTrue(paths.single().contains("retained-42-com.example.Leaky_Activity-1.hprof"))
+        assertFalse(File(paths.single()).exists())
+        assertEquals("retained-42-com.example.Leaky_Activity-1.hprof", dumped.file.name)
+        assertEquals("hprof", dumped.file.readText())
     }
 
     @Test
@@ -285,7 +382,10 @@ class RetainedHeapDumperTest {
 
         assertTrue(result is RetainedHeapDumper.Result.Dumped)
         assertEquals(1, paths.size)
-        assertTrue(paths.single().contains("retained-42-B-1.hprof"))
+        assertFalse(File(paths.single()).exists())
+        val dumped = result as RetainedHeapDumper.Result.Dumped
+        assertEquals("retained-42-B-1.hprof", dumped.file.name)
+        assertEquals("hprof", dumped.file.readText())
     }
 
     private fun tempDir(): File = Files.createTempDirectory("jankhunter-heap-dumper-test").toFile()

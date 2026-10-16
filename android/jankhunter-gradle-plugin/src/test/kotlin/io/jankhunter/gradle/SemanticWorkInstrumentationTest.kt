@@ -45,6 +45,7 @@ class SemanticWorkInstrumentationTest {
         assertEquals(1, calls["doWork"]?.workerInstanceIds)
         assertEquals(1, calls["doWork"]?.workerEnters)
         assertEquals(2, calls["doWork"]?.workerExits)
+        assertEquals(1, calls["doWork"]?.workerFailures)
         assertEquals(0, calls["doWork"]?.workerOutcomeClassifications)
         assertEquals(3, calls["doWork"]?.workerOutcomeTypeChecks)
         assertTrue(calls["doWork"]?.stringConstants?.contains("example.SyncWorker.doWork") == true)
@@ -98,6 +99,7 @@ class SemanticWorkInstrumentationTest {
                             if (methodName == "workerInstanceId") stats.workerInstanceIds++
                             if (methodName == "enterWorker") stats.workerEnters++
                             if (methodName == "exitWorker") stats.workerExits++
+                            if (methodName == "workerFailure") stats.workerFailures++
                             if (methodName == "classifyWorkerOutcome") stats.workerOutcomeClassifications++
                         }
 
@@ -111,9 +113,10 @@ class SemanticWorkInstrumentationTest {
             },
             0,
         )
-        return calls.filterValues { calls ->
-            calls.enters > 0 || calls.exits > 0 || calls.workerInstanceIds > 0 ||
-                calls.workerEnters > 0 || calls.workerExits > 0 || calls.workerOutcomeTypeChecks > 0
+        return calls.filterValues { observed ->
+            observed.enters > 0 || observed.exits > 0 || observed.workerInstanceIds > 0 ||
+            observed.workerEnters > 0 || observed.workerExits > 0 || observed.workerFailures > 0 ||
+                observed.workerOutcomeTypeChecks > 0
         }
     }
 
@@ -212,6 +215,7 @@ class SemanticWorkInstrumentationTest {
         var enters: Int = 0,
         var exits: Int = 0,
         var workerInstanceIds: Int = 0,
+        var workerFailures: Int = 0,
         var workerEnters: Int = 0,
         var workerExits: Int = 0,
         var workerOutcomeClassifications: Int = 0,

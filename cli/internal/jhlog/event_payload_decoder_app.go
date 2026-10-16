@@ -41,6 +41,9 @@ func decodeHTTPPayload(
 	if values[8] > math.MaxUint16 {
 		return fmt.Errorf("HTTP status code %d exceeds %d", values[8], uint64(math.MaxUint16))
 	}
+	if err := validatePayloadByteFields(values, 9, 10, 11); err != nil {
+		return err
+	}
 	httpEvent := &HTTPEvent{
 		RouteRef: route, ServiceRef: service, InitiatorRef: initiator,
 		DurationMS: values[0], QueueMS: values[1], DNSMS: values[2], ConnectMS: values[3],
@@ -90,6 +93,9 @@ func decodeOperationPayload(
 	if values[7] > MaxOperationAttributes {
 		return fmt.Errorf("operation attribute count %d exceeds %d", values[7], MaxOperationAttributes)
 	}
+	if err := validatePayloadByteFields(values, 2, 3, 4); err != nil {
+		return err
+	}
 	operation := &OperationEvent{
 		NameRef: nameRef,
 		ID:      values[0], ParentID: values[1], Phase: OperationPhase(values[2]),
@@ -132,6 +138,9 @@ func decodeIOPayload(
 	if err != nil {
 		return err
 	}
+	if err := validatePayloadByteFields(values, 1); err != nil {
+		return err
+	}
 	ioEvent := &IOEvent{
 		SourceRef: sourceRef, Operation: IOOperationKind(values[0]), Outcome: IOOutcome(values[1]),
 		DurationUS: values[2], Bytes: values[3],
@@ -163,6 +172,9 @@ func decodeWorkerPayload(
 	}
 	if values[4] > math.MaxUint32 || values[5] > math.MaxUint32 || values[6] > math.MaxUint32 {
 		return fmt.Errorf("worker count or stop reason exceeds %d", uint64(math.MaxUint32))
+	}
+	if values[1] > uint64(WorkerStageForegroundAttemptBoundary) || values[2] > uint64(WorkerOutcomeStopped) {
+		return fmt.Errorf("unsupported worker stage %d or outcome %d", values[1], values[2])
 	}
 	worker := &WorkerEvent{
 		WorkerRef: workerRef, InstanceID: values[0], Stage: WorkerStage(values[1]),
@@ -198,6 +210,9 @@ func decodeWebSocketPayload(
 	}
 	if values[3] > math.MaxUint16 || values[4] > math.MaxUint16 || values[9] > math.MaxUint32 {
 		return fmt.Errorf("WebSocket status, close code or reconnect ordinal exceeds wire bounds")
+	}
+	if err := validatePayloadByteFields(values, 1, 5); err != nil {
+		return err
 	}
 	webSocket := &WebSocketEvent{
 		RouteRef: routeRef, ConnectionID: values[0], Stage: WebSocketStage(values[1]),
@@ -237,6 +252,9 @@ func decodeAndroidComponentPayload(
 		"Android component flags",
 	)
 	if err != nil {
+		return err
+	}
+	if err := validatePayloadByteFields(values, 2, 3, 4); err != nil {
 		return err
 	}
 	component := &AndroidComponentEvent{
@@ -280,6 +298,9 @@ func decodeBinderTransactionPayload(
 	}
 	if values[2] > math.MaxUint32 {
 		return fmt.Errorf("binder transaction code exceeds %d", uint64(math.MaxUint32))
+	}
+	if err := validatePayloadByteFields(values, 1, 3, 4); err != nil {
+		return err
 	}
 	binder := &BinderTransactionEvent{
 		DescriptorRef: descriptorRef, MethodRef: methodRef, CallID: values[0],

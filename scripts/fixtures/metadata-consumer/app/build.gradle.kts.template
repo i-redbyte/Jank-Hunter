@@ -1,0 +1,55 @@
+import com.android.build.api.dsl.ApplicationExtension
+import io.jankhunter.gradle.JankHunterExtension
+import io.jankhunter.gradle.JankHunterProfile
+import io.jankhunter.gradle.JankHunterProcesses
+
+apply(plugin = "com.android.application")
+apply(plugin = "org.jetbrains.kotlin.android")
+apply(plugin = "io.jankhunter.android")
+configure<ApplicationExtension> {
+    namespace = "com.fixture.compat"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "com.fixture.compat"
+        minSdk = 28
+        targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    testBuildType = "release"
+    buildTypes.getByName("release") {
+        isMinifyEnabled = true
+        signingConfig = signingConfigs.getByName("debug")
+        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "compat.pro")
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
+    compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
+}
+configure<JankHunterExtension> {
+    enabled.set(true)
+    enabledBuildTypes.set(setOf("debug", "release"))
+    profile.set(JankHunterProfile.FULL)
+    processes.set(JankHunterProcesses.MAIN_ONLY)
+    packages("com.fixture.compat", "com.fixture.callback")
+    autoInit.set(true)
+    metadataCompatibilityMode.set(io.jankhunter.gradle.JankHunterMetadataCompatibilityMode.COMPATIBILITY)
+    enable(io.jankhunter.gradle.JankHunterFeatureBundle.CONCURRENCY_ALL)
+    release {
+        privacyReviewed()
+        performanceBudget(file("compat-budget.txt"))
+    }
+}
+dependencies {
+    add("implementation", project(":callback-library"))
+    add("implementation", "io.jankhunter:jankhunter-android-sdk:${project.findProperty("jhVersion")}")
+    add("implementation", "org.jetbrains.kotlin:kotlin-stdlib:2.2.21")
+    add("implementation", "org.jetbrains.kotlin:kotlin-reflect:2.2.21")
+    add("implementation", "com.squareup.okhttp3:okhttp:3.12.13")
+    add("androidTestImplementation", "androidx.test:runner:1.6.2")
+    add("androidTestImplementation", "androidx.test.ext:junit:1.2.1")
+    add("androidTestCompileOnly", "com.google.errorprone:error_prone_annotations:2.41.0")
+}

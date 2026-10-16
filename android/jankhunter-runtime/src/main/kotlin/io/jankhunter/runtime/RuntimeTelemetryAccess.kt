@@ -30,6 +30,12 @@ internal class RuntimeTelemetryAccess(
     val config: JankHunterConfig?
         get() = state.config
 
+    val usesTaskWrappers: Boolean
+        get() = state.observationModes().tasks == JankHunterExecutionObservationMode.WRAPPERS
+
+    val usesCoroutineWrappers: Boolean
+        get() = state.observationModes().coroutines == JankHunterExecutionObservationMode.WRAPPERS
+
     val collectionEpoch: RuntimeCollectionEpoch?
         get() = state.collectionEpochs.current
 
@@ -113,10 +119,10 @@ internal class RuntimeTelemetryAccess(
 
     fun isUiVisible(): Boolean = uiVisibility() == RuntimeUiVisibility.VISIBLE
 
-    fun processImportance(): RuntimeProcessImportance = refreshProcessImportance(forceRefresh = false)
+    fun processImportance(): RuntimeProcessImportance = cachedProcessImportance
 
-    fun recordProcessState(writer: AsyncLogWriter, reason: Long, forceRefresh: Boolean) {
-        val importance = refreshProcessImportance(forceRefresh)
+    fun recordProcessState(writer: AsyncLogWriter, reason: Long) {
+        val importance = cachedProcessImportance
         writer.processState(
             uiVisibility().wireValue.toLong(),
             importance.wireValue,
@@ -125,7 +131,7 @@ internal class RuntimeTelemetryAccess(
         )
     }
 
-    private fun refreshProcessImportance(forceRefresh: Boolean): RuntimeProcessImportance {
+    fun refreshProcessImportance(forceRefresh: Boolean = false): RuntimeProcessImportance {
         val checkedAtMs = processImportanceCheckedAtMs
         val nowMs = elapsedRealtimeMs.getAsLong()
         if (!forceRefresh && checkedAtMs != Long.MIN_VALUE &&
@@ -155,7 +161,8 @@ internal class RuntimeTelemetryAccess(
     }
 
     fun isUserRelevantForSampling(): Boolean {
-        return isUiVisible() || processImportance().isUserRelevantForSampling
+        // Called by background collectors; hooks only read the cached observation.
+        return isUiVisible() || refreshProcessImportance().isUserRelevantForSampling
     }
 
     fun uiVisibleFlag(): Long {

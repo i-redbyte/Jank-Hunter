@@ -191,7 +191,7 @@ internal object AndroidComponentCatalogWriter {
         )
     }
 
-    private fun toJsonLine(record: AndroidComponentCatalogRecord): String = buildString(512) {
+    internal fun toJsonLine(record: AndroidComponentCatalogRecord): String = buildString(512) {
         append("{\"format\":")
         append(ArtifactSchemas.ANDROID_COMPONENT_CATALOG_FORMAT)
         append(",\"class\":\"")

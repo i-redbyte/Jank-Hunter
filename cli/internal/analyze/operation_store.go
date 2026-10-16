@@ -123,6 +123,9 @@ type operationSignals struct {
 	httpCount       uint64
 	httpFailures    uint64
 	httpDurationMS  uint64
+	httpRxBytes     uint64
+	httpTxBytes     uint64
+	httpBytesKnown  uint64
 	webSocketCount  uint64
 	webSocketErrors uint64
 	databaseCount   uint64
@@ -141,6 +144,9 @@ type operationSignals struct {
 	ioCount         uint64
 	ioDurationUS    uint64
 	ioBytes         uint64
+	ioBytesKnown    uint64
+	cpuSumX100      uint64
+	cpuSamples      uint64
 	problemCount    uint64
 	logRecords      uint64
 	runtimeCalls    uint64
@@ -154,6 +160,9 @@ func (s *operationSignals) merge(other operationSignals) {
 	s.httpCount = saturatingUint64Sum(s.httpCount, other.httpCount)
 	s.httpFailures = saturatingUint64Sum(s.httpFailures, other.httpFailures)
 	s.httpDurationMS = saturatingUint64Sum(s.httpDurationMS, other.httpDurationMS)
+	s.httpRxBytes = saturatingUint64Sum(s.httpRxBytes, other.httpRxBytes)
+	s.httpTxBytes = saturatingUint64Sum(s.httpTxBytes, other.httpTxBytes)
+	s.httpBytesKnown = saturatingUint64Sum(s.httpBytesKnown, other.httpBytesKnown)
 	s.webSocketCount = saturatingUint64Sum(s.webSocketCount, other.webSocketCount)
 	s.webSocketErrors = saturatingUint64Sum(s.webSocketErrors, other.webSocketErrors)
 	s.databaseCount = saturatingUint64Sum(s.databaseCount, other.databaseCount)
@@ -172,6 +181,9 @@ func (s *operationSignals) merge(other operationSignals) {
 	s.ioCount = saturatingUint64Sum(s.ioCount, other.ioCount)
 	s.ioDurationUS = saturatingUint64Sum(s.ioDurationUS, other.ioDurationUS)
 	s.ioBytes = saturatingUint64Sum(s.ioBytes, other.ioBytes)
+	s.ioBytesKnown = saturatingUint64Sum(s.ioBytesKnown, other.ioBytesKnown)
+	s.cpuSumX100 = saturatingUint64Sum(s.cpuSumX100, other.cpuSumX100)
+	s.cpuSamples = saturatingUint64Sum(s.cpuSamples, other.cpuSamples)
 	s.problemCount = saturatingUint64Sum(s.problemCount, other.problemCount)
 	s.logRecords = saturatingUint64Sum(s.logRecords, other.logRecords)
 	s.runtimeCalls = saturatingUint64Sum(s.runtimeCalls, other.runtimeCalls)

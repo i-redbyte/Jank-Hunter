@@ -122,7 +122,11 @@ internal class DependencyInjectionClassVisitor(
                 return super.visitAnnotation(annotationDescriptor, visible)
             }
 
-            override fun visitEnd() {
+            override fun visitAttribute(attribute: org.objectweb.asm.Attribute) {
+        if (attribute.type != "JankHunterBuildEvidenceV1_di") super.visitAttribute(attribute)
+    }
+
+    override fun visitEnd() {
                 if (annotations.containsInjectAnnotation()) {
                     roles += ROLE_CONSUMER
                     frameworks += DependencyInjectionFramework.DAGGER2
@@ -190,6 +194,8 @@ internal class DependencyInjectionClassVisitor(
         } else {
             null
         }
+        val evidence = DependencyInjectionCatalogWriter.records(classRecord, edges)
+        if (evidence.isNotBlank()) super.visitAttribute(InstrumentationEvidenceAttribute("di", evidence))
         DependencyInjectionCatalogWriter.write(catalogDirectory, className, classRecord, edges)
         super.visitEnd()
     }

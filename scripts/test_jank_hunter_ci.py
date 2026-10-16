@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import importlib.util
 import json
 from pathlib import Path
@@ -46,6 +47,41 @@ class JankHunterCiTest(unittest.TestCase):
                 )
             )
         )
+
+    def test_jank_hunter_specs_do_not_select_unrelated_monorepo_build(self) -> None:
+        for directory in (
+            "010-metadata-adaptive-instrumentation",
+            "011-runtime-enabled-state",
+            "012-branch-reliability-review",
+            "013-observation-modes",
+            "014-cumulative-reconfiguration",
+            "015-android-integration-audit",
+            "016-global-kotlin-audit",
+            "017-worker-schedules",
+        ):
+            with self.subTest(directory=directory):
+                self.assertTrue(self.ci.is_jank_hunter_only_change((
+                    "jank-hunter/scripts/jank_hunter_ci.py",
+                    f"specs/{directory}/contracts/contract.md",
+                )))
+
+    def test_unrelated_specs_still_require_monorepo_checks(self) -> None:
+        for path in (
+            "specs/005-omicron-initial-jitter/spec.md",
+            "specs/017-worker-schedules-other/spec.md",
+            "specs/README.md",
+            "specs/999-unregistered-feature/spec.md",
+            "shared-cloud-logger/build.gradle.kts",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(self.ci.is_jank_hunter_only_change((
+                    "jank-hunter/README.md", path,
+                )))
+
+    def test_specs_without_jank_hunter_source_still_use_monorepo(self) -> None:
+        self.assertFalse(self.ci.is_jank_hunter_only_change((
+            "specs/017-worker-schedules/spec.md",
+        )))
 
     def test_jank_hunter_ci_control_files_are_allowed_with_jank_hunter(self) -> None:
         self.assertTrue(
@@ -97,11 +133,22 @@ class JankHunterCiTest(unittest.TestCase):
                 plan = self.ci.command_plan(check)
                 self.assertTrue(plan)
                 for command in plan:
-                    self.assertEqual(
-                        PROJECT_ROOT / "android" / "gradlew",
-                        Path(command[0]),
-                    )
+                    if "gradlew" in command[0]:
+                        self.assertEqual(PROJECT_ROOT / "android" / "gradlew", Path(command[0]))
+                    else:
+                        self.assertEqual(sys.executable, command[0])
+                        self.assertIn("-B", command)
                     self.assertNotIn(str(REPOSITORY_ROOT / "gradlew"), command)
+
+    def test_standalone_fast_gate_includes_negative_validators_wire_and_publication_boundary(self):
+        units = str(self.ci.command_plan(self.ci.Check.UNIT_TESTS))
+        self.assertIn("test_jank_hunter_ci.py", units)
+        self.assertIn("test_stability*.py", units)
+        self.assertIn("test_release_environment.py", units)
+        self.assertIn("test_kotlin_boundary.py", units)
+        self.assertIn("test_wire_generate.py", units)
+        self.assertIn("wire/generate.py", units)
+        self.assertIn("validate-kotlin-boundary.py", str(self.ci.command_plan(self.ci.Check.ASSEMBLE)))
 
     def test_ci_jobs_keep_original_fallbacks_for_other_projects(self) -> None:
         build = (

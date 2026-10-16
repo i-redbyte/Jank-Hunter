@@ -1,0 +1,8 @@
+/build/
+/fixture-maven/
+/app/libs/
+/*/build/
+/included/build/
+/.gradle/
+/included/.gradle/
+/local.properties

@@ -87,6 +87,10 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         availableRuntimeFeatures: String,
     ) {
         task.autoInit.set(autoInit)
+        task.threadSamplerEnabled.set(true)
+        task.threadSampleIntervalMs.set(5_000L)
+        task.concurrencyDetailedEnabled.set(false)
+        task.concurrencyMaxTrackedEntities.set(4_096)
         task.mainThreadStallThresholdMs.set(700L)
         task.ownerBlockThresholdMs.set(250L)
         task.httpSlowThresholdMs.set(1_000L)
@@ -121,6 +125,10 @@ class GenerateJankHunterRuntimeManifestTaskTest {
     ): List<Pair<String, String>> {
         return listOf(
             "io.jankhunter.enabled" to "true",
+            "io.jankhunter.thread_sampler_enabled" to "true",
+            "io.jankhunter.thread_sample_interval_ms" to "5000",
+            "io.jankhunter.concurrency_detailed_enabled" to "false",
+            "io.jankhunter.concurrency_max_tracked_entities" to "4096",
             "io.jankhunter.main_thread_stall_threshold_ms" to "700",
             "io.jankhunter.owner_block_threshold_ms" to "250",
             "io.jankhunter.http_slow_threshold_ms" to "1000",

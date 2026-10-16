@@ -13,6 +13,18 @@ import org.junit.Test
 
 class ContextTrackerTest {
     @Test
+    fun excessiveFinishedChainDropsAttributionInsteadOfWalkingUnboundedHistory() {
+        val tracker = ContextTracker()
+        var head = operation(1L, null)
+        repeat(10_000) { index -> head = operation(index.toLong() + 2L, head).also { it.abandon() } }
+        tracker.activateOperation(head)
+        val before = RuntimeHookFailureTracker.count(RuntimeHookFailureReason.CONTEXT)
+        assertNull(tracker.currentOperationOrNull())
+        assertEquals(0L, tracker.currentOperationId())
+        assertEquals(before + 1L, RuntimeHookFailureTracker.count(RuntimeHookFailureReason.CONTEXT))
+    }
+
+    @Test
     fun capturedUnknownScreenDoesNotBecomeALaterGlobalScreen() {
         val tracker = ContextTracker()
         val captured = tracker.capture()

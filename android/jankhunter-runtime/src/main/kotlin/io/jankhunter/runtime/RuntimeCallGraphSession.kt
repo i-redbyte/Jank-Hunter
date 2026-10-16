@@ -10,6 +10,7 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.LockSupport
 
 /**
@@ -24,8 +25,6 @@ internal class RuntimeCallGraphSession(
     private val captureScreen: () -> String?,
     private val captureOperationId: RuntimeLongSource,
     private val maxKeys: RuntimeIntSource,
-    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
-    private val admissionWaitNanos: RuntimeLongSource = RuntimeLongSource { DEFAULT_ADMISSION_WAIT_NS },
     private val periodicFlushIntervalMs: Long = DEFAULT_PERIODIC_FLUSH_INTERVAL_MS,
     private val consumerDelayNanos: Long = 0L,
     private val batchObserver: ((RuntimeCallBatch) -> Unit)? = null,
@@ -43,6 +42,9 @@ internal class RuntimeCallGraphSession(
     private val completion = RuntimeConsumerCompletion()
     private val startupCleanupPending = AtomicBoolean()
     private val stateCleared = AtomicBoolean()
+    private val hookState = ThreadLocal<HookState>()
+    private val hookFailures = AtomicInteger()
+    @Volatile private var breakerOpen = false
     @Volatile var hasConsumerOwner = true
         private set
 
@@ -76,10 +78,27 @@ internal class RuntimeCallGraphSession(
             producer.registry.forEach { entry -> entry.buffer.owner.get()?.let(LockSupport::unpark) }
             if (lifecycle.consumerThread?.isAlive != true && hasConsumerOwner) {
                 startupCleanupPending.set(true)
-                completeFailedStartIfIdle()
+                scheduleFailedStartCleanup()
             }
             RuntimeHookGuard.rethrowFatal(error)
             throw error
+        }
+    }
+
+    private fun scheduleFailedStartCleanup() {
+        if (!hasAdmittedProducers()) {
+            completeFailedStartIfIdle()
+            return
+        }
+        // Created only by the lifecycle start caller, never by an injected hook. At most one
+        // fallback owner per session; the transport admits at most two session owners.
+        RuntimeHookGuard.run(RuntimeHookFailureReason.COLLECTOR) {
+            Thread({
+                while (startupCleanupPending.get()) {
+                    if (!hasAdmittedProducers()) completeFailedStartIfIdle()
+                    else LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1L))
+                }
+            }, "JankHunterStartupCleanup").apply { isDaemon = true }.start()
         }
     }
 
@@ -116,6 +135,11 @@ internal class RuntimeCallGraphSession(
 
     fun enter(methodId: Long, methodName: String, enabled: Boolean): Long {
         if (!enabled || !lifecycle.acceptingPublishers) return DISABLED_TOKEN
+        return guarded(DISABLED_TOKEN, newEntry = true) { enterUnchecked(methodId, methodName, enabled) }
+    }
+
+    private fun enterUnchecked(methodId: Long, methodName: String, enabled: Boolean): Long {
+        if (!enabled || !lifecycle.acceptingPublishers) return DISABLED_TOKEN
         val currentEpoch = producer.epoch.get()
         val state = producerState(currentEpoch, methodEntry = true) ?: return DISABLED_TOKEN
         state.buffer.producerAdmitted = true
@@ -140,6 +164,11 @@ internal class RuntimeCallGraphSession(
 
     fun exit(token: Long, methodId: Long) {
         if (token == DISABLED_TOKEN) return
+        // An open breaker rejects new work but must still release previously admitted frames.
+        guarded(Unit, newEntry = false) { exitUnchecked(token, methodId) }
+    }
+
+    private fun exitUnchecked(token: Long, methodId: Long) {
         val state = producer.threadState.get()?.get()
         if (state == null) {
             if (token == producer.epoch.get() && lifecycle.acceptingPublishers) producer.stackMismatch.incrementAndGet()
@@ -155,7 +184,6 @@ internal class RuntimeCallGraphSession(
             state.buffer.producerAdmitted = false
             if (!lifecycle.acceptingPublishers) {
                 lifecycle.consumerThread?.let(LockSupport::unpark)
-                completeFailedStartIfIdle()
             }
         }
     }
@@ -173,6 +201,40 @@ internal class RuntimeCallGraphSession(
         calleeName: String,
         durationMs: Long,
         enabled: Boolean,
+    ) {
+        if (!enabled || !lifecycle.acceptingPublishers) return
+        guarded(Unit, newEntry = true) {
+            recordSemanticUnchecked(callerId, callerName, calleeId, calleeName, durationMs, enabled)
+        }
+    }
+
+    private inline fun <T> guarded(fallback: T, newEntry: Boolean, block: () -> T): T {
+        if (newEntry && breakerOpen) {
+            producer.storageSkippedEntries.incrementAndGet()
+            return fallback
+        }
+        val state = hookState.get() ?: HookState().also { hookState.set(it) }
+        if (state.active) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.REENTRANCY)
+            producer.storageSkippedEntries.incrementAndGet()
+            return fallback
+        }
+        state.active = true
+        try { return block() }
+        catch (failure: Throwable) {
+            RuntimeHookGuard.rethrowFatal(failure)
+            if (hookFailures.incrementAndGet() == 8) {
+                breakerOpen = true
+                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR_BREAKER)
+            }
+            throw failure
+        } finally { state.active = false }
+    }
+
+    private class HookState { var active = false }
+
+    private fun recordSemanticUnchecked(
+        callerId: Long, callerName: String, calleeId: Long, calleeName: String, durationMs: Long, enabled: Boolean,
     ) {
         if (!enabled || !lifecycle.acceptingPublishers) return
         val currentEpoch = producer.epoch.get()
@@ -199,7 +261,6 @@ internal class RuntimeCallGraphSession(
             state.buffer.producerAdmitted = false
             if (!lifecycle.acceptingPublishers) {
                 lifecycle.consumerThread?.let(LockSupport::unpark)
-                completeFailedStartIfIdle()
             }
         }
     }
@@ -247,31 +308,14 @@ internal class RuntimeCallGraphSession(
         operationId: Long,
         durationMs: Long,
     ): Boolean {
-        buffer.admissionStartedAtNs = 0L
-        try {
-            if (!acquireProducer(buffer)) return rejectAdmission()
-            while (true) {
-                val result = buffer.tryAdd(
-                    callerId, callerName, calleeId, calleeName, screen, operationId, durationMs,
-                )
-                if (result != RUNTIME_GRAPH_ADD_FULL) {
-                    if (result == RUNTIME_GRAPH_ADD_PAGE_PUBLISHED) wakeConsumer()
-                    return true
-                }
-                // Also wake in best-effort mode: budget pressure must reclaim unused pages even
-                // when the current producer cannot wait for admission.
-                wakeConsumer()
-                if (buffer.rotationRequested) {
-                    buffer.producerActive = false
-                    if (!acquireProducer(buffer)) return rejectAdmission()
-                } else if (!awaitAdmission(buffer, BACKPRESSURE_PARK_NS)) {
-                    return rejectAdmission()
-                }
-            }
-        } finally {
-            buffer.producerWaiting = false
-            recordGraphBackpressure(buffer.admissionStartedAtNs)
+        if (!acquireProducer(buffer)) return rejectAdmission()
+        val result = buffer.tryAdd(callerId, callerName, calleeId, calleeName, screen, operationId, durationMs)
+        if (result == RUNTIME_GRAPH_ADD_FULL) {
+            wakeConsumer()
+            return rejectAdmission()
         }
+        if (result == RUNTIME_GRAPH_ADD_PAGE_PUBLISHED) wakeConsumer()
+        return true
     }
 
     private fun rejectAdmission(): Boolean {
@@ -281,36 +325,6 @@ internal class RuntimeCallGraphSession(
             producer.capacityLoss.incrementAndGet()
         }
         return false
-    }
-
-    private fun awaitAdmission(buffer: RuntimeGraphAggregateBuffer, parkNs: Long, allowStopping: Boolean = false): Boolean {
-        if (!canAwaitAdmission(buffer, allowStopping)) return false
-        val remaining = buffer.admissionWaitNs - (System.nanoTime() - buffer.admissionStartedAtNs)
-        if (remaining <= 0L) return false
-        buffer.producerWaiting = true
-        wakeConsumer()
-        LockSupport.parkNanos(minOf(parkNs, remaining))
-        return canAwaitAdmission(buffer, allowStopping)
-    }
-
-    private fun canAwaitAdmission(buffer: RuntimeGraphAggregateBuffer, allowStopping: Boolean = false): Boolean {
-        if ((!allowStopping && !lifecycle.running.get()) || lifecycle.consumerFailed.get() ||
-            Thread.currentThread().isInterrupted || !exactAdmission.getAsBoolean()
-        ) return false
-        if (buffer.admissionStartedAtNs == 0L) {
-            val waitNs = admissionWaitNanos.getAsLong().coerceAtLeast(0L)
-            if (waitNs == 0L) return false
-            buffer.admissionWaitNs = waitNs
-            buffer.admissionStartedAtNs = System.nanoTime()
-            producer.backpressureCount.incrementAndGet()
-        }
-        return System.nanoTime() - buffer.admissionStartedAtNs < buffer.admissionWaitNs
-    }
-
-    private fun recordGraphBackpressure(blockedAtNs: Long) {
-        if (blockedAtNs != 0L) {
-            producer.backpressureNanos.addAndGet((System.nanoTime() - blockedAtNs).coerceAtLeast(1L))
-        }
     }
 
     fun flushBlocking(timeoutMs: Long): Boolean {
@@ -383,6 +397,8 @@ internal class RuntimeCallGraphSession(
 
     internal fun backpressureCountForTest(): Long = producer.backpressureCount.get()
 
+    internal fun shutdownLossForTest(): Long = lifecycle.shutdownLoss.get()
+
     internal fun producerCapacityLossForTest(): Long = producer.capacityLoss.get()
     internal fun storageUsedForTest(): Long = storageBudget.usedBytes()
     internal fun storagePeakForTest(): Long = storageBudget.peakBytes()
@@ -438,7 +454,6 @@ internal class RuntimeCallGraphSession(
             producer.registering.decrementAndGet()
             if (!lifecycle.acceptingPublishers) {
                 lifecycle.consumerThread?.let(LockSupport::unpark)
-                completeFailedStartIfIdle()
             }
         }
     }
@@ -447,7 +462,6 @@ internal class RuntimeCallGraphSession(
         state.buffer.producerAdmitted = false
         if (!lifecycle.acceptingPublishers) {
             lifecycle.consumerThread?.let(LockSupport::unpark)
-            completeFailedStartIfIdle()
         }
     }
 
@@ -462,7 +476,9 @@ internal class RuntimeCallGraphSession(
             // Relative JVM waits use active time on Android, excluding deep sleep.
             val flushIntervalNs = TimeUnit.MILLISECONDS.toNanos(periodicFlushIntervalMs.coerceAtLeast(1L))
             var lastFlushAtNs = uptimeNanos.getAsLong()
+            var ownedRegistered = false
             while (lifecycle.running.get() || hasAdmittedProducers() || hasBufferedEvents()) {
+                if (!ownedRegistered) ownedRegistered = JankHunterHooks.observeOwnedThread("Jank Hunter call graph")
                 consumerLoopObserver?.invoke()
                 lifecycle.producerWake.clear()
                 val drained = drainBuffers(table)
@@ -531,8 +547,8 @@ internal class RuntimeCallGraphSession(
 
     private fun drainBuffers(table: RuntimeGraphEdgeTable): Int {
         var total = 0
-        for (entry in producer.registry) {
-            val buffer = entry.buffer
+        for (producerEntry in producer.registry) {
+            val buffer = producerEntry.buffer
             var drainedFromBuffer = 0
             while (drainedFromBuffer < MAX_DRAIN_PAGES_PER_BUFFER) {
                 val position = buffer.tryClaimConsumer()
@@ -562,19 +578,13 @@ internal class RuntimeCallGraphSession(
     }
 
     private fun acquireProducer(buffer: RuntimeGraphAggregateBuffer): Boolean {
-        while (true) {
-            while (buffer.rotationRequested) {
-                // Stop closes new admission, but an already admitted exit still owns its slot.
-                // Let the in-progress rotation finish within the original producer deadline.
-                if (!awaitAdmission(buffer, ROTATION_PARK_NS, allowStopping = true)) return false
-            }
-            if (lifecycle.consumerFailed.get()) return false
-            buffer.producerActive = true
-            if (!buffer.rotationRequested) return true
-            buffer.producerActive = false
-            // Rotation may already have ended; bound retries without introducing a needless park.
-            if (!canAwaitAdmission(buffer, allowStopping = true)) return false
-        }
+        // Consumer rotation owns the page while requested. An application thread never waits
+        // for it, even when running inside a logger or other application monitor.
+        if (buffer.rotationRequested || lifecycle.consumerFailed.get()) return false
+        buffer.producerActive = true
+        if (!buffer.rotationRequested) return true
+        buffer.producerActive = false
+        return false
     }
 
     private fun recordShutdownLoss() {
@@ -582,8 +592,8 @@ internal class RuntimeCallGraphSession(
     }
 
     private fun rotateProducerPages() {
-        for (entry in producer.registry) {
-            val buffer = entry.buffer
+        for (producerEntry in producer.registry) {
+            val buffer = producerEntry.buffer
             buffer.rotationRequested = true
             while (buffer.producerActive) LockSupport.parkNanos(ROTATION_PARK_NS)
             buffer.publishActivePage()
@@ -593,8 +603,8 @@ internal class RuntimeCallGraphSession(
     }
 
     private fun trimEmptyProducerPages() {
-        for (entry in producer.registry) {
-            val buffer = entry.buffer
+        for (producerEntry in producer.registry) {
+            val buffer = producerEntry.buffer
             buffer.rotationRequested = true
             while (buffer.producerActive) LockSupport.parkNanos(ROTATION_PARK_NS)
             buffer.trimEmptyPages()
@@ -701,21 +711,21 @@ internal class RuntimeCallGraphSession(
 
     private fun hasAdmittedProducers(): Boolean {
         if (producer.registering.get() != 0L) return true
-        for (entry in producer.registry) {
-            val buffer = entry.buffer
+        for (producerEntry in producer.registry) {
+            val buffer = producerEntry.buffer
             if (buffer.producerActive || buffer.producerAdmitted) return true
         }
         return false
     }
 
     private fun reclaimDeadBuffers() {
-        for (entry in producer.registry) {
-            val buffer = entry.buffer
+        for (producerEntry in producer.registry) {
+            val buffer = producerEntry.buffer
             if (buffer.owner.get()?.isAlive != true && !buffer.hasPublishedPages() && !buffer.hasActiveData()) {
-                if (producer.registry.remove(entry)) {
+                if (producer.registry.remove(producerEntry)) {
                     addSaturating(producer.retiredAttempted, buffer.attemptedCount())
                     addSaturating(producer.retiredAccepted, buffer.acceptedCount())
-                    entry.releaseStorage()
+                    producerEntry.releaseStorage()
                 }
             }
         }
@@ -769,7 +779,6 @@ internal class RuntimeCallGraphSession(
 
     private companion object {
         const val CONSUMER_NAME = "JankHunterGraph"
-        val DEFAULT_ADMISSION_WAIT_NS: Long = TimeUnit.MILLISECONDS.toNanos(5L)
         const val DISABLED_TOKEN = 0L
         const val NO_FLUSH_REQUEST = -1L
         const val MAX_DRAIN_PAGES_PER_BUFFER = RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY

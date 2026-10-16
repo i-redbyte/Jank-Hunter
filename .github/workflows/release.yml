@@ -16,7 +16,24 @@ permissions:
 jobs:
   github-release:
     name: Build and publish GitHub Release
-    runs-on: ubuntu-latest
+    # Provisioned weak physical API28+ device, API30/API37 devices or emulators, public dependency cache,
+    # SDK35 and both explicit consumer Gradle distributions are mandatory, never skipped.
+    runs-on: [self-hosted, android-stability]
+    timeout-minutes: 240
+    env:
+      JH_RELEASE_INPUTS_MANIFEST: ${{ vars.JH_RELEASE_INPUTS_MANIFEST }}
+      JH_RELEASE_INPUTS_SHA256: ${{ vars.JH_RELEASE_INPUTS_SHA256 }}
+      JH_LEGACY_REPOSITORY: ${{ vars.JH_LEGACY_REPOSITORY }}
+      JH_METADATA_BASELINE_REPOSITORY: ${{ vars.JH_METADATA_BASELINE_REPOSITORY }}
+      JH_METADATA_BASELINE_VERSION: ${{ vars.JH_METADATA_BASELINE_VERSION }}
+      JH_GRADLE_MIN: ${{ vars.JH_GRADLE_MIN }}
+      JH_GRADLE_AGP9: ${{ vars.JH_GRADLE_AGP9 }}
+      JH_GRADLE_OLD: ${{ vars.JH_GRADLE_OLD }}
+      JH_GRADLE_NEW: ${{ vars.JH_GRADLE_NEW }}
+      JH_API28_SERIAL: ${{ vars.JH_API28_SERIAL }}
+      JH_API30_SERIAL: ${{ vars.JH_API30_SERIAL }}
+      JH_API37_SERIAL: ${{ vars.JH_API37_SERIAL }}
+      JH_WEAK_PHYSICAL_SERIAL: ${{ vars.JH_WEAK_PHYSICAL_SERIAL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,10 +42,12 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          RELEASE_INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            raw_version="${{ inputs.version }}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            raw_version="$RELEASE_INPUT_VERSION"
           else
             raw_version="${GITHUB_REF_NAME}"
           fi
@@ -36,8 +55,8 @@ jobs:
           version="${raw_version#v}"
           tag="v${version}"
 
-          if [[ -z "$version" || "$version" == "$raw_version" && "$raw_version" == v ]]; then
-            echo "Release version is empty" >&2
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Release version must have a safe major.minor.patch form" >&2
             exit 1
           fi
 
@@ -57,6 +76,21 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Preserve JDK 17 for Gradle 8.0 consumers
+        run: echo "JH_JAVA17_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Verify pinned release environment before executing gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-release-environment.py --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/release-environment-$GITHUB_SHA.json"
+          python3 -B scripts/test_release_environment.py -q
+
       - name: Build macOS CLI archives
         working-directory: cli
         run: |
@@ -70,11 +104,93 @@ jobs:
           rm -rf "$HOME/.m2/repository/io/jankhunter"
           ./gradlew detekt test :jankhunter-gradle-plugin:test publishToMavenLocal \
             -PjankHunterVersion="${{ steps.meta.outputs.version }}" \
+            --offline \
             --no-daemon \
             --stacktrace
           python3 ../scripts/validate-maven-publication.py \
             --repository "$HOME/.m2/repository" \
             --version "${{ steps.meta.outputs.version }}"
+
+      - name: Mandatory real Kotlin and Java compiler boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures="$RUNNER_TEMP/compiler-fixtures-$GITHUB_SHA"
+          ./android/gradlew -p android :jankhunter-gradle-plugin:resolveMetadataFixtureCompilers --offline
+          python3 scripts/compile-metadata-fixtures.py --cache "${GRADLE_USER_HOME:-$HOME/.gradle}/caches/modules-2/files-2.1" --output "$fixtures" --java "$JAVA_HOME/bin/java" --android-bootclasspath "$ANDROID_HOME/platforms/android-35/android.jar"
+          python3 scripts/compile-java-fixtures.py --javac "$JAVA_HOME/bin/javac" --output "$fixtures"
+          ./android/gradlew -p android :jankhunter-gradle-plugin:checkKotlinMetadataFixtures -PmetadataFixtureDirectory="$fixtures" --offline
+          published="$HOME/.m2/repository/io/jankhunter/jankhunter-gradle-plugin/${{ steps.meta.outputs.version }}"
+          plugin="$published/jankhunter-gradle-plugin-${{ steps.meta.outputs.version }}"
+          python3 scripts/validate-metadata-plugin-packaging.py "$plugin.jar" --module "$plugin.module" --pom "$plugin.pom"
+          python3 scripts/test_metadata_plugin_packaging.py -q
+          python3 scripts/test_metadata_build_benchmark.py -q
+          python3 scripts/test_metadata_art_footprint.py -q
+
+      - name: Mandatory adaptive metadata build performance
+        env:
+          JH_METADATA_BASELINE_REPOSITORY: ${{ vars.JH_METADATA_BASELINE_REPOSITORY }}
+          JH_METADATA_BASELINE_VERSION: ${{ vars.JH_METADATA_BASELINE_VERSION }}
+          JH_METADATA_GRADLE: ${{ vars.JH_GRADLE_NEW }}
+          JANKHUNTER_VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export JH_METADATA_CANDIDATE_REPOSITORY="$HOME/.m2/repository"
+          scripts/run-metadata-build-gate.sh "$RUNNER_TEMP/metadata-sc003-$GITHUB_SHA"
+
+      - name: Mandatory exact-artifact compatibility ART and stress gates
+        env:
+          JANK_HUNTER_RETRACE_HOME: ${{ github.workspace }}/cli/bin/jankhunter-retrace
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${JH_LEGACY_REPOSITORY:?exact cached JH1.0.12 baseline repository is required}"
+          : "${JH_GRADLE_MIN:?Gradle 8.0.2 is required}"
+          : "${JH_GRADLE_AGP9:?pinned Gradle 9.1.0 or 9.4.1 distribution is required}"
+          : "${JH_GRADLE_OLD:?Gradle 8.11.1 is required}"
+          : "${JH_GRADLE_NEW:?Gradle 8.13 is required}"
+          : "${JH_API28_SERIAL:?API28 ART device is required}"
+          : "${JH_API30_SERIAL:?API30 ART device is required}"
+          : "${JH_API37_SERIAL:?API37 ART device is required}"
+          : "${JH_WEAK_PHYSICAL_SERIAL:?weak physical API28+ device is required}"
+          version="${{ steps.meta.outputs.version }}"
+          repository="$HOME/.m2/repository"
+          evidence="$RUNNER_TEMP/stability-$GITHUB_SHA"
+          mkdir -p "$evidence" "$repository"
+          python3 scripts/stage-compatibility-repository.py --android android --repository "$repository" --version "$version"
+          go build -C cli -o "$evidence/jankhunter" ./cmd/jankhunter
+          python3 scripts/run-stability-compatibility.py --legacy-metadata-directory "$RUNNER_TEMP/compiler-fixtures-$GITHUB_SHA/1.3.72" --dsl kotlin --repository "$repository" --version "$version" --output "$evidence/old-api28" --gradle "$JH_GRADLE_OLD" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API28_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --legacy-metadata-directory "$RUNNER_TEMP/compiler-fixtures-$GITHUB_SHA/1.3.72" --dsl kotlin --repository "$repository" --version "$version" --output "$evidence/old-api30" --gradle "$JH_GRADLE_OLD" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API30_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --legacy-metadata-directory "$RUNNER_TEMP/compiler-fixtures-$GITHUB_SHA/1.3.72" --dsl kotlin --repository "$repository" --version "$version" --output "$evidence/old-api37" --gradle "$JH_GRADLE_OLD" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          JAVA_HOME="$JH_JAVA17_HOME" python3 scripts/run-stability-compatibility.py --dsl kotlin --agp 8.0.2 --kotlin 1.9.25 --java-target 8 --compile-sdk 33 --output "$evidence/kotlin19-java8" --gradle "$JH_GRADLE_MIN" --repository "$repository" --version "$version" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --dsl kotlin --agp 8.5.2 --kotlin 2.0.21 --java-target 11 --compile-sdk 34 --output "$evidence/kotlin20-java11" --gradle "$JH_GRADLE_OLD" --repository "$repository" --version "$version" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --dsl kotlin --agp 8.10.1 --kotlin 2.1.21 --java-target 17 --compile-sdk 35 --output "$evidence/kotlin21-java17" --gradle "$JH_GRADLE_OLD" --repository "$repository" --version "$version" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          JAVA_HOME="$JH_JAVA17_HOME" python3 scripts/run-stability-compatibility.py --dsl kotlin --java-only --agp 8.0.2 --kotlin 1.9.25 --java-target 8 --compile-sdk 33 --output "$evidence/java8-agp8" --gradle "$JH_GRADLE_MIN" --repository "$repository" --version "$version" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --dsl kotlin --java-only --agp 9.0.1 --kotlin 2.3.20 --java-target 21 --compile-sdk 35 --output "$evidence/java21-agp9" --gradle "$JH_GRADLE_AGP9" --repository "$repository" --version "$version" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/extract-hot-path-fixture.py --classes "$evidence/old-api37/consumer/app/build/intermediates/classes/release/ALL/instrumentReleaseJankHunterTransport/classes.jar" --output "$evidence/hot-path-fixture.jar"
+          ./android/gradlew -p android :jankhunter-runtime:checkHotPathAdmission --console=plain -PhotPathFixtureJar="$evidence/hot-path-fixture.jar" -PhotPathEvidence="$evidence/hot-path-admission" > "$evidence/hot-path-admission.log" 2>&1
+          python3 scripts/run-stability-compatibility.py --legacy-metadata-directory "$RUNNER_TEMP/compiler-fixtures-$GITHUB_SHA/1.3.72" --dsl kotlin --repository "$repository" --version "$version" --java-target 21 --output "$evidence/new-api37" --gradle "$JH_GRADLE_NEW" --agp 8.13.2 --kotlin 2.3.20 --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-compatibility.py --baseline-sdk --agp 8.13.2 --kotlin 2.3.20 --repository "$JH_LEGACY_REPOSITORY" --version 1.0.12 --output "$evidence/new-legacy-api37" --gradle "$JH_GRADLE_NEW" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_API37_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/run-stability-stress.py --compatibility "$evidence/old-api37" --output "$evidence/stress" --adb "$ANDROID_HOME/platform-tools/adb" --serial "$JH_WEAK_PHYSICAL_SERIAL" --cli "$evidence/jankhunter"
+          python3 scripts/verify-stability-release.py --environment "$RUNNER_TEMP/release-environment-$GITHUB_SHA.json" --repository "$repository" --version "$version" --revision "$GITHUB_SHA" --compatibility "$evidence/old-api28/result.json" --compatibility "$evidence/old-api30/result.json" --compatibility "$evidence/old-api37/result.json" --compatibility "$evidence/new-api37/result.json" --compatibility "$evidence/kotlin19-java8/result.json" --compatibility "$evidence/kotlin20-java11/result.json" --compatibility "$evidence/kotlin21-java17/result.json" --compatibility "$evidence/java8-agp8/result.json" --compatibility "$evidence/java21-agp9/result.json" --stress "$evidence/stress/result.json" --footprint "$evidence/stress/footprint.json" --baseline "$evidence/new-legacy-api37/result.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stability-evidence-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/metadata-sc003-${{ github.sha }}/manifest.json
+            ${{ runner.temp }}/metadata-sc003-${{ github.sha }}/results/
+            ${{ runner.temp }}/compiler-fixtures-${{ github.sha }}/
+            ${{ runner.temp }}/release-environment-${{ github.sha }}.json
+            ${{ runner.temp }}/stability-${{ github.sha }}/*.json
+            ${{ runner.temp }}/stability-${{ github.sha }}/*/result.json
+            ${{ runner.temp }}/stability-${{ github.sha }}/*/*.log
+            ${{ runner.temp }}/stability-${{ github.sha }}/hot-path-admission/*.txt
+            ${{ runner.temp }}/stability-${{ github.sha }}/stress/*/*.json
+            ${{ runner.temp }}/stability-${{ github.sha }}/stress/*/*.log
 
       - name: Package release assets
         shell: bash
@@ -100,6 +216,7 @@ jobs:
           - io.jankhunter:jankhunter-runtime:$version
           - io.jankhunter:jankhunter-okhttp3:$version
           - io.jankhunter:jankhunter-workmanager:$version
+          - io.jankhunter:jankhunter-jankstats:$version
           - io.jankhunter:jankhunter-gradle-plugin:$version
           - io.jankhunter.android:io.jankhunter.android.gradle.plugin:$version
 

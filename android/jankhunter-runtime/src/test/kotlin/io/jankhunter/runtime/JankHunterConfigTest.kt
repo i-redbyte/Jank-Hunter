@@ -8,6 +8,28 @@ import org.junit.Test
 
 class JankHunterConfigTest {
     @Test
+    fun concurrencyDetailRequiresBuildCapabilityAndSurvivesCopy() {
+        val unavailable = JankHunterConfig.builder()
+            .availableRuntimeFeatures(emptySet())
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.CONCURRENCY_DIAGNOSTICS, true)
+            .concurrencyDetailedEnabled(true)
+            .build()
+        assertFalse(unavailable.concurrencyDiagnosticsEnabled())
+        assertFalse(unavailable.concurrencyDetailedEnabled())
+
+        val enabled = JankHunterConfig.builder()
+            .availableRuntimeFeatures(setOf(JankHunterRuntimeFeature.CONCURRENCY_DIAGNOSTICS))
+            .concurrencyDetailedEnabled(true)
+            .concurrencyMaxTrackedEntities(128)
+            .build()
+            .toBuilder()
+            .build()
+        assertTrue(enabled.concurrencyDiagnosticsEnabled())
+        assertTrue(enabled.concurrencyDetailedEnabled())
+        assertEquals(128, enabled.concurrencyMaxTrackedEntities())
+    }
+
+    @Test
     fun runtimeFeatureGatesCanOnlyDisableFeaturesPresentInBytecode() {
         val config = JankHunterConfig.builder()
             .availableRuntimeFeatures(
@@ -42,6 +64,7 @@ class JankHunterConfigTest {
     fun runtimeFeaturesGateRelatedCollectorSettings() {
         val config = JankHunterConfig.builder()
             .mainLooperDispatchMonitorEnabled(true)
+            .threadSamplerEnabled(true)
             .retainedHeapDumpEnabled(true)
             .runtimeFeatureEnabled(JankHunterRuntimeFeature.CALL_GRAPH, false)
             .runtimeFeatureEnabled(JankHunterRuntimeFeature.MAIN_LOOPER, false)
@@ -54,10 +77,12 @@ class JankHunterConfigTest {
             .runtimeFeatureEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS, false)
             .runtimeFeatureEnabled(JankHunterRuntimeFeature.HEAP_DUMPS, false)
             .runtimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.THREAD_SAMPLING, false)
             .build()
 
         assertFalse(config.runtimeCallGraphEnabled())
         assertFalse(config.mainLooperDispatchMonitorEnabled())
+        assertFalse(config.threadSamplerEnabled())
         assertFalse(config.ioTracingEnabled())
         assertFalse(config.bytecodeIoTracingEnabled())
         assertFalse(config.composeTracingEnabled())
@@ -431,6 +456,8 @@ class JankHunterConfigTest {
             mapOf(
                 JankHunterManifestConfig.META_ENABLED to true,
                 JankHunterManifestConfig.META_MAIN_THREAD_STALL_THRESHOLD_MS to 123L,
+                JankHunterManifestConfig.META_THREAD_SAMPLER_ENABLED to true,
+                JankHunterManifestConfig.META_THREAD_SAMPLE_INTERVAL_MS to 7_000L,
                 JankHunterManifestConfig.META_MAX_QUEUE_SIZE to 99,
                 JankHunterManifestConfig.META_ALLOWED_PROCESSES to "com.example, com.example:sync",
                 JankHunterManifestConfig.META_SYMBOL_NAMESPACE to "00112233445566778899aabbccddeeff",
@@ -441,6 +468,8 @@ class JankHunterConfigTest {
 
         assertTrue(config.enabled())
         assertEquals(123L, config.mainThreadStallThresholdMs())
+        assertTrue(config.threadSamplerEnabled())
+        assertEquals(7_000L, config.threadSampleIntervalMs())
         assertEquals(99, config.maxQueueSize())
         assertTrue(config.isProcessAllowed("com.example", "com.example"))
         assertTrue(config.isProcessAllowed("com.example:sync", "com.example"))
@@ -513,6 +542,12 @@ class JankHunterConfigTest {
 
         assertFalse(allowList.isProcessAllowed("com.example", "com.example"))
         assertTrue(allowList.isProcessAllowed("com.example:sync", "com.example"))
+    }
+
+    @Test
+    fun defaultRedactorOmitsOversizedInputsBeforeRegularExpressionWork() {
+        assertEquals(null, JankHunterRedactor.default().redact("a".repeat(4097)))
+        assertEquals("a".repeat(4097), JankHunterRedactor.none().redact("a".repeat(4097)))
     }
 
     @Test

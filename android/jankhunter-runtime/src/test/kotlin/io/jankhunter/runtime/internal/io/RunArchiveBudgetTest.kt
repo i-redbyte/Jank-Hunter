@@ -2,6 +2,9 @@ package io.jankhunter.runtime.internal.io
 
 import java.io.File
 import java.nio.file.Files
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -14,6 +17,73 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class RunArchiveBudgetTest {
+    @Test
+    fun concurrentOwnersCannotExpandTheSharedQuotaByOpeningWithAnotherPolicy() {
+        val directory = Files.createTempDirectory("jankhunter-shared-limit").toFile()
+        try {
+            RunArchiveBudget.open(directory, RUN_ID, 32L * 1024L, { 0L }, sharedLimit = true) { 0L }.use { first ->
+                RunArchiveBudget.open(directory, RUN_ID, 64L * 1024L, { 0L }, sharedLimit = true) { 0L }.use { second ->
+                    first.claim(15L * 1024L, terminal = false)
+                    try {
+                        second.claim(2L * 1024L, terminal = false)
+                        fail("a later owner expanded the active shared quota")
+                    } catch (error: StorageBudgetExhaustedException) {
+                        assertEquals(32L * 1024L, error.limitBytes)
+                    }
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun tornNewestQuotaStateFailsClosedWhileAReservationIsActive() {
+        val directory = Files.createTempDirectory("jankhunter-torn-budget").toFile()
+        try {
+            val first = budget(directory, 64L * 1024L) { 0L }
+            try {
+                first.claim(1_024L, terminal = false)
+                val state = stateFile(directory, RUN_ID)
+                RandomAccessFile(state, "rw").use { file ->
+                    file.seek(80L)
+                    file.writeLong(0L)
+                }
+                try {
+                    first.claim(1L, terminal = false)
+                    fail("a torn quota state admitted new bytes during an active lease")
+                } catch (_: java.io.IOException) {
+                    // The previous complete slot cannot account for unflushed claims.
+                }
+            } finally {
+                first.close()
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun schemaOneStateWithoutLiveLeasesIsRebuiltFromPhysicalBytes() {
+        val directory = Files.createTempDirectory("jankhunter-v1-budget").toFile()
+        try {
+            val oldState = ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN)
+            oldState.put(byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'A'.code.toByte(), 'B'.code.toByte()))
+            oldState.putInt(1)
+            repeat(16) { oldState.put(if (it == 0) 1.toByte() else 0.toByte()) }
+            oldState.putLong(60L * 1024L).putLong((60L * 1024L).inv())
+            oldState.putLong(0L).putLong(0L.inv())
+            stateFile(directory, RUN_ID).writeBytes(oldState.array())
+
+            budget(directory, 64L * 1024L) { 12L * 1024L }.use { migrated ->
+                migrated.claim(1_024L, terminal = false)
+            }
+            assertTrue(stateFile(directory, RUN_ID).length() >= 88L)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun reclamationUsesPrimitivePort() {
         val field = RunArchiveBudget::class.java.getDeclaredField("reclaimBytesTo")

@@ -3,5 +3,7 @@
         <activity android:name="io.jankhunter.runtime.JankStatsProbeActivity"
             android:exported="false" android:hardwareAccelerated="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <service android:name="io.jankhunter.runtime.internal.io.HostStorageProcessService"
+            android:exported="false" android:process=":jh_storage_test" />
     </application>
 </manifest>

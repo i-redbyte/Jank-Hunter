@@ -45,7 +45,7 @@ internal class LifecycleMetadataStore(
         if (!onDisk) return
         val available = availableHeapBytes().coerceAtLeast(0)
         val cacheKiB = (available / CACHE_HEAP_SHARE / KIB).coerceIn(KIB, Int.MAX_VALUE.toLong()).toInt()
-        // H2 2.3.232 MVStore.setCacheSize(kb) divides by 1024 before calling FileStore;
+        // MVStore.setCacheSize(kb) divides by 1024 before calling FileStore;
         // getCacheSize() returns MiB. Use explicit methods to expose the asymmetric units.
         if (store.getCacheSize() != cacheKiB / KIB.toInt()) store.setCacheSize(cacheKiB)
         if (store.hasUnsavedChanges() && store.unsavedMemory.toLong() >= available / WRITE_HEAP_SHARE) store.commit()

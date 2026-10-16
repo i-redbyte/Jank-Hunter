@@ -115,6 +115,7 @@ internal fun workerOutcomeFromCode(value: Int): JankHunterWorkerOutcome {
         JankHunterWorkerOutcome.FAILURE.code -> JankHunterWorkerOutcome.FAILURE
         JankHunterWorkerOutcome.RETRY.code -> JankHunterWorkerOutcome.RETRY
         JankHunterWorkerOutcome.CANCELLED.code -> JankHunterWorkerOutcome.CANCELLED
+        JankHunterWorkerOutcome.STOPPED.code -> JankHunterWorkerOutcome.STOPPED
         else -> JankHunterWorkerOutcome.UNKNOWN
     }
 }

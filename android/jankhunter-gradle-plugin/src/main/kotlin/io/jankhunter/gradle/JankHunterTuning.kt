@@ -24,14 +24,31 @@ open class JankHunterTuning @Inject constructor(objects: ObjectFactory) {
     val thresholds: JankHunterThresholdTuning = objects.newInstance(JankHunterThresholdTuning::class.java)
     val admission: JankHunterAdmissionTuning = objects.newInstance(JankHunterAdmissionTuning::class.java)
     val heapDumps: JankHunterHeapDumpTuning = objects.newInstance(JankHunterHeapDumpTuning::class.java)
+    val threads: JankHunterThreadTuning = objects.newInstance(JankHunterThreadTuning::class.java)
+    val concurrency: JankHunterConcurrencyTuning = objects.newInstance(JankHunterConcurrencyTuning::class.java)
 
     internal fun hasOverrides(): Boolean {
         return queueCapacity.isPresent ||
             methodFiltering.isPresent ||
             thresholds.hasOverrides() ||
             admission.hasOverrides() ||
-            heapDumps.hasOverrides()
+            heapDumps.hasOverrides() ||
+            threads.hasOverrides() ||
+            concurrency.hasOverrides()
     }
+}
+
+open class JankHunterConcurrencyTuning @Inject constructor(objects: ObjectFactory) {
+    val detailedEnabled: Property<Boolean> = objects.property(Boolean::class.java)
+    val maxTrackedEntities: Property<Int> = objects.property(Int::class.java)
+
+    internal fun hasOverrides(): Boolean = detailedEnabled.isPresent || maxTrackedEntities.isPresent
+}
+
+open class JankHunterThreadTuning @Inject constructor(objects: ObjectFactory) {
+    val intervalMs: Property<Long> = objects.property(Long::class.java)
+
+    internal fun hasOverrides(): Boolean = intervalMs.isPresent
 }
 
 open class JankHunterThresholdTuning @Inject constructor(objects: ObjectFactory) {

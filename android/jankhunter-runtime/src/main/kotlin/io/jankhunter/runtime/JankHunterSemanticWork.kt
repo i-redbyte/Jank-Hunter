@@ -18,6 +18,7 @@ enum class JankHunterWorkerOutcome(
     RETRY("retry", 2),
     CANCELLED("cancelled", 3),
     UNKNOWN("unknown", 4),
+    STOPPED("stopped", 5),
 }
 
 internal object JankHunterSemanticWork {
@@ -32,6 +33,7 @@ internal object JankHunterSemanticWork {
     const val WORKER = 6
 
     private const val THREAD_VARIANTS = 2
+    private const val OUTCOME_VARIANTS = 6
     private val callerTable = arrayOfNulls<SemanticCaller>((WORKER + 1) * THREAD_VARIANTS * OUTCOME_VARIANTS)
 
     init {
@@ -145,7 +147,6 @@ internal object JankHunterSemanticWork {
 
     private fun hashByte(hash: ULong, value: Int): ULong = (hash xor value.toULong()) * FNV_PRIME
 
-    private const val OUTCOME_VARIANTS = 5
     private const val NON_WORKER_OUTCOME_INDEX = 0
     private const val REPLACEMENT_BYTE = 0x3f
 }

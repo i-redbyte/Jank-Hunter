@@ -9,6 +9,49 @@ import org.junit.Test
 
 class JankHunterVariantDslTest {
     @Test
+    fun threadSamplingUsesFeatureSelectionAndVariantOverrides() {
+        val extension = extension()
+        extension.profile.set(JankHunterProfile.FULL)
+
+        val default = extension.resolve(JankHunterVariantIdentity("release", "release"))
+        assertFalse(JankHunterFeature.THREAD_SAMPLING in default.features)
+        assertFalse(default.runtime.threadSamplerEnabled)
+
+        extension.enable(JankHunterFeature.THREAD_SAMPLING)
+        extension.tuning.threads.intervalMs.set(7_000L)
+        extension.debug { disable(JankHunterFeature.THREAD_SAMPLING) }
+
+        val release = extension.resolve(JankHunterVariantIdentity("release", "release"))
+        val debug = extension.resolve(JankHunterVariantIdentity("debug", "debug"))
+        assertTrue(JankHunterFeature.THREAD_SAMPLING in release.features)
+        assertTrue(release.runtime.threadSamplerEnabled)
+        assertEquals(7_000L, release.runtime.threadSampleIntervalMs)
+        assertFalse(JankHunterFeature.THREAD_SAMPLING in debug.features)
+        assertFalse(debug.runtime.threadSamplerEnabled)
+    }
+
+    @Test
+    fun concurrencyDiagnosticsUsesFeatureSelectionWithoutExecutorDependency() {
+        val extension = extension()
+        extension.profile.set(JankHunterProfile.TARGETED)
+        extension.enable(JankHunterFeature.THREAD_SAMPLING)
+        extension.tuning.concurrency.detailedEnabled.set(true)
+        extension.tuning.concurrency.maxTrackedEntities.set(2_048)
+
+        val sampling = extension.resolve(JankHunterVariantIdentity("debug", "debug"))
+        assertTrue(sampling.instrumentation.threadLifecycle)
+        assertFalse(sampling.instrumentation.executors)
+        assertFalse(sampling.instrumentation.concurrencyDiagnostics)
+        assertEquals(2_048, sampling.runtime.concurrencyMaxTrackedEntities)
+        assertTrue(sampling.runtime.concurrencyDetailedEnabled)
+
+        extension.enable(JankHunterFeature.CONCURRENCY_DIAGNOSTICS)
+        val diagnostic = extension.resolve(JankHunterVariantIdentity("debug", "debug"))
+        assertTrue(diagnostic.instrumentation.concurrencyDiagnostics)
+        assertFalse(diagnostic.instrumentation.executors)
+    }
+
+    @Test
     fun conciseDslResolvesGlobalBuildTypeFlavorAndExactVariantLayers() {
         val project = ProjectBuilder.builder().build()
         val extension = extension(project)
@@ -132,6 +175,7 @@ class JankHunterVariantDslTest {
             thresholds.uiWindowP95Ms.set(40L)
             admission.mainThreadWaitMs.set(1L)
             admission.backgroundWaitMs.set(8L)
+            threads.intervalMs.set(7_000L)
             heapDumps.minIntervalMs.set(120_000L)
             heapDumps.maxCount.set(2)
             heapDumps.minRetainedAgeMs.set(45_000L)
@@ -148,6 +192,8 @@ class JankHunterVariantDslTest {
         assertEquals(40L, resolved.runtime.uiWindowP95ThresholdMs)
         assertEquals(1L, resolved.runtime.mainThreadAdmissionWaitMs)
         assertEquals(8L, resolved.runtime.backgroundAdmissionWaitMs)
+        assertFalse(resolved.runtime.threadSamplerEnabled)
+        assertEquals(7_000L, resolved.runtime.threadSampleIntervalMs)
         assertEquals(120_000L, resolved.retainedHeapDump.minIntervalMs)
         assertEquals(2, resolved.retainedHeapDump.maxCount)
         assertEquals(45_000L, resolved.retainedHeapDump.minRetainedAgeMs)

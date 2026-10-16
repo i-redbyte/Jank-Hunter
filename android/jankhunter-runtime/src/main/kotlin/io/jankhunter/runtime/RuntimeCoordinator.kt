@@ -93,7 +93,7 @@ internal class RuntimeCoordinator(
         val diagnostics = JankHunterInitDiagnostics(
             status = "failed",
             failureClass = throwable.javaClass.simpleName ?: throwable.javaClass.name,
-            failureMessage = throwable.message,
+            failureMessage = null,
             processName = processName,
             logDirectory = logDirectory?.absolutePath,
             atMs = nowMs.getAsLong(),

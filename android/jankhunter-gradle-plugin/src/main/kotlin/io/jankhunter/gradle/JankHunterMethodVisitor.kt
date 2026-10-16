@@ -36,10 +36,38 @@ internal class JankHunterMethodVisitor(
     private val receiverCallback: AndroidReceiverInvocation? = null,
     private val recordReceiverHookApplied: () -> Unit = {},
     private val binderServer: Boolean = false,
-    private val binderDescriptor: String? = null,
+    binderDescriptor: String? = null,
     private val coroutineOwner: String? = null,
+    private val entrySourceLine: Int? = null,
     private val recordBinderHookApplied: () -> Unit = {},
+    private val classOrigin: CausalCodeOrigin = CausalCodeOrigin.UNKNOWN,
+    trivialMethod: MethodFilterDecision? = null,
+    taskLambdaKind: TaskLambdaKind? = null,
 ) : AdviceAdapter(Opcodes.ASM9, next, accessFlags, methodName, methodDescriptor) {
+    private val threadSubclassConstructor = constructor && "java/lang/Thread" in classHierarchy
+    private val observeInteractionCallback = config.concurrencyDiagnostics && methodName == "onClick" &&
+        methodDescriptor == "(Landroid/view/View;)V" &&
+        accessFlags and (Opcodes.ACC_STATIC or Opcodes.ACC_BRIDGE or Opcodes.ACC_SYNTHETIC) == 0 &&
+        "android/view/View\$OnClickListener" in classHierarchy
+    private val observeThreadRun = observeInteractionCallback || taskLambdaKind == TaskLambdaKind.CALLBACK ||
+        taskLambdaKind == TaskLambdaKind.RUNNABLE ||
+        (config.executors || config.threadLifecycle || config.concurrencyDiagnostics) &&
+        methodName == "run" && methodDescriptor == "()V" &&
+        accessFlags and (Opcodes.ACC_STATIC or Opcodes.ACC_BRIDGE or Opcodes.ACC_SYNTHETIC) == 0 &&
+        ("java/lang/Thread" in classHierarchy || "java/lang/Runnable" in classHierarchy)
+    private val observeCallableCall = config.concurrencyDiagnostics && (taskLambdaKind == TaskLambdaKind.CALLABLE ||
+        methodName == "call" && Type.getArgumentTypes(methodDescriptor).isEmpty() &&
+        accessFlags and (Opcodes.ACC_STATIC or Opcodes.ACC_BRIDGE or Opcodes.ACC_SYNTHETIC) == 0 &&
+        "java/util/concurrent/Callable" in classHierarchy)
+    private val executionUsesClassMarker = accessFlags and Opcodes.ACC_STATIC != 0 ||
+        taskLambdaKind != null || observeInteractionCallback
+    private val causalWorkerImplementation = config.concurrencyDiagnostics &&
+        methodName == "doJankHunterWork" &&
+        accessFlags and (Opcodes.ACC_STATIC or Opcodes.ACC_BRIDGE or Opcodes.ACC_SYNTHETIC) == 0 &&
+        (methodDescriptor == "()Landroidx/work/ListenableWorker\$Result;" &&
+            "io/jankhunter/workmanager/JankHunterWorker" in classHierarchy ||
+            methodDescriptor == "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" &&
+            "io/jankhunter/workmanager/JankHunterCoroutineWorker" in classHierarchy)
     private val methodId = OwnerIds.methodId(className, methodName, methodDescriptor)
     private val generatedOwnerLabel = OwnerIds.readableOwner(className, methodName)
     private val methodDiagnosticName = "$methodName$methodDescriptor"
@@ -69,9 +97,10 @@ internal class JankHunterMethodVisitor(
         ownerId = { methodId },
         emitOriginal = ::emitOriginalInvocation,
         emitTryCatchBlock = ::emitInvocationTryCatchBlock,
+        sourceLabel = { generatedOwnerLabel },
     )
     private val state = MethodInstrumentationState()
-    private val methodFilterDecision = MethodFilterClassifier.classify(
+    private val methodFilterDecision = trivialMethod ?: MethodFilterClassifier.classify(
         config.methodFilterMode,
         classAccessFlags,
         accessFlags,
@@ -92,6 +121,8 @@ internal class JankHunterMethodVisitor(
         recordBinderHookApplied = recordBinderHookApplied,
     )
     private var cachedCallerMethod: CallerMethod? = null
+    private var invocationOrdinal: Int = 0
+    private var workerSiteLineEmitted = false
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -101,6 +132,10 @@ internal class JankHunterMethodVisitor(
     override fun visitLineNumber(line: Int, start: Label) {
         state.currentLine = line
         super.visitLineNumber(line, start)
+        if (state.workerSiteReportedLocal >= 0 && !workerSiteLineEmitted) {
+            emitWorkerImplementationSite(line)
+            workerSiteLineEmitted = true
+        }
     }
 
     override fun onMethodEnter() {
@@ -114,6 +149,43 @@ internal class JankHunterMethodVisitor(
             recordClassHookApplied()
         }
         if (!shouldInstrumentMethod()) return
+        if (causalWorkerImplementation) {
+            // The adapter installs the exact Worker attempt context. The application override
+            // supplies only its implementation site; it must not emit a second legacy Worker enter.
+            state.workerSiteReportedLocal = newLocal(Type.BOOLEAN_TYPE)
+            push(false)
+            storeLocal(state.workerSiteReportedLocal)
+            recordClassHookApplied()
+        }
+        if (observeThreadRun) {
+            visitLdcInsn(generatedOwnerLabel)
+            visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "observeExecutingThread", "(Ljava/lang/String;)V", false)
+            recordClassHookApplied()
+            if (config.concurrencyDiagnostics) {
+                loadExecutionReceiver()
+                emitCausalSite(causalSite(0))
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    JANK_HUNTER_HOOKS,
+                    "enterRunnableRun",
+                    "(Ljava/lang/Object;JLjava/lang/String;II)J",
+                    false,
+                )
+                state.causalRunTokenLocal = newLocal(Type.LONG_TYPE)
+                storeLocal(state.causalRunTokenLocal)
+            }
+        }
+        if (observeCallableCall) {
+            loadExecutionReceiver()
+            emitCausalSite(causalSite(0))
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "enterCallableCall",
+                "(Ljava/lang/Object;JLjava/lang/String;II)J", false,
+            )
+            state.causalCallableTokenLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(state.causalCallableTokenLocal)
+            recordClassHookApplied()
+        }
         if (coroutineOwner != null) {
             emitCoroutineSegmentEnter()
             recordClassHookApplied()
@@ -247,6 +319,12 @@ internal class JankHunterMethodVisitor(
         state.workerRunAttemptLocal = newLocal(Type.INT_TYPE)
         storeLocal(state.workerRunAttemptLocal)
 
+        if (config.concurrencyDiagnostics) {
+            state.workerSiteReportedLocal = newLocal(Type.BOOLEAN_TYPE)
+            push(false)
+            storeLocal(state.workerSiteReportedLocal)
+        }
+
         loadLocal(state.workerInstanceLocal)
         visitLdcInsn(methodId)
         visitLdcInsn(generatedOwnerLabel)
@@ -262,6 +340,17 @@ internal class JankHunterMethodVisitor(
 
     override fun onMethodExit(opcode: Int) {
         if (!shouldInstrumentMethod()) return
+        if (state.workerSiteReportedLocal >= 0 && opcode != Opcodes.ATHROW) emitWorkerSiteFallback()
+        if (state.causalRunTokenLocal >= 0 && opcode != Opcodes.ATHROW) {
+            loadLocal(state.causalRunTokenLocal)
+            push(0)
+            visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "exitRunnableRun", "(JI)V", false)
+        }
+        if (state.causalCallableTokenLocal >= 0 && opcode != Opcodes.ATHROW) {
+            loadLocal(state.causalCallableTokenLocal)
+            push(0)
+            visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "exitCallableCall", "(JI)V", false)
+        }
         if (state.coroutineSegmentTokenLocal >= 0 && opcode == Opcodes.ARETURN) {
             dup()
             if (state.coroutineSegmentResultLocal < 0) {
@@ -434,6 +523,7 @@ internal class JankHunterMethodVisitor(
         descriptor: String,
         isInterface: Boolean,
     ) {
+        invocationOrdinal++
         if (!shouldInstrumentMethod()) {
             super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
             return
@@ -518,6 +608,100 @@ internal class JankHunterMethodVisitor(
                 return
             }
         }
+        if (config.concurrencyDiagnostics && isThreadConstructor(opcodeAndSource, owner, name)) {
+            hookEmitter.causalThreadConstructed(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                causalSite(invocationOrdinal),
+                controlledTarget = !threadSubclassConstructor,
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics && name == "interrupt" && descriptor == "()V" &&
+            isThreadOwner(owner)
+        ) {
+            hookEmitter.causalThreadCall(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                causalSite(invocationOrdinal),
+                interrupt = true,
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics && isThreadTerminationProbe(owner, name, descriptor)) {
+            hookEmitter.causalThreadTerminationProbe(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics && isCoroutineJobCancel(owner, name, descriptor)) {
+            hookEmitter.causalCoroutineJobCancel(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                causalSite(invocationOrdinal),
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics && owner == "io/jankhunter/runtime/JankHunterTrackedHandler" &&
+            (name == "post" && descriptor ==
+                "(Ljava/lang/Runnable;)Lio/jankhunter/runtime/JankHunterPostHandle;" ||
+                name == "postDelayed" && descriptor ==
+                "(Ljava/lang/Runnable;J)Lio/jankhunter/runtime/JankHunterPostHandle;")
+        ) {
+            hookEmitter.causalTrackedHandlerPost(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                causalSite(invocationOrdinal),
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics && isCausalResourceCall(owner, name, descriptor)) {
+            hookEmitter.causalResourceCall(
+                MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                causalSite(invocationOrdinal),
+            )
+            recordClassHookApplied()
+            return
+        }
+        if (config.concurrencyDiagnostics) {
+            val invocation = MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface)
+            val site = causalSite(invocationOrdinal)
+            when {
+                isExecutorConstructor(opcodeAndSource, owner, name) -> {
+                    hookEmitter.causalExecutorConstructed(invocation, site)
+                    recordClassHookApplied()
+                    return
+                }
+                isExecutorFactory(opcodeAndSource, owner, name, descriptor) -> {
+                    hookEmitter.causalExecutorFactory(invocation, site)
+                    recordClassHookApplied()
+                    return
+                }
+                name == "cancel" && descriptor == "(Z)Z" && isFutureOwner(owner) -> {
+                    hookEmitter.causalFutureCancel(invocation, site)
+                    recordClassHookApplied()
+                    return
+                }
+                isExecutorServiceOwner(owner) &&
+                    (name == "shutdown" && descriptor == "()V" ||
+                        name == "shutdownNow" && descriptor == "()Ljava/util/List;") -> {
+                    hookEmitter.causalExecutorShutdown(invocation, site)
+                    recordClassHookApplied()
+                    return
+                }
+                isExecutorServiceOwner(owner) && name == "isTerminated" && descriptor == "()Z" -> {
+                    hookEmitter.causalExecutorTerminationCheck(invocation)
+                    recordClassHookApplied()
+                    return
+                }
+            }
+        }
+        if ((config.workerTracing || config.concurrencyDiagnostics) && WorkScheduleBytecode.matches(opcodeAndSource, owner, name, descriptor)) {
+            WorkScheduleBytecode.emit(this, MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface), ::emitOriginalInvocation)
+            recordClassHookApplied()
+            return
+        }
         val namedCandidateMask = HookIntentResolver.namedCandidateMask(name)
         if (namedCandidateMask == 0) {
             HookNearMissDiagnostics.resolve(owner, name, descriptor, config)?.let { nearMiss ->
@@ -561,14 +745,57 @@ internal class JankHunterMethodVisitor(
         ) {
             throw missingOkHttpHelper(call)
         }
-        val matchedIntent = (decision as? HookDecision.Matched)?.intent
-        if (matchedIntent != null) {
+        val matchedDecision = decision as? HookDecision.Matched
+        if (matchedDecision != null) {
+            val matchedIntent = matchedDecision.intent
             val invocation = MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface)
-            if (emitHook(matchedIntent, invocation)) {
-                diagnostics.recordHook(decision, methodDiagnosticName, call.line)
+            if (config.concurrencyDiagnostics && matchedIntent == HookIntent.ThreadStart) {
+                hookEmitter.causalThreadCall(invocation, causalSite(invocationOrdinal), interrupt = false)
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
                 return
             }
-            diagnostics.recordHook(decision, methodDiagnosticName, call.line)
+            if (config.concurrencyDiagnostics && matchedIntent == HookIntent.ThreadFactoryReturn) {
+                hookEmitter.causalThreadFactory(invocation, causalSite(invocationOrdinal))
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (config.concurrencyDiagnostics && matchedIntent is HookIntent.ExecutorRunnable) {
+                hookEmitter.causalExecutorHandoff(invocation, causalSite(invocationOrdinal), callable = false)
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (config.concurrencyDiagnostics && matchedIntent is HookIntent.ExecutorCallable) {
+                hookEmitter.causalExecutorHandoff(invocation, causalSite(invocationOrdinal), callable = true)
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (config.concurrencyDiagnostics && matchedIntent is HookIntent.CoroutineBlock) {
+                hookEmitter.causalCoroutineBlock(invocation, causalSite(invocationOrdinal))
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (config.concurrencyDiagnostics && matchedIntent is HookIntent.HandlerRunnable) {
+                hookEmitter.causalHandlerPost(invocation, causalSite(invocationOrdinal), config.handlers)
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (config.concurrencyDiagnostics && matchedIntent == HookIntent.WorkSubmission) {
+                hookEmitter.observeWorkSubmission(invocation, causalSite(invocationOrdinal))
+                recordClassHookApplied()
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            if (emitHook(matchedIntent, invocation)) {
+                diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
+                return
+            }
+            diagnostics.recordHook(matchedDecision, methodDiagnosticName, call.line)
         } else {
             diagnostics.recordDecision(
                 if (decision is HookDecision.NotMatched) {
@@ -588,6 +815,98 @@ internal class JankHunterMethodVisitor(
         if (cached != null) return cached
         return CallerMethod(className, methodName, methodDescriptor).also { cachedCallerMethod = it }
     }
+
+    private fun causalSite(ordinal: Int): CausalSourceSite = CausalSourceSiteIds.forInvocation(
+        className, methodName, methodDescriptor, state.currentLine, ordinal, classOrigin,
+    )
+
+    private fun emitWorkerImplementationSite(line: Int) {
+        loadThis()
+        emitCausalSite(CausalSourceSiteIds.forInvocation(
+            className, methodName, methodDescriptor, line.takeIf { it > 0 }, 0, classOrigin,
+        ))
+        mv.visitMethodInsn(
+            Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "observeWorkerImplementationSite",
+            "(Ljava/lang/Object;JLjava/lang/String;II)V", false,
+        )
+        push(true)
+        storeLocal(state.workerSiteReportedLocal)
+    }
+
+    private fun emitWorkerSiteFallback() {
+        val alreadyReported = Label()
+        loadLocal(state.workerSiteReportedLocal)
+        ifZCmp(NE, alreadyReported)
+        emitWorkerImplementationSite(0)
+        mark(alreadyReported)
+    }
+
+    private fun emitCausalSite(site: CausalSourceSite) {
+        visitLdcInsn(site.id)
+        visitLdcInsn(site.method)
+        push(site.line)
+        push(site.origin.wireValue)
+    }
+
+    private fun isThreadConstructor(opcode: Int, owner: String, name: String): Boolean =
+        opcode == Opcodes.INVOKESPECIAL && name == "<init>" && isThreadOwner(owner)
+
+    private fun isThreadOwner(owner: String): Boolean = owner == "java/lang/Thread" ||
+        "java/lang/Thread" in resolveOwnerHierarchy(owner)
+
+    private fun isThreadTerminationProbe(owner: String, name: String, descriptor: String): Boolean =
+        isThreadOwner(owner) && (name == "join" &&
+            (descriptor == "()V" || descriptor == "(J)V" || descriptor == "(JI)V") ||
+            name == "isAlive" && descriptor == "()Z")
+
+    private fun isExecutorConstructor(opcode: Int, owner: String, name: String): Boolean =
+        opcode == Opcodes.INVOKESPECIAL && name == "<init>" &&
+            (owner in EXECUTOR_CONSTRUCTOR_OWNERS ||
+                resolveOwnerHierarchy(owner).any(EXECUTOR_CONSTRUCTOR_OWNERS::contains))
+
+    private fun isExecutorFactory(opcode: Int, owner: String, name: String, descriptor: String): Boolean =
+        opcode == Opcodes.INVOKESTATIC && owner == "java/util/concurrent/Executors" &&
+            name.startsWith("new") && Type.getReturnType(descriptor).descriptor.contains("Executor")
+
+    private fun isFutureOwner(owner: String): Boolean = owner == "java/util/concurrent/Future" ||
+        "java/util/concurrent/Future" in resolveOwnerHierarchy(owner)
+
+    private fun isCoroutineJobCancel(owner: String, name: String, descriptor: String): Boolean {
+        if (name == "cancel\$default" && owner == "kotlinx/coroutines/Job\$DefaultImpls") {
+            return descriptor.startsWith("(Lkotlinx/coroutines/Job;")
+        }
+        if (name != "cancel") return false
+        if (owner != "kotlinx/coroutines/Job" && "kotlinx/coroutines/Job" !in resolveOwnerHierarchy(owner)) {
+            return false
+        }
+        val arguments = Type.getArgumentTypes(descriptor)
+        val result = Type.getReturnType(descriptor)
+        return arguments.size <= 1 && (result == Type.VOID_TYPE || result == Type.BOOLEAN_TYPE)
+    }
+
+    private fun isCausalResourceCall(owner: String, name: String, descriptor: String): Boolean {
+        if (owner != "io/jankhunter/runtime/JankHunterResources") return false
+        return when (name) {
+            "beginAcquire" -> descriptor ==
+                "(Lio/jankhunter/runtime/JankHunterResourceKind;)Lio/jankhunter/runtime/JankHunterResourceLease;" ||
+                descriptor == "(Lio/jankhunter/runtime/JankHunterResourceKind;Z)" +
+                "Lio/jankhunter/runtime/JankHunterResourceLease;"
+            "beginAcquire\$default" -> descriptor ==
+                "(Lio/jankhunter/runtime/JankHunterResourceKind;ZILjava/lang/Object;)" +
+                "Lio/jankhunter/runtime/JankHunterResourceLease;"
+            "released" -> descriptor == "(Lio/jankhunter/runtime/JankHunterResourceLease;)V"
+            "withLock" -> descriptor ==
+                "(Ljava/util/concurrent/locks/Lock;Lkotlin/jvm/functions/Function0;)Ljava/lang/Object;"
+            "withMonitor" -> descriptor ==
+                "(Ljava/lang/Object;Lkotlin/jvm/functions/Function0;)Ljava/lang/Object;"
+            "use" -> descriptor ==
+                "(Ljava/lang/AutoCloseable;Lkotlin/jvm/functions/Function1;)Ljava/lang/Object;"
+            else -> false
+        }
+    }
+
+    private fun isExecutorServiceOwner(owner: String): Boolean = owner == "java/util/concurrent/ExecutorService" ||
+        "java/util/concurrent/ExecutorService" in resolveOwnerHierarchy(owner)
 
     private fun consumeDatabaseInvocationOrigin(owner: String, name: String, descriptor: String): String? {
         val origin = databaseInvocationOrigins.getOrNull(state.databaseInvocationOriginIndex) ?: return null
@@ -609,6 +928,16 @@ internal class JankHunterMethodVisitor(
             HookIntent.HandlerRemoveCallbacksAndMessages,
             HookIntent.HandlerHasCallbacks,
             HookIntent.HandlerMessageSend,
+            HookIntent.WorkSubmission,
+            HookIntent.WorkBuilderBackoff,
+            HookIntent.WorkBuilderBackoffDuration,
+            HookIntent.WorkBuilderExpedited,
+            HookIntent.WorkBuilderBuild,
+            HookIntent.WorkChainRoot,
+            HookIntent.WorkChainChild,
+            HookIntent.WorkChainCombine,
+            HookIntent.ThreadStart,
+            HookIntent.ThreadFactoryReturn,
             is HookIntent.ExecutorRunnable,
             is HookIntent.ExecutorCallable,
             is HookIntent.CoroutineBlock,
@@ -702,7 +1031,31 @@ internal class JankHunterMethodVisitor(
             if (state.coroutineSegmentTokenLocal >= 0) {
                 emitCoroutineSegmentExit(throwableLocal)
             }
+            if (state.causalRunTokenLocal >= 0) {
+                loadLocal(state.causalRunTokenLocal)
+                push(1)
+                visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "exitRunnableRun", "(JI)V", false)
+            }
+            if (state.causalCallableTokenLocal >= 0) {
+                loadLocal(state.causalCallableTokenLocal)
+                push(1)
+                visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "exitCallableCall", "(JI)V", false)
+            }
+            if (state.workerSiteReportedLocal >= 0) emitWorkerSiteFallback()
             if (state.semanticStartLocal >= 0) {
+                if (state.semanticKind == SemanticHookKind.WORKER) {
+                    loadLocal(state.semanticStartLocal)
+                    loadLocal(state.workerInstanceLocal)
+                    loadLocal(state.workerRunAttemptLocal)
+                    loadLocal(throwableLocal)
+                    visitMethodInsn(
+                        Opcodes.INVOKESTATIC,
+                        JANK_HUNTER_HOOKS,
+                        "workerFailure",
+                        "(JJILjava/lang/Throwable;)V",
+                        false,
+                    )
+                }
                 emitSemanticExit(outcome = SEMANTIC_OUTCOME_FAILURE)
             }
             if (state.annotationOperationLocal >= 0) {
@@ -727,13 +1080,18 @@ internal class JankHunterMethodVisitor(
             diagnostics.recordMethodFilter(
                 methodFilterDecision,
                 excluded = config.methodFilterMode == JankHunterMethodFilterMode.FILTER &&
-                    methodFilterDecision.exclusionReason != null,
+                    !methodBoundaryHooksEnabled(),
             )
         }
         super.visitEnd()
     }
 
     private companion object {
+        val EXECUTOR_CONSTRUCTOR_OWNERS = setOf(
+            "java/util/concurrent/ThreadPoolExecutor",
+            "java/util/concurrent/ScheduledThreadPoolExecutor",
+            "java/util/concurrent/ForkJoinPool",
+        )
         private const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
         private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
         private const val ANDROIDX_LISTENABLE_WORKER = "androidx/work/ListenableWorker"
@@ -862,16 +1220,28 @@ internal class JankHunterMethodVisitor(
             || state.receiverCallbackStartLocal >= 0
             || state.binderServerStartLocal >= 0
             || state.coroutineSegmentTokenLocal >= 0
+            || state.causalRunTokenLocal >= 0
+            || state.causalCallableTokenLocal >= 0
+            || state.workerSiteReportedLocal >= 0
     }
 
     private fun emitCoroutineSegmentEnter() {
         loadThis()
         visitLdcInsn(checkNotNull(coroutineOwner))
+        if (config.concurrencyDiagnostics) {
+            emitCausalSite(CausalSourceSiteIds.forInvocation(
+                className, methodName, methodDescriptor, entrySourceLine, 0, classOrigin,
+            ))
+        }
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
-            "enterCoroutineSegment",
-            "(Ljava/lang/Object;Ljava/lang/String;)J",
+            if (config.concurrencyDiagnostics) "enterCausalCoroutineSegment" else "enterCoroutineSegment",
+            if (config.concurrencyDiagnostics) {
+                "(Ljava/lang/Object;Ljava/lang/String;JLjava/lang/String;II)J"
+            } else {
+                "(Ljava/lang/Object;Ljava/lang/String;)J"
+            },
             false,
         )
         state.coroutineSegmentTokenLocal = newLocal(Type.LONG_TYPE)
@@ -905,8 +1275,18 @@ internal class JankHunterMethodVisitor(
     }
 
     private fun methodBoundaryHooksEnabled(): Boolean {
+        if (annotationContext.hasContext || annotationContext.operation != null || observeThreadRun ||
+            observeCallableCall || coroutineOwner != null || causalWorkerImplementation) return true
         return config.methodFilterMode != JankHunterMethodFilterMode.FILTER ||
             methodFilterDecision.exclusionReason == null
+    }
+
+    private fun loadExecutionReceiver() {
+        if (executionUsesClassMarker) {
+            visitLdcInsn(Type.getObjectType(className.replace('.', '/')))
+        } else {
+            loadThis()
+        }
     }
 
     private fun emitLifecycleWatch() {

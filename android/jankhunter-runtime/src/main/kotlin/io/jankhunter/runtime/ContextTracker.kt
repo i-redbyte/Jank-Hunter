@@ -26,7 +26,12 @@ internal class ContextTracker(
         var current = operation.get()
         if (current == null || !current.isFinished) return current
         val finishedHead = current
+        var visited = 0
         do {
+            if (++visited > MAX_CHAIN_VISITS) {
+                dropOperationAttribution()
+                return null
+            }
             current = current?.previousOperation
         } while (current?.isFinished == true)
         setThreadLocal(operation, current)
@@ -42,7 +47,12 @@ internal class ContextTracker(
         if (operation.get() !== value) return
         var restored = value.previousOperation
         value.previousOperation = null
+        var visited = 0
         while (restored != null && restored.isFinished) {
+            if (++visited > MAX_CHAIN_VISITS) {
+                dropOperationAttribution()
+                return
+            }
             val next = restored.previousOperation
             restored.previousOperation = null
             restored = next
@@ -141,12 +151,21 @@ internal class ContextTracker(
         retained: JankHunterOperation?,
     ) {
         var current: JankHunterOperation? = head
-        while (current != null && current !== retained) {
+        var visited = 0
+        while (current != null && current !== retained && visited++ < MAX_CHAIN_VISITS) {
             val next = current.previousOperation
             current.previousOperation = null
             current = next
         }
     }
+
+    private fun dropOperationAttribution() {
+        operation.remove()
+        propagatedOperationId.set(0L)
+        RuntimeHookFailureTracker.record(RuntimeHookFailureReason.CONTEXT)
+    }
+
+    private companion object { const val MAX_CHAIN_VISITS = 32 }
 
     private fun JankHunterContext.matches(screen: String?, owner: String?, operationId: Long): Boolean {
         return this.screen == screen && this.owner == owner && this.operationId == operationId

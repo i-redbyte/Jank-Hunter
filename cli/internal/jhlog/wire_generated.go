@@ -4,9 +4,9 @@ package jhlog
 
 const FormatMarker = 0x81
 const FormatMajor = 5
-const FormatMinor = 1
+const FormatMinor = 3
 const FormatPatch = 0
-const FormatVersionString = "5.1.0"
+const FormatVersionString = "5.3.0"
 const HeaderSchemaV2 uint64 = 2
 const HeaderSchemaV3 uint64 = 3
 const HeaderSchemaCurrent = HeaderSchemaV3
@@ -56,13 +56,14 @@ const (
 	FeatureUIDTraffic                uint64 = 1 << 29
 	FeatureHTTPCollectionState       uint64 = 1 << 30
 	FeatureSymbolOrigin              uint64 = 1 << 31
+	FeatureCausalConcurrency         uint64 = 1 << 32
 	FeatureGZIPChunks                uint64 = 1 << 0
 	FeatureDatabaseTransactionDelta  uint64 = 1 << 1
 	FeatureColumnarDatabasePages     uint64 = 1 << 2
 	FeatureSegmentDictionaryTokens   uint64 = 1 << 3
 	FeatureRuntimeNumericColumns     uint64 = 1 << 4
 	FeatureRANSMicroPageSections     uint64 = 1 << 5
-	RequiredFeatures                 uint64 = 0xffbfffff
+	RequiredFeatures                 uint64 = 0x1ffbfffff
 	BestEffortFeatures               uint64 = RequiredFeatures &^ FeatureExactEventAdmission
 	OptionalFeatures                 uint64 = 0x1f
 	RawOptionalFeatures              uint64 = 0x3e
@@ -73,7 +74,7 @@ const (
 	chunkKnownFlags        = chunkFlagGZIP | chunkFlagFinal
 )
 
-var Magic = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x01, 0x00}
+var Magic = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x03, 0x00}
 var chunkMagic = [4]byte{0x4a, 0x48, 0x43, 0x31}
 var commitMagic = [4]byte{0x4a, 0x48, 0x43, 0x4d}
 
@@ -112,6 +113,18 @@ const (
 	EventAndroidComponent    EventType = 25
 	EventBinderTransaction   EventType = 26
 	eventMicroPage           EventType = 27
+	EventThreadSnapshot      EventType = 28
+	EventWorkerCatalog       EventType = 29
+	EventWorkRegistry        EventType = 30
+	EventWorkerIdentity      EventType = 31
+	EventThreadLifecycle     EventType = 32
+	EventWorkSubmission      EventType = 33
+	EventWorkChainEdge       EventType = 34
+	EventWorkChainRoot       EventType = 35
+	EventWorkerFailure       EventType = 36
+	EventCoroutineSegment    EventType = 37
+	EventWorkerProgress      EventType = 38
+	EventCausalEvent         EventType = 39
 )
 
 const (
@@ -122,11 +135,32 @@ const (
 )
 
 const (
-	WorkerStageUnknown            WorkerStage = 0
-	WorkerStageEnqueued           WorkerStage = 1
-	WorkerStageStarted            WorkerStage = 2
-	WorkerStageFinished           WorkerStage = 3
-	WorkerStageRegisteredObserved WorkerStage = 4
+	WorkerStageUnknown                   WorkerStage = 0
+	WorkerStageEnqueued                  WorkerStage = 1
+	WorkerStageStarted                   WorkerStage = 2
+	WorkerStageFinished                  WorkerStage = 3
+	WorkerStageRegisteredObserved        WorkerStage = 4
+	WorkerStageForegroundEntered         WorkerStage = 5
+	WorkerStageForegroundAttemptBoundary WorkerStage = 6
+)
+
+const (
+	CollectorFPS                    CollectorFlag = 1 << 0
+	CollectorJankStats              CollectorFlag = 1 << 1
+	CollectorProcessExit            CollectorFlag = 1 << 2
+	CollectorIOTracing              CollectorFlag = 1 << 3
+	CollectorSystemSampler          CollectorFlag = 1 << 4
+	CollectorMainThreadStalls       CollectorFlag = 1 << 5
+	CollectorRetainedObjects        CollectorFlag = 1 << 6
+	CollectorCompose                CollectorFlag = 1 << 7
+	CollectorRoom                   CollectorFlag = 1 << 8
+	CollectorWorker                 CollectorFlag = 1 << 9
+	CollectorDatabase               CollectorFlag = 1 << 10
+	CollectorHTTP                   CollectorFlag = 1 << 11
+	CollectorThread                 CollectorFlag = 1 << 12
+	CollectorConcurrencyDiagnostics CollectorFlag = 1 << 13
+	CollectorConcurrencyDetailed    CollectorFlag = 1 << 14
+	CollectorKnownMask              CollectorFlag = 0x7fff
 )
 
 const (
@@ -138,3 +172,5 @@ const (
 )
 
 var legacyMagicV500 = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x00, 0x00}
+var legacyMagicV510 = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x01, 0x00}
+var legacyMagicV520 = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x02, 0x00}

@@ -43,6 +43,8 @@ class GenerateJankHunterArtifactMetadataTaskTest {
         assertEquals(1, text.lineSequence().filter(String::isNotBlank).count())
         assertTrue(text.contains("\"format\":1"))
         assertTrue(text.contains("\"kind\":\"artifact-metadata\""))
+        assertTrue(text.contains("\"threadLifecycle\":false"))
+        assertTrue(text.contains("\"concurrencyDiagnostics\":false"))
         assertTrue(text.contains("\"symbolNamespace\":\"0123456789abcdef0123456789abcdef\""))
         assertTrue(text.contains("\"includeWholeApplication\":true"))
         assertTrue(text.contains("\"networkWholeApplication\":true"))

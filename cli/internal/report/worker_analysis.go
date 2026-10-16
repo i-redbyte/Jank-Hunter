@@ -37,8 +37,8 @@ func workerRows(summary analyze.Summary) []workerReportRow {
 			ContextHelp: contextHelp,
 			Lifecycle:   workerLifecycleDescription(worker),
 			Outcomes: fmt.Sprintf(
-				"успешно %d · ошибок %d · повторов %d · отмен %d",
-				worker.Success, worker.Failures, worker.Retries, worker.Cancelled,
+				"успешно %d · ошибок %d · повторов %d · отмен %d · остановок %d",
+				worker.Success, worker.Failures, worker.Retries, worker.Cancelled, worker.Stopped,
 			),
 			CPU: workerCPUDescription(worker),
 			Allocation: workerSampleDescription(
@@ -62,17 +62,17 @@ func workerRows(summary analyze.Summary) []workerReportRow {
 }
 
 func workerReportStatus(worker analyze.WorkerStats) (string, string) {
-	if worker.Failures+worker.Retries+worker.Cancelled > 0 {
+	if worker.Failures > 0 {
 		return "есть неуспешные завершения", "high"
 	}
 	if worker.MainThreadStarts > 0 {
-		return "работа на главном потоке", "high"
+		return "событие начала на главном потоке; проверить", "medium"
 	}
-	if worker.RunMaxMS >= 10_000 {
-		return "долгое выполнение", "medium"
+	if worker.RunSamples > 0 && worker.RunMaxMS >= 10_000 {
+		return "завершённая попытка достигла порога 10 с", "medium"
 	}
-	if worker.MissingStart+worker.MissingFinish > 0 {
-		return "жизненный цикл записан не полностью", "medium"
+	if worker.MissingStart > 0 || worker.MissingFinish > 0 {
+		return "неполные данные жизненного цикла", "ok"
 	}
 	return "наблюдение", "ok"
 }

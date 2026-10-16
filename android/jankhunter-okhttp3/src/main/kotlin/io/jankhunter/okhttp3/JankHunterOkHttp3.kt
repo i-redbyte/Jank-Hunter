@@ -16,6 +16,7 @@ import okio.Source
 
 /** Stateless fail-open ABI used by the Gradle instrumentation. */
 object JankHunterOkHttp3 {
+    private const val MAX_FALLBACK_CLIENTS = 32
     private val fallbackClients = BoundedWeakIdentityCache<OkHttpClient, OkHttpClient>(MAX_FALLBACK_CLIENTS)
     private val http2Observation = ThreadLocal<Http2ObservationScope>()
 
@@ -127,6 +128,8 @@ object JankHunterOkHttp3 {
      */
     @JvmStatic
     fun newCall(client: OkHttpClient, request: Request): Call {
+        // newBuilder().build() creates a base client and would discard a custom newCall override.
+        if (client.javaClass !== OkHttpClient::class.java) return client.newCall(request)
         val alreadyProtected = okHttpNonFatalOr(false) {
             client.eventListenerFactory() is JankHunterEventListenerFactory
         }
@@ -241,5 +244,4 @@ object JankHunterOkHttp3 {
         if (this is VirtualMachineError || this is ThreadDeath) throw this
     }
 
-    private const val MAX_FALLBACK_CLIENTS = 32
 }

@@ -9,6 +9,7 @@ import java.io.IOException
 internal class SessionSegmentLedger(
     private val directory: File,
     private val processName: String,
+    private val coordinationDirectory: File = directory,
 ) {
     private val allocations = ArrayList<SessionLogAllocator.Allocation>()
     private val completedSegments = ArrayList<CompletedSegment>()
@@ -17,18 +18,28 @@ internal class SessionSegmentLedger(
     private var activeAllocation: SessionLogAllocator.Allocation? = null
     private var activeProtection: JankHunterBinaryArtifact? = null
 
-    fun register(opened: OpenedLogSession, storage: JankHunterBinaryStorage?) {
+    fun register(opened: OpenedLogSession, storage: JankHunterBinaryStorage?): JankHunterBinaryArtifact? {
         if (storage != null) runCatching { externalSegments().add(opened.writer.path) }
-        allocations += opened.allocation
-        opened.protection?.let(protections::add)
+        if (opened.allocation !in allocations) allocations += opened.allocation
+        val protection = opened.protection?.let { candidate ->
+            val existing = protections.firstOrNull { it.path == candidate.path }
+            when {
+                existing == null -> candidate.also(protections::add)
+                existing === candidate -> existing
+                else -> existing.also { candidate.commit() }
+            }
+        }
         activeAllocation = opened.allocation
-        activeProtection = opened.protection
+        activeProtection = protection
+        return protection
     }
 
     fun seal(path: String, storage: JankHunterBinaryStorage?) {
         val allocation = activeAllocation
             ?: throw IOException("Jank Hunter active segment has no allocation")
-        completedSegments += CompletedSegment(path, storage, allocation, activeProtection)
+        val existing = completedSegments.indexOfFirst { it.allocation === allocation }
+        val completed = CompletedSegment(path, storage, allocation, activeProtection)
+        if (existing < 0) completedSegments += completed else completedSegments[existing] = completed
         activeAllocation = null
         activeProtection = null
     }
@@ -120,7 +131,7 @@ internal class SessionSegmentLedger(
         val completedPaths = completedSegments.mapTo(HashSet(completedSegments.size)) { segment ->
             normalizedPath(segment.path)
         }
-        val protectedPaths = SessionLogAllocator.activeLeases(directory).protectedPaths
+        val protectedPaths = SessionLogAllocator.activeLeases(coordinationDirectory).protectedPaths
             .mapTo(HashSet<String>()) { path -> normalizedPath(path) }
         val sources = LinkedHashMap<String, Boolean>()
         directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
@@ -178,7 +189,7 @@ internal class SessionSegmentLedger(
     private fun externalSegments(): ExternalSegmentRegistry {
         val current = externalSegmentRegistry
         if (current != null) return current
-        return ExternalSegmentRegistry(directory, processName).also { externalSegmentRegistry = it }
+        return ExternalSegmentRegistry(coordinationDirectory, processName).also { externalSegmentRegistry = it }
     }
 
     internal class PreparedHandoff(

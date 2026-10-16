@@ -8,6 +8,7 @@ import (
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/benchfixture"
+	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
@@ -36,6 +37,98 @@ func BenchmarkWriteInspectRepresentative(b *testing.B) {
 	}
 	b.StopTimer()
 	stat, err := os.Stat(reportPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(stat.Size()), "html-bytes/op")
+}
+
+func BenchmarkWriteInspectWith50kThreadResources(b *testing.B) {
+	resources := make([]analyze.ThreadResourceObservation, 50_000)
+	for index := range resources {
+		resources[index] = analyze.ThreadResourceObservation{
+			Scope: "session", Process: "app", CompletionTID: "151", Kind: "file_read",
+			Source: "app.Cache.read", Target: "/data/user/0/app/cache", Outcome: "completed",
+			EndMS: uint64(index + 1),
+		}
+	}
+	summary := analyze.Summary{ThreadAnalysis: &analyze.ThreadAnalysis{Resources: resources}}
+	path := filepath.Join(b.TempDir(), "thread-resources.html")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := report.WriteInspectWithOptions(path, summary, report.ReportOptions{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	stat, err := os.Stat(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(stat.Size()), "html-bytes/op")
+}
+
+func BenchmarkWriteInspectMixed1000Threads10000Jobs100000Resources(b *testing.B) {
+	const (
+		threadCount   = 1000
+		jobCount      = 10000
+		resourceCount = 100000
+	)
+	threads := make([]jhlog.ThreadObservation, threadCount)
+	for index := range threads {
+		threads[index] = jhlog.ThreadObservation{
+			TID: uint64(index + 1), StartTicks: uint64(index + 1),
+			Name: fmt.Sprintf("worker-pool-%04d", index), OSState: "S",
+		}
+	}
+	resources := make([]analyze.ThreadResourceObservation, resourceCount)
+	for index := range resources {
+		resources[index] = analyze.ThreadResourceObservation{
+			Scope: "session", Process: "app", CompletionTID: fmt.Sprint(index%threadCount + 1),
+			Kind: "file_read", Source: "app.Cache.read", Target: "/data/user/0/app/cache",
+			Outcome: "completed", EndMS: uint64(index + 1),
+		}
+	}
+	jobs := make([]jhlog.WorkRegistryJob, jobCount)
+	for index := range jobs {
+		jobs[index] = jhlog.WorkRegistryJob{
+			UUID:  fmt.Sprintf("00000000-0000-0000-0000-%012d", index),
+			State: 1, Tags: []string{"benchmark"},
+		}
+	}
+	registry := &analyze.WorkRegistryAnalysis{Snapshots: []analyze.WorkRegistrySnapshot{{
+		Scope: "session", Process: "app", SnapshotID: 1,
+		QueryStartedMS: 1, ObservedElapsedMS: 2,
+		TotalObserved: jobCount, RetainedJobs: jobCount,
+		Complete: true, Jobs: jobs,
+	}}}
+	summary := analyze.Summary{
+		Title: "mixed high-cardinality benchmark",
+		ThreadAnalysis: &analyze.ThreadAnalysis{Resources: resources, Processes: []analyze.ThreadProcessAnalysis{{
+			Scope: "session", Process: "app", StartCount: threadCount, PeakCount: threadCount,
+			LastCount: threadCount, Snapshots: []analyze.ThreadSnapshotPoint{{
+				TimeMS: 1, Snapshot: &jhlog.ThreadSnapshotEvent{
+					Version: 3, ElapsedMS: 1, IntervalMS: 5000, TicksPerSecond: 100,
+					Complete: true, Threads: threads,
+				},
+			}},
+		}}},
+		WorkRegistry: registry,
+	}
+	path := filepath.Join(b.TempDir(), "mixed.html")
+	if output := os.Getenv("JH_MIXED_BENCH_HTML"); output != "" {
+		path = output
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := report.WriteInspectWithOptions(path, summary, report.ReportOptions{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	stat, err := os.Stat(path)
 	if err != nil {
 		b.Fatal(err)
 	}

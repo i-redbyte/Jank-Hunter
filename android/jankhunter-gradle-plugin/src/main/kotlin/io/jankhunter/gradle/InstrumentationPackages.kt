@@ -1,6 +1,11 @@
 package io.jankhunter.gradle
 
 internal object InstrumentationPackages {
+    val implementationPackages: List<String> = listOf(
+        "io.jankhunter.annotations", "io.jankhunter.gradle", "io.jankhunter.okhttp3",
+        "io.jankhunter.runtime", "io.jankhunter.workmanager", "io.jankhunter.jankstats",
+    )
+
     val builtinExcludePrefixes: List<String> = listOf(
         "android",
         "androidx",
@@ -11,12 +16,12 @@ internal object InstrumentationPackages {
         "okhttp3",
         "okio",
         "org.jetbrains",
-        "io.jankhunter.annotations",
-        "io.jankhunter.gradle",
-        "io.jankhunter.okhttp3",
-        "io.jankhunter.runtime",
-        "io.jankhunter.workmanager",
-    )
+    ) + implementationPackages
+
+    fun isImplementationClass(value: String): Boolean {
+        val normalized = normalizePackage(value)
+        return implementationPackages.any { matchesPackageBoundary(normalized, it) }
+    }
 
     fun effectiveIncludes(
         manualIncludes: Iterable<String>,

@@ -28,11 +28,31 @@ internal object ProcessRunCohort {
         directory: File,
         localDate: String,
         authoritativeStoragePaths: Collection<String>? = null,
+        startedAtUnixMs: Long = System.currentTimeMillis(),
     ): Lease {
         SessionLogName.sequenceFileName(localDate)
+        require(startedAtUnixMs >= 0L) { "Jank Hunter run start time must be non-negative" }
         ensureDirectory(directory)
         return CrossProcessFileLocks.withDirectoryLock(directory, LOCK_FILE_NAME) {
-            joinLocked(directory, localDate, authoritativeStoragePaths)
+            joinLocked(directory, localDate, authoritativeStoragePaths, startedAtUnixMs)
+        }
+    }
+
+    fun activeRunIds(directory: File): Set<String> {
+        if (!directory.isDirectory) return emptySet()
+        return CrossProcessFileLocks.withDirectoryLock(directory, LOCK_FILE_NAME) {
+            val active = HashSet<String>()
+            cohortLeaseFiles(directory).forEach { file ->
+                when (leaseState(file)) {
+                    LeaseState.STALE -> file.delete()
+                    LeaseState.ACTIVE -> {
+                        val identity = ownedLease(file)?.identity() ?: readRecord(file)
+                        active += SessionLogName.runIdHex(identity.runId)
+                    }
+                    LeaseState.UNKNOWN -> throw IOException("Cannot verify Jank Hunter run cohort lease ${file.name}")
+                }
+            }
+            active
         }
     }
 
@@ -40,6 +60,7 @@ internal object ProcessRunCohort {
         directory: File,
         localDate: String,
         authoritativeStoragePaths: Collection<String>?,
+        startedAtUnixMs: Long,
     ): Lease {
         var activeIdentity: RunIdentity? = null
         cohortLeaseFiles(directory).forEach { file ->
@@ -63,6 +84,7 @@ internal object ProcessRunCohort {
             runId = BinaryLogFileHeader.randomId(),
             localDate = localDate,
             dailySessionIndex = dailySessionIndex,
+            startedAtUnixMs = startedAtUnixMs,
         )
         val lease = createLease(directory, identity)
         try {
@@ -125,10 +147,25 @@ internal object ProcessRunCohort {
             .asSequence()
             .map(File::getName)
         val storageNames = authoritativeStoragePaths.orEmpty().asSequence().map { path -> File(path).name }
-        return (localNames + storageNames)
+        val hierarchicalIndices = directory.listFiles { file ->
+            file.isDirectory && SessionArtifactPath.parseSessionDirectoryName(file.name) != null
+        }.orEmpty().asSequence().flatMap { sessionDirectory ->
+            sessionDirectory.listFiles { file -> file.isDirectory }
+                .orEmpty()
+                .asSequence()
+                .flatMap { processDirectory ->
+                    processDirectory.listFiles { file -> file.isFile }
+                        .orEmpty()
+                        .asSequence()
+                        .mapNotNull { file -> SessionLogName.parse(file.name) }
+                }
+        }.filter { parsed -> parsed.localDate == localDate }
+            .map(SessionLogName.Parsed::dailySessionIndex)
+        val flatHighest = (localNames + storageNames)
             .mapNotNull(SessionLogName::parse)
             .filter { parsed -> parsed.localDate == localDate }
             .maxOfOrNull(SessionLogName.Parsed::dailySessionIndex)
+        return sequenceOf(flatHighest, hierarchicalIndices.maxOrNull()).filterNotNull().maxOrNull()
     }
 
     private fun persistNextDailySessionIndex(directory: File, localDate: String, nextIndex: Long) {
@@ -211,6 +248,7 @@ internal object ProcessRunCohort {
         require(date.size == DATE_BYTES) { "Jank Hunter run date must have $DATE_BYTES bytes" }
         System.arraycopy(date, 0, raw, DATE_OFFSET, date.size)
         values.putLong(DAILY_INDEX_OFFSET, identity.dailySessionIndex)
+        values.putLong(STARTED_AT_OFFSET, identity.startedAtUnixMs)
         values.putInt(CRC_OFFSET, crc32(raw, CRC_OFFSET))
         randomAccess.setLength(0L)
         randomAccess.write(raw)
@@ -238,10 +276,16 @@ internal object ProcessRunCohort {
         val runId = raw.copyOfRange(RUN_ID_OFFSET, RUN_ID_OFFSET + RUN_ID_BYTES)
         val localDate = String(raw, DATE_OFFSET, DATE_BYTES, StandardCharsets.US_ASCII)
         val dailySessionIndex = values.getLong(DAILY_INDEX_OFFSET)
-        if (runId.all { it == 0.toByte() } || dailySessionIndex < 0L || !isValidLocalDate(localDate)) {
+        val startedAtUnixMs = values.getLong(STARTED_AT_OFFSET)
+        if (
+            runId.all { it == 0.toByte() } ||
+            dailySessionIndex < 0L ||
+            startedAtUnixMs < 0L ||
+            !isValidLocalDate(localDate)
+        ) {
             throw IOException("Active Jank Hunter run cohort lease has an invalid identity")
         }
-        return RunIdentity(runId, localDate, dailySessionIndex)
+        return RunIdentity(runId, localDate, dailySessionIndex, startedAtUnixMs)
     }
 
     private fun isValidLocalDate(localDate: String): Boolean =
@@ -272,12 +316,14 @@ internal object ProcessRunCohort {
         val runId: ByteArray,
         val localDate: String,
         val dailySessionIndex: Long,
+        val startedAtUnixMs: Long,
     ) {
-        fun copy(): RunIdentity = RunIdentity(runId.copyOf(), localDate, dailySessionIndex)
+        fun copy(): RunIdentity = RunIdentity(runId.copyOf(), localDate, dailySessionIndex, startedAtUnixMs)
 
         fun matches(other: RunIdentity): Boolean =
             dailySessionIndex == other.dailySessionIndex &&
                 localDate == other.localDate &&
+                startedAtUnixMs == other.startedAtUnixMs &&
                 runId.contentEquals(other.runId)
     }
 
@@ -296,6 +342,8 @@ internal object ProcessRunCohort {
         fun localDate(): String = identity.localDate
 
         fun dailySessionIndex(): Long = identity.dailySessionIndex
+
+        fun startedAtUnixMs(): Long = identity.startedAtUnixMs
 
         internal fun identity(): RunIdentity = identity.copy()
 
@@ -326,14 +374,15 @@ internal object ProcessRunCohort {
     private const val LEASE_PREFIX = ".jh-run-cohort."
     private const val LEASE_SUFFIX = ".lease"
     private const val MAX_CREATE_ATTEMPTS = 1_024
-    private const val SCHEMA = 2
+    private const val SCHEMA = 3
     private const val RUN_ID_BYTES = 16
     private const val HEADER_BYTES = 8
     private const val RUN_ID_OFFSET = HEADER_BYTES
     private const val DATE_OFFSET = RUN_ID_OFFSET + RUN_ID_BYTES
     private const val DATE_BYTES = 10
     private const val DAILY_INDEX_OFFSET = DATE_OFFSET + DATE_BYTES
-    private const val CRC_OFFSET = DAILY_INDEX_OFFSET + Long.SIZE_BYTES
+    private const val STARTED_AT_OFFSET = DAILY_INDEX_OFFSET + Long.SIZE_BYTES
+    private const val CRC_OFFSET = STARTED_AT_OFFSET + Long.SIZE_BYTES
     private const val RECORD_BYTES = CRC_OFFSET + Int.SIZE_BYTES
     private const val SEQUENCE_RECORD_BYTES = Long.SIZE_BYTES * 2
     private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'R'.code.toByte(), 'C'.code.toByte())

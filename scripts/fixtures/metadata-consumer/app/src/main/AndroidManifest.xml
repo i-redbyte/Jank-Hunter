@@ -1,0 +1,1 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:name=".FixtureApplication" android:label="JH compatibility"><activity android:name=".BenchmarkActivity" android:exported="false" /><provider android:name=".EvidenceProvider" android:authorities="com.fixture.compat.evidence" android:exported="true" /></application></manifest>

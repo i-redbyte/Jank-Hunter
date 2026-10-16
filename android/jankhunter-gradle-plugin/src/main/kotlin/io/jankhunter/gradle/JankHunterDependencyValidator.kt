@@ -96,7 +96,7 @@ internal object JankHunterDependencyValidator {
             val configuration = project.configurations.findByName(configurationName) ?: return@forEach
             configuration.allDependencies.forEach { dependency ->
                 when (dependency) {
-                    is ProjectDependency -> displayNames.add("project ${dependency.path}")
+                    is ProjectDependency -> displayNames.add("project ${dependency.compatibleProjectPath()}")
                     else -> {
                         val fileNames = dependencyFileNames(dependency)
                         if (fileNames.isNotEmpty()) {

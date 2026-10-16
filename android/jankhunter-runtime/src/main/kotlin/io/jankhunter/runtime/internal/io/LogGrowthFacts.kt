@@ -164,7 +164,7 @@ internal fun dayKeyToDisplayString(value: Int): String {
     val year = value / 10_000
     val month = value / 100 % 100
     val day = value % 100
-    return "%02d.%02d.%04d".format(day, month, year)
+    return "%02d.%02d.%04d".format(java.util.Locale.ROOT, day, month, year)
 }
 
 internal fun sessionIdParts(id: ByteArray): Pair<Long, Long> {

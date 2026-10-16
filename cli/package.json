@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "test:report-navigation": "node ./scripts/report-navigation-test.mjs",
     "test:log-growth-report": "node ./scripts/log-growth-report-test.mjs",
     "test:report-performance": "node ./scripts/report-performance-test.mjs",
     "visual-regression": "node ./scripts/report-visual-regression.mjs"

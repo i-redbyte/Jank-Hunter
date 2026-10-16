@@ -1,0 +1,13 @@
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        exclusiveContent {
+            forRepository { maven { url = uri(providers.gradleProperty('jhRepository').get()) } }
+            filter { includeGroup('io.jankhunter') }
+        }
+        google(); mavenCentral()
+    }
+}
+rootProject.name = 'jh-metadata-consumer'
+include ':app', ':callback-library'

@@ -20,6 +20,15 @@ import org.objectweb.asm.util.CheckClassAdapter
 
 class InstrumentationSmokeTest {
     @Test
+    fun executorWrappingWithoutConcurrencyDiagnosticsStillChecksTheReceiver() {
+        val node = ClassNode()
+        ClassReader(instrument(mixedHookFixture())).accept(node, 0)
+        val calls = node.methods.flatMap { it.instructions.toArray().filterIsInstance<org.objectweb.asm.tree.MethodInsnNode>() }
+        assertTrue(calls.any { it.owner == "io/jankhunter/runtime/JankHunterHooks" &&
+            it.name == "wrapRunnable" && it.desc.startsWith("(Ljava/lang/Object;Ljava/lang/Runnable;") })
+    }
+
+    @Test
     fun handlerCancellationAndLookupKeepOnePlatformLinearizationPoint() {
         val instrumented = instrument(mixedHookFixture(), okHttpHelperAvailable = true)
         for (name in listOf("removeCallbacks", "removeCallbacksAndMessages", "hasCallbacks")) {
@@ -56,7 +65,8 @@ class InstrumentationSmokeTest {
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "newCall")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "wrapWebSocketListener")))
         assertEquals(0, countMethodCalls(instrumented, "exercise", "okhttp3/OkHttpClient\$Builder", "eventListener"))
-        assertEquals(0, countMethodCalls(instrumented, "exercise", "okhttp3/OkHttpClient", "newCall"))
+        // The original instruction is the mutually exclusive fallback for custom/null Java calls.
+        assertEquals(1, countMethodCalls(instrumented, "exercise", "okhttp3/OkHttpClient", "newCall"))
         assertTrue(calls.contains(Call("android/os/Handler", "post")))
         assertEquals(1, countMethodCalls(instrumented, "exercise", "android/os/Handler", "post"))
         assertEquals(
@@ -594,6 +604,8 @@ class InstrumentationSmokeTest {
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
         writer.visitMethod(Opcodes.ACC_PUBLIC, "work", "()V", null, null).apply {
             visitCode()
+            visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/System", "nanoTime", "()J", false)
+            visitInsn(Opcodes.POP2)
             visitInsn(Opcodes.RETURN)
             visitMaxs(0, 0)
             visitEnd()

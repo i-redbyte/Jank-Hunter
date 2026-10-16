@@ -66,6 +66,19 @@ internal class LifecycleAccessorEmitter(
             visitVarInsn(Opcodes.ALOAD, 3)
             visitTypeInsn(Opcodes.INSTANCEOF, "kotlin/Lazy")
             visitJumpInsn(Opcodes.IFEQ, initialized)
+            // Custom Lazy implementations can run arbitrary application code even from
+            // isInitialized/getValue. Inspect only reviewed standard-library implementations.
+            val reviewed = Label()
+            for (type in STANDARD_LAZY_TYPES) {
+                visitVarInsn(Opcodes.ALOAD, 3)
+                visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Object", "getClass", "()Ljava/lang/Class;", false)
+                visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Class", "getName", "()Ljava/lang/String;", false)
+                visitLdcInsn(type)
+                visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/String", "equals", "(Ljava/lang/Object;)Z", false)
+                visitJumpInsn(Opcodes.IFNE, reviewed)
+            }
+            visitJumpInsn(Opcodes.GOTO, end)
+            mergeFrame(this, reviewed)
             visitVarInsn(Opcodes.ALOAD, 3)
             visitTypeInsn(Opcodes.CHECKCAST, "kotlin/Lazy")
             visitMethodInsn(Opcodes.INVOKEINTERFACE, "kotlin/Lazy", "isInitialized", "()Z", true)
@@ -111,6 +124,11 @@ internal class LifecycleAccessorEmitter(
     }
 
     companion object {
+        // Keep aligned with runtime's legacy fallback and the narrow consumer rules.
+        private val STANDARD_LAZY_TYPES = listOf(
+            "kotlin.SynchronizedLazyImpl", "kotlin.SafePublicationLazyImpl",
+            "kotlin.UnsafeLazyImpl", "kotlin.InitializedLazyImpl",
+        )
         const val ACCESSOR = "io/jankhunter/runtime/JankHunterLifecycleAccessorV1"
         const val SINK = "io/jankhunter/runtime/JankHunterLifecycleTargetSinkV1"
         const val BINDING = "androidx/viewbinding/ViewBinding"

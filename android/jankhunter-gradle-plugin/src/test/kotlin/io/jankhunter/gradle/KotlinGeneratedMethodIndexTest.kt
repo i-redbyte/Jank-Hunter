@@ -6,13 +6,91 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.tree.ClassNode
+import java.nio.file.Files
 
 class KotlinGeneratedMethodIndexTest {
+    @Test
+    fun incompleteMetadataAnnotationIsUnreadableWithoutDefaultingKindOrVersion() {
+        val writer = ClassWriter(0)
+        writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "example/Broken", null, "java/lang/Object", null)
+        writer.visitAnnotation(KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR, true).apply {
+            visit("k", 1)
+            visitEnd()
+        }
+        writer.visitEnd()
+        var index = KotlinGeneratedMethodIndex.EMPTY
+        ClassReader(writer.toByteArray()).accept(object : ClassVisitor(Opcodes.ASM9) {
+            override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
+                if (descriptor != KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR) return null
+                return KotlinGeneratedMethodIndex.collectingVisitor(null) { index = it }
+            }
+        }, ClassReader.SKIP_CODE)
+        assertEquals(KotlinMetadataAnalysisStatus.UNREADABLE, index.analysisStatus)
+        assertEquals(KotlinMethodOrigin.UNKNOWN, index.origin("any", "()V"))
+    }
+
+    @Test
+    fun corruptMetadataRemainsUnknownAndHasAnExplicitUnreadableStatus() {
+        val broken = kotlin.metadata.jvm.Metadata(kind = 1, metadataVersion = intArrayOf(2, 3, 0),
+            data1 = arrayOf("broken"), data2 = emptyArray())
+        val index = KotlinGeneratedMethodIndex.from(broken)
+        assertEquals(KotlinMetadataAnalysisStatus.UNREADABLE, index.analysisStatus)
+        assertEquals(KotlinMethodOrigin.UNKNOWN, index.origin("component1", "()I"))
+        assertEquals(KotlinMetadataAnalysisStatus.ABSENT, KotlinGeneratedMethodIndex.EMPTY.analysisStatus)
+    }
+
+    @Test
+    fun futureAnnotationIsPreservedAndFallbackIsVisibleInBuildDiagnostics() {
+        val type = GeneratedDataFixture::class.java
+        val original = checkNotNull(type.getResourceAsStream("/${type.name.replace('.', '/')}.class")).use { it.readBytes() }
+        val node = ClassNode()
+        ClassReader(original).accept(node, 0)
+        val annotation = node.visibleAnnotations.single { it.desc == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR }
+        val mv = annotation.values.indexOf("mv") + 1
+        annotation.values[mv] = mutableListOf(99, 0, 0)
+        val expected = annotation.values.toList()
+        val sourceWriter = ClassWriter(0)
+        node.accept(sourceWriter)
+        val reader = ClassReader(sourceWriter.toByteArray())
+        val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        val diagnostics = Files.createTempDirectory("jankhunter-metadata-fallback").toFile()
+        try {
+            reader.accept(JankHunterClassVisitor(writer, reader.className, HookConfig(
+                methodCounters = false, okhttp = false, webSockets = false, handlers = false,
+                executors = false, coroutines = false, interactionOperations = false, logSpam = false,
+                classGraph = false, runtimeCallGraph = true, classGraphDirectory = "",
+                instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
+            )), ClassReader.EXPAND_FRAMES)
+            val result = ClassNode()
+            ClassReader(writer.toByteArray()).accept(result, 0)
+            assertEquals(expected, result.visibleAnnotations.single { it.desc == annotation.desc }.values)
+            val lines = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
+            assertTrue(lines.contains("kotlin_metadata_unsupported_version"))
+            assertTrue(lines.contains("annotation preserved"))
+        } finally { diagnostics.deleteRecursively() }
+    }
+
+    @Test
+    fun futureMetadataCannotProveThatApplicationMethodsAreGenerated() {
+        val original = GeneratedDataFixture::class.java.getAnnotation(Metadata::class.java)
+        // Unknown-version negative fixture; this is never written into a published artifact.
+        val future = kotlin.metadata.jvm.Metadata(
+            kind = original.kind, metadataVersion = intArrayOf(99, 0, 0),
+            data1 = original.data1, data2 = original.data2,
+            extraString = original.extraString, packageName = original.packageName, extraInt = original.extraInt,
+        )
+        val index = KotlinGeneratedMethodIndex.from(future)
+        assertEquals(KotlinMethodOrigin.UNKNOWN, index.origin("component1", "()I"))
+        assertEquals(KotlinMethodOrigin.UNKNOWN, index.origin("getValue", "()I"))
+    }
+
     @Test
     fun dataClassFunctionsAndDefaultAccessorAreProvenGenerated() {
         val index = index(GeneratedDataFixture::class.java)
@@ -43,14 +121,12 @@ class KotlinGeneratedMethodIndexTest {
     }
 
     @Test
-    fun instrumentationUsesMetadataProofInsteadOfBroadMethodNames() {
+    fun instrumentationCombinesMetadataAndBodyProofInsteadOfBroadMethodNames() {
         assertEquals(setOf("<init>"), instrumentedMethods(GeneratedDataFixture::class.java))
         assertEquals(
             setOf(
                 "<init>",
                 "getCustomValue",
-                "getManualValue",
-                "syntheticButDeclared",
                 "equals",
                 "hashCode",
                 "toString",

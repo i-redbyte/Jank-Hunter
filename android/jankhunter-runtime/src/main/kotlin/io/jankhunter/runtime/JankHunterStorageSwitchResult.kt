@@ -17,7 +17,7 @@ enum class JankHunterStorageSwitchResult {
     /** A best-effort runtime did not reach the ordered switch frontier before its deadline. */
     TIMED_OUT,
 
-    /** Target preparation failed and Jank Hunter kept or restored the previous storage. */
+    /** Incompatible storage ownership or target preparation failed; previous storage is retained. */
     FAILED,
 
     /** The switch crossed its ordered frontier and will publish its final state asynchronously. */

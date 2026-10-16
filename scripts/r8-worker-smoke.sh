@@ -11,8 +11,8 @@ main "$@"
 fixture_dir="$SMOKE_RUN_DIR/consumer"
 sdk_dir="$(resolve_android_sdk_dir)"
 adb="$sdk_dir/platform-tools/adb"
-adb_args=()
-if [[ -n "${ANDROID_SERIAL:-}" ]]; then adb_args=(-s "$ANDROID_SERIAL"); fi
+adb_serial="${ANDROID_SERIAL:-$("$adb" get-serialno)}"
+adb_args=(-s "$adb_serial")
 "$adb" "${adb_args[@]}" get-state
 
 launch_probe() {
@@ -53,10 +53,19 @@ from pathlib import Path
 root = Path(sys.argv[1])
 activity = root / "app/src/main/java/com/example/jhsmoke/MainActivity.java"
 activity.write_text(activity.read_text().replace("        Helper.work();", "        WorkerReleaseProbe.run();\n        WorkerExecutionProbe.run(getApplicationContext());\n        Helper.work();"))
+manifest = root / "app/src/main/AndroidManifest.xml"
+source = manifest.read_text().replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">')
+source = source.replace('    <application', '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n    <application')
+source = source.replace('    </application>',
+    '        <service android:name="androidx.work.impl.foreground.SystemForegroundService" '
+    'android:foregroundServiceType="dataSync" tools:node="merge" />\n    </application>')
+manifest.write_text(source)
 with (root / "app/build.gradle.kts").open("a") as output:
     output.write('''
 dependencies { implementation("androidx.work:work-runtime:2.11.2") }
 jankHunter.enable(io.jankhunter.gradle.JankHunterFeature.WORKERS)
+jankHunter.enable(io.jankhunter.gradle.JankHunterFeature.COROUTINES)
 android.buildTypes.getByName("release").signingConfig = android.signingConfigs.getByName("debug")
 ''')
 PY
@@ -64,7 +73,19 @@ group="$(properties_value jankHunterGroup "$ANDROID_DIR/gradle.properties")"
 version="$(properties_value jankHunterVersion "$ANDROID_DIR/gradle.properties")"
 printf '\ndependencies { implementation("%s:jankhunter-workmanager:%s") }\n' "$group" "$version" >> "$fixture_dir/app/build.gradle.kts"
 "$ANDROID_DIR/gradlew" -p "$fixture_dir" :app:assembleRelease --configuration-cache --console=plain --stacktrace
-launch_probe "$fixture_dir/app/build/outputs/apk/release/app-release.apk" 'EXECUTION PASS cases=11' "$SMOKE_RUN_DIR/worker-release.log"
+python3 - "$fixture_dir/app/build/outputs/apk/release/app-release.apk" <<'PY_CATALOG'
+import json
+import sys
+from zipfile import ZipFile
+with ZipFile(sys.argv[1]) as apk:
+    catalog = json.loads(apk.read("assets/jankhunter/worker-catalog-v1.json"))
+assert catalog["schema"] == 1
+assert catalog["scope"] == "application-and-packaged-dependencies-pre-r8"
+assert catalog["omitted_workers"] == 0
+for name in ("AsmWorker", "AdapterWorker", "SuspendedWorker", "NeverRunWorker"):
+    assert "com.example.jhsmoke.WorkerExecutionProbe$" + name in catalog["classes"], catalog
+PY_CATALOG
+launch_probe "$fixture_dir/app/build/outputs/apk/release/app-release.apk" 'EXECUTION PASS cases=13' "$SMOKE_RUN_DIR/worker-release.log"
 grep -Fq 'PASS cases=7' "$SMOKE_RUN_DIR/worker-release.log" || fail "Legacy worker classification did not pass"
 python3 - "$fixture_dir/app/build/outputs/mapping/release/mapping.txt" "$SMOKE_RUN_DIR/worker-release.log" <<'PY_MAPPING'
 from pathlib import Path
@@ -81,10 +102,15 @@ for case in ("3", "4", "5"):
     actual = types[case]
     assert actual in mapping.values() and not actual.startswith("com.example.jhsmoke."), actual
 PY_MAPPING
-archive_path="$(sed -n 's/.*EXECUTION PASS cases=11 archive=//p' "$SMOKE_RUN_DIR/worker-release.log" | tail -n 1 | tr -d '\r')"
+archive_path="$(sed -n 's/.*EXECUTION PASS cases=13 archive=//p' "$SMOKE_RUN_DIR/worker-release.log" | tail -n 1 | tr -d '\r')"
 [[ "$archive_path" == /storage/emulated/0/Android/data/com.example.jhsmoke/files/worker-execution-*.zip ]] || \
   fail "Unexpected fixture archive path: $archive_path"
-"$adb" "${adb_args[@]}" pull "$archive_path" "$SMOKE_RUN_DIR/worker-execution.zip"
+if ! "$adb" "${adb_args[@]}" pull "$archive_path" "$SMOKE_RUN_DIR/worker-execution.zip"; then
+  log "Archive pull requires adb root on this test emulator; retrying after daemon restart"
+  "$adb" "${adb_args[@]}" root
+  "$adb" "${adb_args[@]}" wait-for-device
+  "$adb" "${adb_args[@]}" pull "$archive_path" "$SMOKE_RUN_DIR/worker-execution.zip"
+fi
 python3 - "$SMOKE_RUN_DIR" <<'PY'
 from pathlib import Path
 from zipfile import ZipFile
@@ -99,5 +125,11 @@ with ZipFile(root / "worker-execution.zip") as archive:
 PY
 go -C "$ROOT_DIR/cli" build -o "$SMOKE_RUN_DIR/jankhunter" ./cmd/jankhunter
 "$SMOKE_RUN_DIR/jankhunter" export "$SMOKE_RUN_DIR/worker-logs/"*.jhlog --out "$SMOKE_RUN_DIR/worker-events.jsonl"
+"$SMOKE_RUN_DIR/jankhunter" inspect "$SMOKE_RUN_DIR/worker-logs/"*.jhlog --out "$SMOKE_RUN_DIR/worker-inspect.html" --json --all-sessions > "$SMOKE_RUN_DIR/worker-summary.json"
 python3 "$SCRIPT_DIR/validate-r8-workers.py" "$SMOKE_RUN_DIR/worker-events.jsonl"
+python3 "$SCRIPT_DIR/validate-r8-worker-progress.py" "$SMOKE_RUN_DIR/worker-events.jsonl" "$SMOKE_RUN_DIR/worker-summary.json"
+python3 "$SCRIPT_DIR/validate-r8-worker-foreground.py" "$SMOKE_RUN_DIR/worker-events.jsonl" "$SMOKE_RUN_DIR/worker-summary.json"
+python3 "$SCRIPT_DIR/validate-r8-work-builder.py" "$SMOKE_RUN_DIR/worker-events.jsonl"
+python3 "$SCRIPT_DIR/validate-r8-registry.py" "$SMOKE_RUN_DIR/worker-events.jsonl"
+python3 "$SCRIPT_DIR/validate-r8-thread-identity.py" "$SMOKE_RUN_DIR/worker-events.jsonl"
 log "R8 worker runtime PASS: $SMOKE_RUN_DIR"

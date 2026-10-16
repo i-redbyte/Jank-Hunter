@@ -573,12 +573,14 @@ func TestCompareProblemsMarksWorsenedOperationHealthAsRegression(t *testing.T) {
 	baseline.OperationAnalysis.Operations[0].BudgetBreaches = 4
 	baseline.OperationAnalysis.Operations[0].BudgetBreachRatePct = 10
 	baseline = attachProblemReport(t, baseline)
+	attachProblemComparisonProfile(&baseline, "01000000000000000000000000000000", "11000000000000000000000000000000", baseline.OperationAnalysis.Operations[0])
 
 	candidate := baseline
 	candidate.OperationAnalysis = &OperationAnalysis{Completed: 40, Operations: []OperationStats{operation}}
 	candidate.OperationAnalysis.Operations[0].BudgetBreaches = 20
 	candidate.OperationAnalysis.Operations[0].BudgetBreachRatePct = 50
 	candidate = attachProblemReport(t, candidate)
+	attachProblemComparisonProfile(&candidate, "02000000000000000000000000000000", "22000000000000000000000000000000", candidate.OperationAnalysis.Operations[0])
 
 	comparison := CompareProblems(baseline, candidate, true)
 	if len(comparison.Deltas) != 1 || comparison.Deltas[0].Status != "regressed" ||
@@ -1121,17 +1123,19 @@ func TestCompareProblemsUsesFingerprintStatuses(t *testing.T) {
 	baseline.Routes[0].P95MS = 800
 	baseline.Routes[0].P50MS = 300
 	baseline = attachProblemReport(t, baseline)
+	attachProblemComparisonProfile(&baseline, "01000000000000000000000000000000", "11000000000000000000000000000000", OperationStats{Operation: "refresh.load", Kind: "user", Screen: "Feed", Count: 40, TotalMS: 20_000})
 
 	candidate := completeProblemFixture()
 	candidate.Routes = append(candidate.Routes, RouteStats{Route: "GET /new", Count: 30, Failures: 10, P95MS: 1_000})
 	candidate = attachProblemReport(t, candidate)
+	attachProblemComparisonProfile(&candidate, "02000000000000000000000000000000", "22000000000000000000000000000000", OperationStats{Operation: "refresh.load", Kind: "user", Screen: "Feed", Count: 40, TotalMS: 20_000})
 
 	comparison := CompareProblems(baseline, candidate, true)
 	statuses := map[string]int{}
 	for _, delta := range comparison.Deltas {
 		statuses[delta.Status]++
 	}
-	if statuses["regressed"] == 0 || statuses["new"] == 0 || statuses["persistent"] == 0 {
+	if statuses["regressed"] == 0 || statuses["persistent"] == 0 || statuses[string(ObservationTargetNotExercised)] == 0 || statuses["new"] != 0 || statuses["resolved"] != 0 {
 		t.Fatalf("problem compare statuses = %+v; deltas=%+v", statuses, comparison.Deltas)
 	}
 	for index := 1; index < len(comparison.Deltas); index++ {
@@ -1146,6 +1150,8 @@ func TestProblemGateUsesCanonicalFindingsAndCoverage(t *testing.T) {
 	baseline.Routes = baseline.Routes[1:]
 	baseline = attachProblemReport(t, baseline)
 	candidate := attachProblemReport(t, completeProblemFixture())
+	attachProblemComparisonProfile(&baseline, "01000000000000000000000000000000", "11000000000000000000000000000000", OperationStats{Operation: "refresh.load", Kind: "user", Screen: "Feed", Count: 40, TotalMS: 20_000})
+	attachProblemComparisonProfile(&candidate, "02000000000000000000000000000000", "22000000000000000000000000000000", OperationStats{Operation: "refresh.load", Kind: "user", Screen: "Feed", Count: 40, TotalMS: 20_000})
 	comparison := Compare(baseline, candidate)
 	zero := 0
 	result := EvaluateGate(comparison, ThresholdConfig{Problems: ProblemGateThreshold{
@@ -1414,4 +1420,15 @@ func attachProblemReport(t *testing.T, summary Summary) Summary {
 	summary.CategoryCoverage = report.Coverage
 	summary.Detectors = report.Registry
 	return summary
+}
+
+func attachProblemComparisonProfile(summary *Summary, runID, processID string, stats OperationStats) {
+	if summary.OperationAnalysis == nil {
+		summary.OperationAnalysis = &OperationAnalysis{}
+	}
+	summary.OperationAnalysis.Profiles = []OperationProfile{{
+		Root: true, RunID: runID, ProcessInstanceID: processID, ProcessName: "com.example.app",
+		Steps: []OperationProfileStep{{Operation: "load", Kind: "stage", Screen: stats.Screen}}, Stats: stats,
+	}}
+	summary.OperationAnalysis.Completed = stats.Count
 }

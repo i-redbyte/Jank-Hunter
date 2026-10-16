@@ -1,6 +1,8 @@
 package io.jankhunter.runtime
 
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /** Monotonic IDs are never recycled, including across collection epochs. */
 internal class RuntimeAsyncTokenIds(initialSequence: Long = 0L) {
@@ -9,11 +11,13 @@ internal class RuntimeAsyncTokenIds(initialSequence: Long = 0L) {
     fun current(): Long = sequence.get()
 
     fun next(): Long {
-        while (true) {
+        repeat(32) {
             val current = sequence.get()
             if (current >= MAX_SEQUENCE) return 0L
             if (sequence.compareAndSet(current, current + 1L)) return current + 1L
         }
+        RuntimeHookFailureTracker.record(RuntimeHookFailureReason.REGISTRY_CONTENTION)
+        return 0L
     }
 
     companion object {
@@ -33,8 +37,10 @@ internal class RuntimeAsyncTokenTable(
     private val capacity: Int = MAX_CAPACITY,
     private val rejected: (Int) -> Unit = {},
 ) {
+    private val lock = ReentrantLock()
     private val firstSequence = ids.current() + 1L
     private val pages = ArrayList<LongArray>()
+    private var causalPages: ArrayList<Array<JankHunterCausalContext?>?>? = null
     private val active = LongArray(KIND_COUNT)
     private val publishing = LongArray(KIND_COUNT)
     private var nextUnused = 0
@@ -43,109 +49,164 @@ internal class RuntimeAsyncTokenTable(
 
     init { require(capacity in 1..MAX_CAPACITY) }
 
-    @Synchronized
-    fun begin(kind: Int, startedNanos: Long): Long {
-        require(kind in HTTP..WORKER)
-        require(startedNanos >= 0L)
-        if (closed) return reject(REJECT_CLOSED)
-        if (freeHead < 0 && nextUnused >= capacity) return reject(REJECT_CAPACITY)
-        val serial = ids.next()
-        if (serial == 0L) return reject(REJECT_ID_EXHAUSTED)
-        val slot = if (freeHead >= 0) {
-            freeHead.also { freeHead = time(it).toInt() }
-        } else {
-            val index = nextUnused
-            if (index / PAGE_SIZE == pages.size) pages.add(LongArray(PAGE_SIZE * WORDS_PER_SLOT))
-            nextUnused++
-            index
+    fun begin(kind: Int, startedNanos: Long, causalContext: JankHunterCausalContext? = null): Long {
+        return withTokenLock(0L) {
+            require(kind in HTTP..WORKER)
+            require(startedNanos >= 0L)
+            if (closed) return@withTokenLock reject(REJECT_CLOSED)
+            if (freeHead < 0 && nextUnused >= capacity) return@withTokenLock reject(REJECT_CAPACITY)
+            val serial = ids.next()
+            if (serial == 0L) {
+                if (ids.current() >= RuntimeAsyncTokenIds.MAX_SEQUENCE) return@withTokenLock reject(REJECT_ID_EXHAUSTED)
+                return@withTokenLock 0L
+            }
+            val slot = if (freeHead >= 0) {
+                freeHead.also { freeHead = time(it).toInt() }
+            } else {
+                val index = nextUnused
+                if (index / PAGE_SIZE == pages.size) {
+                    pages.add(LongArray(PAGE_SIZE * WORDS_PER_SLOT))
+                }
+                nextUnused++
+                index
+            }
+            val token = (serial shl TOKEN_SEQUENCE_SHIFT) or (slot.toLong() shl KIND_BITS) or kind.toLong()
+            set(slot, token, startedNanos)
+            if (causalContext != null) {
+                val contexts = causalPages ?: ArrayList<Array<JankHunterCausalContext?>?>().also { causalPages = it }
+                val pageIndex = slot / PAGE_SIZE
+                while (contexts.size <= pageIndex) contexts.add(null)
+                val page = contexts[pageIndex] ?: arrayOfNulls<JankHunterCausalContext>(PAGE_SIZE)
+                    .also { contexts[pageIndex] = it }
+                page[slot % PAGE_SIZE] = causalContext
+            }
+            active[kind]++
+            return@withTokenLock token
         }
-        val token = (serial shl TOKEN_SEQUENCE_SHIFT) or (slot.toLong() shl KIND_BITS) or kind.toLong()
-        set(slot, token, startedNanos)
-        active[kind]++
-        return token
     }
 
     /** Transaction stacks already own exact active identities and consume terminal callbacks once.
      * Their storage grows with active depth; they are not subject to the async slot capacity. */
-    @Synchronized
     fun beginTransaction(): Long {
-        if (closed) return reject(REJECT_CLOSED)
-        val serial = ids.next()
-        if (serial == 0L) return reject(REJECT_ID_EXHAUSTED)
-        active[DATABASE_TRANSACTION]++
-        // The transaction stack already identifies the kind; keep wire IDs and their deltas compact.
-        return serial
+        return withTokenLock(0L) {
+            if (closed) return@withTokenLock reject(REJECT_CLOSED)
+            val serial = ids.next()
+            if (serial == 0L) {
+                if (ids.current() >= RuntimeAsyncTokenIds.MAX_SEQUENCE) return@withTokenLock reject(REJECT_ID_EXHAUSTED)
+                return@withTokenLock 0L
+            }
+            active[DATABASE_TRANSACTION]++
+            // The transaction stack already identifies the kind; keep wire IDs and their deltas compact.
+            return@withTokenLock serial
+        }
     }
 
-    @Synchronized
     fun claimTransaction(transactionId: Long): Boolean {
-        val reason = when {
-            closed || transactionId < firstSequence -> REJECT_CLOSED
-            transactionId <= 0L || transactionId > ids.current() -> REJECT_INVALID
-            active[DATABASE_TRANSACTION] == 0L -> REJECT_CONSUMED
-            else -> 0
+        return withTokenLock(false) {
+            val reason = when {
+                closed || transactionId < firstSequence -> REJECT_CLOSED
+                transactionId <= 0L || transactionId > ids.current() -> REJECT_INVALID
+                active[DATABASE_TRANSACTION] == 0L -> REJECT_CONSUMED
+                else -> 0
+            }
+            if (reason != 0) {
+                reject(reason)
+                return@withTokenLock false
+            }
+            active[DATABASE_TRANSACTION]--
+            publishing[DATABASE_TRANSACTION]++
+            return@withTokenLock true
         }
-        if (reason != 0) {
-            reject(reason)
-            return false
-        }
-        active[DATABASE_TRANSACTION]--
-        publishing[DATABASE_TRANSACTION]++
-        return true
     }
 
-    @Synchronized
     fun releaseTransaction() {
-        if (!closed && publishing[DATABASE_TRANSACTION] > 0L) publishing[DATABASE_TRANSACTION]--
+        return withTokenLock(Unit) {
+            if (!closed && publishing[DATABASE_TRANSACTION] > 0L) publishing[DATABASE_TRANSACTION]--
+        }
     }
 
     /** Returns the exact start time, or -1 when this completion must not be published. */
-    @Synchronized
     fun claim(token: Long, kind: Int): Long {
-        if (token <= 0L || kind !in 1 until KIND_COUNT || token and KIND_MASK != kind.toLong()) {
-            reject(REJECT_INVALID)
-            return -1L
+        return withTokenLock(-1L) {
+            if (token <= 0L || kind !in 1 until KIND_COUNT || token and KIND_MASK != kind.toLong()) {
+                reject(REJECT_INVALID)
+                return@withTokenLock -1L
+            }
+            val slot = slot(token)
+            val serial = token ushr TOKEN_SEQUENCE_SHIFT
+            val reason = when {
+                closed || serial < firstSequence -> REJECT_CLOSED
+                serial > ids.current() -> REJECT_INVALID
+                slot >= nextUnused || identity(slot) != token -> REJECT_CONSUMED
+                else -> 0
+            }
+            if (reason != 0) {
+                reject(reason)
+                return@withTokenLock -1L
+            }
+            val started = time(slot)
+            set(slot, -token, started)
+            active[kind]--
+            publishing[kind]++
+            return@withTokenLock started
         }
-        val slot = slot(token)
-        val serial = token ushr TOKEN_SEQUENCE_SHIFT
-        val reason = when {
-            closed || serial < firstSequence -> REJECT_CLOSED
-            serial > ids.current() -> REJECT_INVALID
-            slot >= nextUnused || identity(slot) != token -> REJECT_CONSUMED
-            else -> 0
-        }
-        if (reason != 0) {
-            reject(reason)
-            return -1L
-        }
-        val started = time(slot)
-        set(slot, -token, started)
-        active[kind]--
-        publishing[kind]++
-        return started
     }
 
-    @Synchronized
+    /** Non-consuming identity check for evidence emitted before the terminal callback. */
+    fun isActive(token: Long, kind: Int): Boolean {
+        return withTokenLock(false) {
+            if (closed || token <= 0L || kind !in 1 until KIND_COUNT || token and KIND_MASK != kind.toLong()) {
+                return@withTokenLock false
+            }
+            val slot = slot(token)
+            return@withTokenLock slot < nextUnused && identity(slot) == token
+        }
+    }
+
+    /** The immutable initiation context survives claim, and is cleared before a slot is reused. */
+    fun causalContext(token: Long): JankHunterCausalContext? {
+        return withTokenLock(null) {
+            if (closed || token <= 0L) return@withTokenLock null
+            val index = slot(token)
+            if (index >= nextUnused) return@withTokenLock null
+            val identity = identity(index)
+            if (identity != token && identity != -token) return@withTokenLock null
+            return@withTokenLock causalPages?.getOrNull(index / PAGE_SIZE)?.get(index % PAGE_SIZE)
+        }
+    }
+
     fun release(token: Long) {
-        if (closed || token <= 0L) return
-        val slot = slot(token)
-        if (slot >= nextUnused || identity(slot) != -token) return
-        publishing[(token and KIND_MASK).toInt()]--
-        set(slot, 0L, freeHead.toLong())
-        freeHead = slot
+        return withTokenLock(Unit) {
+            if (closed || token <= 0L) return@withTokenLock Unit
+            val slot = slot(token)
+            if (slot >= nextUnused || identity(slot) != -token) return@withTokenLock Unit
+            publishing[(token and KIND_MASK).toInt()]--
+            causalPages?.getOrNull(slot / PAGE_SIZE)?.set(slot % PAGE_SIZE, null)
+            set(slot, 0L, freeHead.toLong())
+            freeHead = slot
+        }
     }
 
     /** The callback runs once at close; it must only record the primitive quality counters. */
-    @Synchronized
-    fun close(record: (kind: Int, unfinished: Long, completing: Long) -> Unit) {
-        if (closed) return
+    fun close(record: (kind: Int, unfinished: Long, completing: Long) -> Unit) = lock.withLock {
+        if (closed) return@withLock
         closed = true
         for (kind in 1 until KIND_COUNT) record(kind, active[kind], publishing[kind])
         pages.clear()
+        causalPages?.clear()
+        causalPages = null
         active.fill(0L)
         publishing.fill(0L)
         nextUnused = 0
         freeHead = -1
+    }
+
+    private inline fun <T> withTokenLock(fallback: T, block: () -> T): T {
+        if (!lock.tryLock()) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.REGISTRY_CONTENTION)
+            return fallback
+        }
+        try { return block() } finally { lock.unlock() }
     }
 
     private fun reject(reason: Int): Long {

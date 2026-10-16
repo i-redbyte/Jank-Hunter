@@ -29,10 +29,8 @@ internal data class DependencyInjectionEdgeRecord(
 
 internal object DependencyInjectionClassMatcher {
     fun isGeneratedDiClass(classData: ClassData): Boolean {
-        return isGeneratedDiClass(
-            className = classData.className,
-            hierarchy = classData.superClasses + classData.interfaces,
-        )
+        return isGeneratedDiClass(classData.className) ||
+            hasGeneratedDiHierarchy(classData.superClasses + classData.interfaces)
     }
 
     fun isGeneratedDiClass(className: String, hierarchy: Iterable<String> = emptyList()): Boolean {
@@ -47,7 +45,10 @@ internal object DependencyInjectionClassMatcher {
         if (simpleName.contains("_HiltComponents") || simpleName.endsWith("ModuleGen")) return true
         if (simpleName.endsWith("_GeneratedInjector") || simpleName.endsWith("_HiltModules")) return true
         if (simpleName.endsWith("_ComponentTreeDeps") || simpleName.endsWith("_AggregatedDeps")) return true
-        return hierarchy.any { parent ->
+        return hasGeneratedDiHierarchy(hierarchy)
+    }
+
+    private fun hasGeneratedDiHierarchy(hierarchy: Iterable<String>): Boolean = hierarchy.any { parent ->
             when (parent.normalizedClassName()) {
                 "dagger.internal.Factory",
                 "dagger.MembersInjector",
@@ -55,11 +56,9 @@ internal object DependencyInjectionClassMatcher {
                 else -> false
             }
         }
-    }
 
     fun generatedFramework(classData: ClassData): DependencyInjectionFramework? {
         val normalized = classData.className.normalizedClassName()
-        val hierarchy = (classData.superClasses + classData.interfaces).map { it.normalizedClassName() }
         return when {
             normalized.startsWith("org.koin.ksp.generated.") || normalized.substringAfterLast('.').endsWith("ModuleGen") -> {
                 DependencyInjectionFramework.KOIN
@@ -74,10 +73,13 @@ internal object DependencyInjectionClassMatcher {
                 normalized.substringAfterLast('.').endsWith("_AggregatedDeps") -> {
                 DependencyInjectionFramework.HILT
             }
-            hierarchy.any { it == "dagger.internal.Factory" || it == "dagger.MembersInjector" } ||
-                normalized.substringAfterLast('.').startsWith("Dagger") ||
+            normalized.substringAfterLast('.').startsWith("Dagger") ||
                 normalized.substringAfterLast('.').endsWith("_Factory") ||
-                normalized.substringAfterLast('.').endsWith("_MembersInjector") -> {
+                normalized.substringAfterLast('.').endsWith("_MembersInjector") ||
+                (classData.superClasses + classData.interfaces).any {
+                    val parent = it.normalizedClassName()
+                    parent == "dagger.internal.Factory" || parent == "dagger.MembersInjector"
+                } -> {
                 DependencyInjectionFramework.DAGGER2
             }
             else -> null
@@ -97,6 +99,10 @@ internal object DependencyInjectionCatalogWriter {
         edges: Collection<DependencyInjectionEdgeRecord>,
     ) {
         if (directoryPath.isBlank()) return
+        InstrumentationArtifactFiles.writeClassShard(directoryPath, className, records(classRecord, edges))
+    }
+
+    fun records(classRecord: DependencyInjectionClassRecord?, edges: Collection<DependencyInjectionEdgeRecord>): String {
         val records = buildList {
             classRecord?.let { add(classRecord(it)) }
             edges
@@ -112,11 +118,7 @@ internal object DependencyInjectionCatalogWriter {
                 )
                 .mapTo(this, ::edgeRecord)
         }
-        InstrumentationArtifactFiles.writeClassShard(
-            directoryPath,
-            className,
-            records.joinToString(separator = "\n", postfix = if (records.isEmpty()) "" else "\n"),
-        )
+        return records.joinToString(separator = "\n", postfix = if (records.isEmpty()) "" else "\n")
     }
 
     fun metadataRecord(variantName: String): String {

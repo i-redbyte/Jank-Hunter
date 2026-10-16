@@ -1,0 +1,2 @@
+jankhunter_release_performance_budget_v1
+Compatibility fixture only. FULL performance is a separate mandatory release gate.

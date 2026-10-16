@@ -7,17 +7,26 @@ internal class RuntimeStorageValve(
     private val state: RuntimeState,
 ) {
     private var nextRequestId = 0L
+    // Never share this short reconciliation lock with callers waiting for the writer.
+    private val reconciliationLock = Any()
 
     fun switchBinaryStorage(
         storage: JankHunterBinaryStorage?,
         timeoutMs: Long,
     ): JankHunterStorageSwitchResult {
+        // Reject before taking the valve: its owner may be waiting for lifecycle or this writer.
+        if (Thread.holdsLock(state.lifecycleLock) || state.writer?.isWorkerThread() == true) {
+            return JankHunterStorageSwitchResult.FAILED
+        }
         return synchronized(state.storageValveLock) storageSwitch@{
             val snapshot = synchronized(state.lifecycleLock) lifecycleSnapshot@{
                 val configuration = state.configurationSnapshot()
                 val config = configuration.config ?: return@lifecycleSnapshot null
                 if (config.binaryStorage() === storage) {
                     return JankHunterStorageSwitchResult.ALREADY_ACTIVE
+                }
+                if (storage != null && config.storagePolicy() != null) {
+                    return JankHunterStorageSwitchResult.FAILED
                 }
                 StorageSnapshot(
                     requestId = allocateRequestId(),
@@ -46,7 +55,7 @@ internal class RuntimeStorageValve(
     }
 
     private fun applyStorage(snapshot: StorageSnapshot, storage: JankHunterBinaryStorage?): Boolean {
-        return synchronized(state.storageValveLock) {
+        return synchronized(reconciliationLock) {
             val current = state.configurationSnapshot()
             if (
                 current.lifecycleGeneration == snapshot.lifecycleGeneration &&

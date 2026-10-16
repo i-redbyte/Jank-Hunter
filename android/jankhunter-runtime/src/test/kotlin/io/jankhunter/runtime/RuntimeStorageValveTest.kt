@@ -8,13 +8,65 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.LockSupport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeStorageValveTest {
+    @Test
+    fun lifecycleCallbackDoesNotWaitForStorageValveOrPublishASelection() {
+        val state = RuntimeState().apply { bindInitialConfiguration(JankHunterConfig.builder().build()) }
+        val before = state.configurationSnapshot()
+        val completed = CountDownLatch(1)
+        val entered = CountDownLatch(1)
+        val result = AtomicReference<JankHunterStorageSwitchResult>()
+        val worker = Thread {
+            synchronized(state.lifecycleLock) {
+                entered.countDown()
+                result.set(RuntimeStorageValve(state).switchBinaryStorage(null, 1_000L))
+                completed.countDown()
+            }
+        }
+        try {
+            synchronized(state.storageValveLock) {
+                worker.start()
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                assertTrue("Callback waited for a valve whose caller can be waiting for lifecycleLock",
+                    completed.await(1, TimeUnit.SECONDS))
+            }
+        } finally {
+            worker.join(5_000L)
+        }
+        assertFalse(worker.isAlive)
+        assertEquals(JankHunterStorageSwitchResult.FAILED, result.get())
+        assertTrue(before === state.configurationSnapshot())
+    }
+
+    @Test
+    fun externalStorageCannotReplaceAnActiveStoragePolicy() {
+        val root = Files.createTempDirectory("jankhunter-storage-policy-valve").toFile()
+        val policy = JankHunterStoragePolicy(File(root, "managed"), Long.MAX_VALUE, Long.MAX_VALUE,
+            setOf("jhlog"), emptySet(), 8192, true)
+        val config = JankHunterConfig.builder().storagePolicy(policy).build()
+        val writer = AsyncLogWriterFactory().open(policy.rootDirectory, config, "main")
+        try {
+            val state = RuntimeState().apply {
+                this.config = config
+                this.writer = writer
+            }
+            val targetDirectory = File(root, "external")
+            val target = BlockingFileStorage(targetDirectory).apply { releaseOpen() }
+            assertEquals(JankHunterStorageSwitchResult.FAILED,
+                RuntimeStorageValve(state).switchBinaryStorage(target, timeoutMs = 1_000L))
+            assertTrue(state.config === config)
+            assertFalse(targetDirectory.exists())
+        } finally {
+            writer.close()
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun storageValveDoesNotDependOnTheWholeCollectorService() {
         assertFalse(RuntimeStorageValve::class.java.declaredConstructors.any { constructor ->
@@ -86,7 +138,7 @@ class RuntimeStorageValveTest {
     }
 
     @Test
-    fun deferredSwitchReconciliationWaitsForStorageValveLock() {
+    fun deferredSwitchCompletionDoesNotBlockWriterOnStorageValveLock() {
         val root = Files.createTempDirectory("jankhunter-storage-valve-ordered").toFile()
         val config = JankHunterConfig.builder().flushIntervalMs(60_000L).build()
         val writer = AsyncLogWriterFactory().open(File(root, "bootstrap"), config, "main")
@@ -108,22 +160,9 @@ class RuntimeStorageValveTest {
             synchronized(state.storageValveLock) {
                 target.releaseOpen()
                 assertTrue(target.awaitWriterCreated())
-                val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500L)
-                while (state.config?.binaryStorage() !== target && System.nanoTime() < deadline) {
-                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1L))
-                }
-                assertFalse(
-                    "deferred completion changed storage outside the valve lock",
-                    state.config?.binaryStorage() === target,
-                )
+                assertTrue("writer completion callback waited for storage valve lock", writer.close(timeoutMs = 1_000L))
+                assertTrue(state.config?.binaryStorage() === target)
             }
-
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
-            while (state.config?.binaryStorage() !== target && System.nanoTime() < deadline) {
-                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1L))
-            }
-            assertTrue(state.config?.binaryStorage() === target)
-            assertTrue(writer.close())
         } finally {
             target.releaseOpen()
             writer.close()

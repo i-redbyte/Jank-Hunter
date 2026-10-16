@@ -17,7 +17,7 @@ internal object ClassGraphWriter {
         return !InstrumentationPackages.isBuiltinExcluded(owner)
     }
 
-    private fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
+    internal fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
         return buildString {
             append("{\"format\":")
             append(ArtifactSchemas.CLASS_GRAPH_FORMAT)

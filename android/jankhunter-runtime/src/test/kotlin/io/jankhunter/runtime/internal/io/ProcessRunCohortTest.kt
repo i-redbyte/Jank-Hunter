@@ -17,29 +17,37 @@ class ProcessRunCohortTest {
     fun liveParticipantsShareIdentityAndDailySessionIndex() {
         val directory = Files.createTempDirectory("jh-run-cohort").toFile()
         try {
-            val first = ProcessRunCohort.join(directory, DATE)
+            val first = ProcessRunCohort.join(directory, DATE, startedAtUnixMs = FIRST_START_MS)
             val firstRunId = first.runId()
             assertEquals(DATE, first.localDate())
             assertEquals(0L, first.dailySessionIndex())
-            val second = ProcessRunCohort.join(directory, DATE)
+            assertEquals(FIRST_START_MS, first.startedAtUnixMs())
+            val second = ProcessRunCohort.join(directory, DATE, startedAtUnixMs = SECOND_START_MS)
             assertArrayEquals(firstRunId, second.runId())
             assertEquals(0L, second.dailySessionIndex())
-            val afterMidnightParticipant = ProcessRunCohort.join(directory, NEXT_DATE)
+            assertEquals(FIRST_START_MS, second.startedAtUnixMs())
+            val afterMidnightParticipant = ProcessRunCohort.join(
+                directory,
+                NEXT_DATE,
+                startedAtUnixMs = SECOND_START_MS,
+            )
             assertArrayEquals(firstRunId, afterMidnightParticipant.runId())
             assertEquals(DATE, afterMidnightParticipant.localDate())
             assertEquals(0L, afterMidnightParticipant.dailySessionIndex())
+            assertEquals(FIRST_START_MS, afterMidnightParticipant.startedAtUnixMs())
 
             first.close()
-            val third = ProcessRunCohort.join(directory, DATE)
+            val third = ProcessRunCohort.join(directory, DATE, startedAtUnixMs = SECOND_START_MS)
             assertArrayEquals(firstRunId, third.runId())
             assertEquals(0L, third.dailySessionIndex())
 
             second.close()
             third.close()
             afterMidnightParticipant.close()
-            ProcessRunCohort.join(directory, DATE).use { next ->
+            ProcessRunCohort.join(directory, DATE, startedAtUnixMs = SECOND_START_MS).use { next ->
                 assertFalse(firstRunId.contentEquals(next.runId()))
                 assertEquals(1L, next.dailySessionIndex())
+                assertEquals(SECOND_START_MS, next.startedAtUnixMs())
             }
             ProcessRunCohort.join(directory, NEXT_DATE).use { nextDay ->
                 assertEquals(NEXT_DATE, nextDay.localDate())
@@ -163,9 +171,30 @@ class ProcessRunCohortTest {
         }
     }
 
+    @Test
+    fun absentSequenceContinuesAfterHighestSessionDirectory() {
+        val directory = Files.createTempDirectory("jh-run-hierarchy-sequence").toFile()
+        try {
+            val session = File(
+                directory,
+                SessionArtifactPath.sessionDirectoryName(FIRST_START_MS, 7L, ByteArray(16) { 7 }),
+            )
+            val process = File(session, SessionArtifactPath.processDirectoryName(ByteArray(16) { 8 })).apply { mkdirs() }
+            File(process, SessionLogName.create(DATE, ByteArray(16) { 7 }, 7L, 0L)).writeBytes(Jhlog.FILE_MAGIC)
+
+            ProcessRunCohort.join(directory, DATE, startedAtUnixMs = SECOND_START_MS).use { lease ->
+                assertEquals(8L, lease.dailySessionIndex())
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private companion object {
         const val COHORT_DIRECTORY_LOCK = ".jh-run-cohort.lock"
         const val DATE = "2027-01-02"
         const val NEXT_DATE = "2027-01-03"
+        const val FIRST_START_MS = 1_799_000_000_000L
+        const val SECOND_START_MS = FIRST_START_MS + 10_000L
     }
 }

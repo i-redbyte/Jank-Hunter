@@ -37,6 +37,9 @@ func decodeDatabasePayload(
 		if readErr != nil {
 			return readErr
 		}
+		if err := validatePayloadByteFields(staticValues, 1, 2, 3); err != nil {
+			return err
+		}
 		descriptor.fingerprint = staticValues[0]
 		descriptor.framework = DatabaseFramework(staticValues[1])
 		descriptor.operation = DatabaseOperation(staticValues[2])
@@ -66,6 +69,9 @@ func decodeDatabasePayload(
 	if presence&^knownDatabasePresence != 0 {
 		return fmt.Errorf("unsupported database presence bits 0x%x", presence&^knownDatabasePresence)
 	}
+	if err := validatePayloadByteFields(dynamicValues, 0); err != nil {
+		return err
+	}
 	database := &DatabaseEvent{
 		QueryRef: descriptor.query, SourceRef: descriptor.source,
 		StatementFingerprint: descriptor.fingerprint, Framework: descriptor.framework,
@@ -73,7 +79,7 @@ func decodeDatabasePayload(
 		Outcome: DatabaseOutcome(dynamicValues[0]), DurationUS: dynamicValues[1],
 	}
 	if presence&databasePresenceFailure != 0 {
-		value, readErr := readPayloadValue(reader, "database failure kind")
+		value, readErr := readPayloadByteValue(reader, "database failure kind")
 		if readErr != nil {
 			return readErr
 		}
@@ -83,6 +89,9 @@ func decodeDatabasePayload(
 		values, readErr := readPayloadValues(reader, valueScratch, "database result kind", "database result count bucket")
 		if readErr != nil {
 			return readErr
+		}
+		if err := validatePayloadByteFields(values, 0, 1); err != nil {
+			return err
 		}
 		database.ResultKnown = true
 		database.ResultKind = DatabaseResultKind(values[0])
@@ -164,6 +173,9 @@ func decodeDatabaseTransactionPayload(
 	if presence&^knownTransactionPresence != 0 {
 		return fmt.Errorf("unsupported database transaction presence bits 0x%x", presence&^knownTransactionPresence)
 	}
+	if err := validatePayloadByteFields(values, 0); err != nil {
+		return err
+	}
 	transaction := &DatabaseTransactionEvent{
 		SourceRef: sourceRef, TransactionID: transactionID, Stage: DatabaseTransactionStage(values[0]),
 	}
@@ -181,21 +193,21 @@ func decodeDatabaseTransactionPayload(
 		}
 	}
 	if presence&transactionPresenceMode != 0 {
-		value, readErr := readPayloadValue(reader, "database transaction mode")
+		value, readErr := readPayloadByteValue(reader, "database transaction mode")
 		if readErr != nil {
 			return readErr
 		}
 		transaction.Mode = DatabaseTransactionMode(value)
 	}
 	if presence&transactionPresenceOutcome != 0 {
-		value, readErr := readPayloadValue(reader, "database transaction outcome")
+		value, readErr := readPayloadByteValue(reader, "database transaction outcome")
 		if readErr != nil {
 			return readErr
 		}
 		transaction.Outcome = DatabaseTransactionOutcome(value)
 	}
 	if presence&transactionPresenceFailure != 0 {
-		value, readErr := readPayloadValue(reader, "database transaction failure kind")
+		value, readErr := readPayloadByteValue(reader, "database transaction failure kind")
 		if readErr != nil {
 			return readErr
 		}

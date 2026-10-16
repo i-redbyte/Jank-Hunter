@@ -44,6 +44,10 @@ internal object JankHunterConfigurationReport {
         appendLine()
         appendLine("Runtime:")
         appendLine("  mainThreadStallThresholdMs = ${configuration.runtime.mainThreadStallThresholdMs}")
+        appendLine("  threadSamplerEnabled = ${configuration.runtime.threadSamplerEnabled}")
+        appendLine("  threadSampleIntervalMs = ${configuration.runtime.threadSampleIntervalMs}")
+        appendLine("  concurrencyDetailedEnabled = ${configuration.runtime.concurrencyDetailedEnabled}")
+        appendLine("  concurrencyMaxTrackedEntities = ${configuration.runtime.concurrencyMaxTrackedEntities}")
         appendLine("  ownerBlockThresholdMs = ${configuration.runtime.ownerBlockThresholdMs}")
         appendLine("  httpSlowThresholdMs = ${configuration.runtime.httpSlowThresholdMs}")
         appendLine("  jankFrameThresholdMs = ${configuration.runtime.jankFrameThresholdMs}")
@@ -60,6 +64,8 @@ internal object JankHunterConfigurationReport {
         appendLine("  webSockets = ${configuration.instrumentation.webSockets}")
         appendLine("  handlers = ${configuration.instrumentation.handlers}")
         appendLine("  executors = ${configuration.instrumentation.executors}")
+        appendLine("  threadLifecycle = ${configuration.instrumentation.threadLifecycle}")
+        appendLine("  concurrencyDiagnostics = ${configuration.instrumentation.concurrencyDiagnostics}")
         appendLine("  coroutines = ${configuration.instrumentation.coroutines}")
         appendLine("  interactionOperations = ${configuration.instrumentation.interactionOperations}")
         appendLine("  lifecycleLeaks = ${configuration.instrumentation.lifecycleLeaks}")
@@ -210,6 +216,9 @@ internal object JankHunterConfigurationValidation {
         val failures = ArrayList<String>(8)
         positive(failures, "maxQueueSize", configuration.maxQueueSize.toLong())
         positive(failures, "mainThreadStallThresholdMs", configuration.runtime.mainThreadStallThresholdMs)
+        if (configuration.runtime.threadSampleIntervalMs < 500L) {
+            failures += "threadSampleIntervalMs must be at least 500 ms."
+        }
         positive(failures, "ownerBlockThresholdMs", configuration.runtime.ownerBlockThresholdMs)
         positive(failures, "httpSlowThresholdMs", configuration.runtime.httpSlowThresholdMs)
         positive(failures, "jankFrameThresholdMs", configuration.runtime.jankFrameThresholdMs)

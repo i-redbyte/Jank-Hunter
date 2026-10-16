@@ -8,6 +8,21 @@ internal class JankHunterRunnable internal constructor(
     private val callbacks: RuntimeAsyncCallbacks,
 ) : Runnable {
     private val capturedContext = callbacks.captureContext(ownerName)
+    @Volatile private var causalBinding: RuntimeCausalExecutionBinding? = null
+    @Volatile private var causalAmbiguous = false
+
+    internal fun bindCausal(binding: RuntimeCausalExecutionBinding): Boolean {
+        synchronized(this) {
+            if (causalBinding == null && !causalAmbiguous) {
+                causalBinding = binding
+                return true
+            } else {
+                causalBinding = null
+                causalAmbiguous = true
+                return false
+            }
+        }
+    }
 
     override fun run() {
         if (!callbacks.isActive()) {
@@ -15,6 +30,8 @@ internal class JankHunterRunnable internal constructor(
             return
         }
         val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
+        val binding = causalBinding
+        val causalToken = RuntimeHookGuard.value<Any?>(null, RuntimeHookFailureReason.ASYNC_WRAPPER) { binding?.enter() }
         var failed = false
         try {
             callbacks.callWithContext(capturedContext, ownerName) {
@@ -24,6 +41,10 @@ internal class JankHunterRunnable internal constructor(
             failed = true
             throw throwable
         } finally {
+            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) { binding?.exit(causalToken, failed) }
+            if (binding != null && !binding.recurring) {
+                synchronized(this) { if (causalBinding === binding) causalBinding = null }
+            }
             RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 callbacks.recordWrappedWork(
                     ownerName,

@@ -5,9 +5,9 @@ import io.jankhunter.runtime.RuntimeCollectorCallbacks
 import io.jankhunter.runtime.RuntimeBooleanSource
 
 internal class MemorySampler(
-    private val intervalMs: Long,
+    intervalMs: Long,
     private val callbacks: RuntimeCollectorCallbacks,
-    private val userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
+    userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
 ) {
     private val gcStats = RuntimeGcStats(::readRuntimeStat) { android.os.SystemClock.elapsedRealtime() }
     private val memoryPressureSampler = MemoryPressureSampler(callbacks::recordGauge)

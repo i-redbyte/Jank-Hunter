@@ -5,12 +5,13 @@ import java.io.File
 import java.io.FileDescriptor
 import java.nio.channels.FileChannel
 
-/** Allocation-free call replacements emitted only for the reviewed high-level I/O allow-list. */
+/** Call replacements emitted only for the reviewed high-level I/O allow-list. */
 object JankHunterIOHooks {
     @JvmStatic
     fun readFileBytes(file: File, sourceId: Long, sourceName: String): ByteArray {
         val telemetry = ioTelemetry()
         if (!telemetry.isEnabled()) return file.readBytes()
+        val causalContext = telemetry.captureCausalContext()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         return try {
             file.readBytes().also { bytes ->
@@ -22,6 +23,7 @@ object JankHunterIOHooks {
                     JankHunterIOOutcome.SUCCESS,
                     sourceId,
                     sourceName,
+                    causalContext,
                 )
             }
         } catch (failure: Throwable) {
@@ -33,6 +35,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.FAILURE,
                 sourceId,
                 sourceName,
+                causalContext,
             )
             throw failure
         }
@@ -45,6 +48,7 @@ object JankHunterIOHooks {
             file.writeBytes(bytes)
             return
         }
+        val causalContext = telemetry.captureCausalContext()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             file.writeBytes(bytes)
@@ -56,6 +60,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.SUCCESS,
                 sourceId,
                 sourceName,
+                causalContext,
             )
         } catch (failure: Throwable) {
             record(
@@ -66,6 +71,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.FAILURE,
                 sourceId,
                 sourceName,
+                causalContext,
             )
             throw failure
         }
@@ -78,6 +84,7 @@ object JankHunterIOHooks {
             file.appendBytes(bytes)
             return
         }
+        val causalContext = telemetry.captureCausalContext()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             file.appendBytes(bytes)
@@ -89,6 +96,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.SUCCESS,
                 sourceId,
                 sourceName,
+                causalContext,
             )
         } catch (failure: Throwable) {
             record(
@@ -99,6 +107,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.FAILURE,
                 sourceId,
                 sourceName,
+                causalContext,
             )
             throw failure
         }
@@ -111,6 +120,7 @@ object JankHunterIOHooks {
             descriptor.sync()
             return
         }
+        val causalContext = telemetry.captureCausalContext()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             descriptor.sync()
@@ -122,6 +132,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.SUCCESS,
                 sourceId,
                 sourceName,
+                causalContext,
             )
         } catch (failure: Throwable) {
             record(
@@ -132,6 +143,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.FAILURE,
                 sourceId,
                 sourceName,
+                causalContext,
             )
             throw failure
         }
@@ -144,6 +156,7 @@ object JankHunterIOHooks {
             channel.force(metadata)
             return
         }
+        val causalContext = telemetry.captureCausalContext()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             channel.force(metadata)
@@ -155,6 +168,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.SUCCESS,
                 sourceId,
                 sourceName,
+                causalContext,
             )
         } catch (failure: Throwable) {
             record(
@@ -165,6 +179,7 @@ object JankHunterIOHooks {
                 JankHunterIOOutcome.FAILURE,
                 sourceId,
                 sourceName,
+                causalContext,
             )
             throw failure
         }
@@ -178,6 +193,7 @@ object JankHunterIOHooks {
         outcome: JankHunterIOOutcome,
         sourceId: Long,
         sourceName: String,
+        causalContext: JankHunterCausalContext?,
     ) {
         telemetry.recordAutomatic(
             operation,
@@ -186,6 +202,7 @@ object JankHunterIOHooks {
             outcome,
             sourceId,
             sourceName,
+            causalContext,
         )
     }
 

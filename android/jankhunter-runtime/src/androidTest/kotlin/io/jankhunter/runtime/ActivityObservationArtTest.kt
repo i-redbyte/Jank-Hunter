@@ -152,10 +152,15 @@ class ActivityObservationArtTest {
             store.observe(app)
             val weak = detachedTracker(store, queue)
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
-            while (weak.get() != null && System.nanoTime() < deadline) {
-                System.gc()
-                queue.remove(25L)
+            var collected = false
+            while (System.nanoTime() < deadline) {
+                Runtime.getRuntime().gc()
+                if (queue.remove(25L) != null) {
+                    collected = true
+                    break
+                }
             }
+            assertTrue("detached collector was not enqueued after GC", collected)
             assertNull("observer retained a detached collector", weak.get())
             assertEquals(1, app.registrations)
         } finally {

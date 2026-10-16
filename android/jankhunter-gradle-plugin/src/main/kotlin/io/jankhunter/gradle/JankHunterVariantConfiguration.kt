@@ -34,6 +34,10 @@ data class JankHunterResolvedReleaseSafety(
 )
 
 data class JankHunterResolvedRuntime(
+    val threadSamplerEnabled: Boolean,
+    val threadSampleIntervalMs: Long,
+    val concurrencyDetailedEnabled: Boolean,
+    val concurrencyMaxTrackedEntities: Int,
     val mainThreadStallThresholdMs: Long,
     val ownerBlockThresholdMs: Long,
     val httpSlowThresholdMs: Long,
@@ -54,6 +58,8 @@ data class JankHunterResolvedInstrumentation(
     val webSockets: Boolean,
     val handlers: Boolean,
     val executors: Boolean,
+    val threadLifecycle: Boolean,
+    val concurrencyDiagnostics: Boolean,
     val coroutines: Boolean,
     val interactionOperations: Boolean,
     val lifecycleLeaks: Boolean,
@@ -68,6 +74,7 @@ data class JankHunterResolvedInstrumentation(
     val binderIPC: Boolean,
     val ioTracing: Boolean,
     val scope: JankHunterInstrumentationScope,
+    val metadataCompatibilityMode: JankHunterMetadataCompatibilityMode = JankHunterMetadataCompatibilityMode.COMPATIBILITY,
 ) {
     val includeAndroidNamespace: Boolean
         get() = scope.includesAndroidNamespace
@@ -82,7 +89,8 @@ data class JankHunterResolvedInstrumentation(
         get() = true
 
     val hasRuntimeHooks: Boolean
-        get() = methodCounters || okhttp || webSockets || handlers || executors || coroutines ||
+        get() = methodCounters || okhttp || webSockets || handlers || executors || threadLifecycle ||
+            concurrencyDiagnostics || coroutines ||
             interactionOperations || lifecycleLeaks || logSpam || classGraph || runtimeCallGraph ||
             composeTracing || roomTracing || databaseTracing || workerTracing || ioTracing ||
             androidComponents || binderIPC
@@ -120,6 +128,7 @@ open class JankHunterVariantConfiguration @Inject constructor(objects: ObjectFac
     val collection: Property<JankHunterCollection> = objects.property(JankHunterCollection::class.java)
     val processes: Property<JankHunterProcesses> = objects.property(JankHunterProcesses::class.java)
     val scope: Property<JankHunterInstrumentationScope> = objects.property(JankHunterInstrumentationScope::class.java)
+    val metadataCompatibilityMode: Property<JankHunterMetadataCompatibilityMode> = objects.property(JankHunterMetadataCompatibilityMode::class.java)
     val tuning: JankHunterTuning = objects.newInstance(JankHunterTuning::class.java)
     val growthAnalytics: Property<Boolean> = objects.property(Boolean::class.java)
     val autoInit: Property<Boolean> = objects.property(Boolean::class.java)
@@ -210,6 +219,7 @@ open class JankHunterVariantConfiguration @Inject constructor(objects: ObjectFac
             collection.isPresent ||
             processes.isPresent ||
             scope.isPresent ||
+            metadataCompatibilityMode.isPresent ||
             tuning.hasOverrides() ||
             growthAnalytics.isPresent ||
             autoInit.isPresent ||
@@ -307,7 +317,25 @@ internal object JankHunterVariantConfigurationResolver {
         layers: List<JankHunterVariantRule>,
         features: Set<JankHunterFeature>,
     ): JankHunterResolvedRuntime {
+        val maxTrackedEntities = resolveScalar("tuning.concurrency.maxTrackedEntities", layers, 4_096) {
+            it.tuning.concurrency.maxTrackedEntities.orNull
+        }
+        validatePositive("tuning.concurrency.maxTrackedEntities", maxTrackedEntities)
+        if (maxTrackedEntities > 16_384) {
+            throw JankHunterConfigurationException(
+                "Jank Hunter configuration error. 'tuning.concurrency.maxTrackedEntities' " +
+                    "must be at most 16384, but was $maxTrackedEntities.",
+            )
+        }
         return JankHunterResolvedRuntime(
+            threadSamplerEnabled = JankHunterFeature.THREAD_SAMPLING in features,
+            threadSampleIntervalMs = long("tuning.threads.intervalMs", layers, 5_000L) {
+                it.tuning.threads.intervalMs
+            },
+            concurrencyDetailedEnabled = resolveScalar("tuning.concurrency.detailedEnabled", layers, false) {
+                it.tuning.concurrency.detailedEnabled.orNull
+            },
+            concurrencyMaxTrackedEntities = maxTrackedEntities,
             mainThreadStallThresholdMs = long(
                 "tuning.thresholds.mainThreadStallMs",
                 layers,
@@ -365,6 +393,9 @@ internal object JankHunterVariantConfigurationResolver {
             webSockets = JankHunterFeature.WEBSOCKETS in features,
             handlers = JankHunterFeature.HANDLERS in features,
             executors = JankHunterFeature.EXECUTORS in features,
+            threadLifecycle = JankHunterFeature.THREAD_SAMPLING in features ||
+                JankHunterFeature.CONCURRENCY_DIAGNOSTICS in features,
+            concurrencyDiagnostics = JankHunterFeature.CONCURRENCY_DIAGNOSTICS in features,
             coroutines = JankHunterFeature.COROUTINES in features,
             interactionOperations = JankHunterFeature.INTERACTIONS in features,
             lifecycleLeaks = JankHunterFeature.LIFECYCLE_LEAKS in features,
@@ -383,6 +414,9 @@ internal object JankHunterVariantConfigurationResolver {
                 layers,
                 JankHunterInstrumentationScope.NAMESPACE_AND_PACKAGES,
             ) { it.scope.orNull },
+            metadataCompatibilityMode = resolveScalar("metadataCompatibilityMode", layers, JankHunterMetadataCompatibilityMode.COMPATIBILITY) {
+                it.metadataCompatibilityMode.orNull
+            },
         )
     }
 

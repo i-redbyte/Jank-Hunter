@@ -58,12 +58,6 @@ internal object LambdaCaptureAnalyzer {
         return result
     }
 
-    internal fun analyzeMethod(
-        className: String,
-        method: MethodNode,
-        classSuppression: LambdaCaptureSuppression?,
-    ): List<LambdaCapture> = inspectMethod(className, method, classSuppression).captures
-
     internal fun inspectMethod(
         className: String,
         method: MethodNode,
@@ -146,8 +140,9 @@ internal object LambdaCaptureAnalyzer {
         } else {
             null
         }
-        if (captures != null && hasPotentialSink && frames != null) {
-            associateSinks(instructions, frames, captures)
+        val capturedLambdas = captures
+        if (capturedLambdas != null && hasPotentialSink && frames != null) {
+            associateSinks(instructions, frames, capturedLambdas)
         }
         val forceUnwrapImplementationKey = if (
             needsWeakAnalysis && frames != null && hasWeakForceUnwrap(instructions, frames)

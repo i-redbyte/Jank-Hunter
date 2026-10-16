@@ -8,11 +8,360 @@ import java.util.concurrent.Callable
 /**
  * Tiny fail-open ABI used by injected bytecode.
  *
- * Keep this facade stateless: loading it must not initialize the much heavier [JankHunter] object.
+ * Builder observation must not construct or wait for the process runtime graph before SDK initialization.
  * Every entry point owns its complete Throwable boundary and never invokes application business
  * work; wrappers are only prepared or looked up for the original bytecode call site.
  */
 internal object JankHunterHooks {
+    @JvmStatic
+    fun observeOwnedThread(source: String): Boolean = try { hooks().observeOwnedThread(source) } catch (throwable: Throwable) {
+        recordFailure(throwable)
+        false
+    }
+
+    @JvmStatic
+    fun workSubmissionEpoch(): Long = try { hooks().workSubmissionEpoch() } catch (throwable: Throwable) {
+        recordFailure(throwable)
+        0L
+    }
+
+    @JvmStatic
+    fun workChainOmitted(epoch: Long, count: Int) {
+        try { hooks().workChainOmitted(epoch, count) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainRootRequests(continuation: Any, requests: Any?, uniqueName: Any?, policy: Any?, source: String) {
+        try {
+            val epoch = hooks().workSubmissionEpoch()
+            if (epoch != 0L) WorkChainRequestCapture.root(epoch, continuation, requests, uniqueName, policy, source)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainChildRequests(parent: Any, continuation: Any, requests: Any?, source: String) {
+        try {
+            val epoch = hooks().workSubmissionEpoch()
+            if (epoch != 0L) WorkChainRequestCapture.child(epoch, parent, continuation, requests, source)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainCombineRequests(parents: List<*>, continuation: Any) {
+        try {
+            val epoch = hooks().workSubmissionEpoch()
+            if (epoch != 0L) hooks().observeWorkChainCombine(epoch, parents, continuation)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkSubmissionRequests(requests: Any?, uniqueName: Any?, policy: Any?, source: String) {
+        try {
+            val epoch = hooks().workSubmissionEpoch()
+            if (epoch != 0L) WorkChainRequestCapture.submission(epoch, requests, uniqueName, policy, source)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainRoot(epoch: Long, continuation: Any, most: Long, least: Long, uniqueName: String?, policy: String?, source: String) {
+        try { hooks().observeWorkChainRoot(epoch, continuation, most, least, uniqueName, policy, source) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainChild(epoch: Long, parent: Any, continuation: Any, most: Long, least: Long, source: String) {
+        try { hooks().observeWorkChainChild(epoch, parent, continuation, most, least, source) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkChainCombine(epoch: Long, parents: List<*>, continuation: Any) {
+        try { hooks().observeWorkChainCombine(epoch, parents, continuation) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeWorkSubmission(epoch: Long, most: Long, least: Long, periodic: Boolean, uniqueName: String?, policy: String?, omitted: Int, source: String) {
+        try { hooks().observeWorkSubmission(epoch, most, least, periodic, uniqueName, policy, omitted, source) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun workSubmissionCaptureFailed(throwable: Throwable) = recordFailure(throwable)
+
+    @JvmStatic fun observeWorkBuilderPeriodCall(builder: Any, period: Long, unit: Any?, flex: Long, flexUnit: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            val millis = (unit as? java.util.concurrent.TimeUnit)?.toMillis(period) ?: return
+            val flexMS = if (flexUnit == null) null else (flexUnit as? java.util.concurrent.TimeUnit)?.toMillis(flex) ?: return
+            active.observeWorkBuilderPeriodic(builder, millis, flexMS)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderPeriodDurationCall(builder: Any, period: Any?, flex: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L || android.os.Build.VERSION.SDK_INT < 26) return
+            val millis = (period as? java.time.Duration)?.toMillis() ?: return
+            val flexMS = if (flex == null) null else (flex as? java.time.Duration)?.toMillis() ?: return
+            active.observeWorkBuilderPeriodic(builder, millis, flexMS)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderDelayCall(builder: Any, delay: Long, unit: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            val millis = (unit as? java.util.concurrent.TimeUnit)?.toMillis(delay) ?: return
+            active.observeWorkBuilderInitialDelay(builder, millis)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderDelayDurationCall(builder: Any, delay: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L || android.os.Build.VERSION.SDK_INT < 26) return
+            val millis = (delay as? java.time.Duration)?.toMillis() ?: return
+            active.observeWorkBuilderInitialDelay(builder, millis)
+        } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderBackoffCall(builder: Any, policy: Any?, delay: Long, unit: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            WorkChainRequestCapture.backoff(builder, policy, delay, unit)
+        }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderBackoffDurationCall(builder: Any, policy: Any?, duration: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            WorkChainRequestCapture.backoffDuration(builder, policy, duration)
+        }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderExpeditedCall(builder: Any, policy: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            WorkChainRequestCapture.expedited(builder, policy)
+        }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderBuildCall(builder: Any, request: Any?) {
+        try {
+            val active = JankHunter.workerBuilderHooksOrNull() ?: return
+            if (active.workSubmissionEpoch() == 0L) return
+            WorkChainRequestCapture.built(builder, request)
+        }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderBackoff(builder: Any, policy: Int, delayMS: Long) {
+        try { JankHunter.workerBuilderHooksOrNull()?.observeWorkBuilderBackoff(builder, policy, delayMS) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderExpedited(builder: Any, quotaPolicy: Int) {
+        try { JankHunter.workerBuilderHooksOrNull()?.observeWorkBuilderExpedited(builder, quotaPolicy) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkBuilderBuilt(builder: Any, most: Long, least: Long) {
+        try { JankHunter.workerBuilderHooksOrNull()?.observeWorkBuilderBuilt(builder, most, least) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeThreadStart(thread: Thread, source: String) {
+        try {
+            hooks().observeThreadStart(thread, source)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun observeThreadFactory(thread: Thread?, factory: Any?, source: String) {
+        try {
+            hooks().observeThreadFactory(thread, factory, source)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun observeExecutingThread(source: String) {
+        try {
+            hooks().observeExecutingThread(source)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun observeThreadConstructed(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int) {
+        try { hooks().observeThreadConstructed(thread, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun prepareThreadTarget(target: Runnable?, siteId: Long, source: String, line: Int, origin: Int): Runnable? =
+        RuntimeHookGuard.value(target) { hooks().prepareThreadTarget(target, siteId, source, line, origin) }
+
+    @JvmStatic
+    fun bindThreadTarget(thread: Thread?, prepared: Runnable?) {
+        RuntimeHookGuard.run { hooks().bindThreadTarget(thread, prepared) }
+    }
+
+    @JvmStatic
+    fun observeThreadFactoryReturned(thread: Thread?, factory: Any?, siteId: Long, source: String, line: Int, origin: Int) {
+        try { hooks().observeThreadFactoryReturned(thread, factory, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun beginThreadStart(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int): Long = try {
+        hooks().beginThreadStart(thread, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic
+    fun threadStartReturned(thread: Thread?, token: Long) {
+        try { hooks().threadStartReturned(thread, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun threadStartThrew(thread: Thread?, token: Long) {
+        try { hooks().threadStartThrew(thread, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun beginThreadInterrupt(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int): Long = try {
+        hooks().beginThreadInterrupt(thread, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic
+    fun threadInterruptReturned(thread: Thread?, token: Long) {
+        try { hooks().threadInterruptReturned(thread, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun threadInterruptThrew(thread: Thread?, token: Long) {
+        try { hooks().threadInterruptThrew(thread, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun observeThreadEnd(thread: Thread?) {
+        RuntimeHookGuard.run { hooks().observeThreadEnd(thread) }
+    }
+
+    @JvmStatic
+    fun enterRunnableRun(receiver: Any?, siteId: Long, source: String, line: Int, origin: Int): Long = try {
+        hooks().enterRunnableRun(receiver, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic
+    fun exitRunnableRun(token: Long, outcome: Int) {
+        try { hooks().exitRunnableRun(token, outcome) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic
+    fun prepareExecutorRunnable(
+        executor: Any?, command: Runnable?, siteId: Long, source: String, legacyOwnerLabel: String,
+        line: Int, origin: Int, delay: Long, period: Long, unit: Any?, cadence: Int,
+    ): Runnable? = try {
+        hooks().prepareExecutorRunnable(executor, command, siteId, source, legacyOwnerLabel,
+            line, origin, delay, period, unit, cadence)
+    } catch (throwable: Throwable) { recordFailure(throwable); command }
+
+    @JvmStatic
+    fun <T> prepareExecutorCallable(
+        executor: Any?, command: Callable<T>?, siteId: Long, source: String, legacyOwnerLabel: String,
+        line: Int, origin: Int, delay: Long, period: Long, unit: Any?, cadence: Int,
+    ): Callable<T>? = try {
+        hooks().prepareExecutorCallable(executor, command, siteId, source, legacyOwnerLabel,
+            line, origin, delay, period, unit, cadence)
+    } catch (throwable: Throwable) { recordFailure(throwable); command }
+
+    @JvmStatic fun executorHandoffReturned(prepared: Any?, result: Any?) {
+        try { hooks().executorHandoffReturned(prepared, result) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun executorHandoffThrew(prepared: Any?) {
+        try { hooks().executorHandoffThrew(prepared) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeExecutorConstructed(executor: Any?, siteId: Long, source: String, line: Int, origin: Int) {
+        try { hooks().observeExecutorConstructed(executor, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeExecutorFactoryReturned(executor: Any?, siteId: Long, source: String, line: Int, origin: Int) {
+        try { hooks().observeExecutorFactoryReturned(executor, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun beginExecutorShutdown(
+        executor: Any?, now: Boolean, siteId: Long, source: String, line: Int, origin: Int,
+    ): Long = try {
+        hooks().beginExecutorShutdown(executor, now, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic fun executorShutdownReturned(executor: Any?, token: Long) {
+        try { hooks().executorShutdownReturned(executor, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun executorShutdownThrew(executor: Any?, token: Long) {
+        try { hooks().executorShutdownThrew(executor, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeExecutorTerminated(executor: Any?, terminated: Boolean) {
+        try { hooks().observeExecutorTerminated(executor, terminated) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun beginFutureCancel(
+        future: Any?, mayInterrupt: Boolean, siteId: Long, source: String, line: Int, origin: Int,
+    ): Long = try {
+        hooks().beginFutureCancel(future, mayInterrupt, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic fun futureCancelReturned(future: Any?, token: Long, cancelled: Boolean) {
+        try { hooks().futureCancelReturned(future, token, cancelled) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun futureCancelThrew(future: Any?, token: Long) {
+        try { hooks().futureCancelThrew(future, token) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeCausalWorkSubmissionRequests(
+        requests: Any?, siteId: Long, source: String, line: Int, origin: Int,
+    ) {
+        try { hooks().observeCausalWorkSubmissionRequests(requests, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun observeWorkerImplementationSite(
+        worker: Any?, siteId: Long, source: String, line: Int, origin: Int,
+    ) {
+        try { hooks().observeWorkerImplementationSite(worker, siteId, source, line, origin) }
+        catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
+    @JvmStatic fun enterCallableCall(receiver: Any?, siteId: Long, source: String, line: Int, origin: Int): Long = try {
+        hooks().enterCallableCall(receiver, siteId, source, line, origin)
+    } catch (throwable: Throwable) { recordFailure(throwable); 0L }
+
+    @JvmStatic fun exitCallableCall(token: Long, outcome: Int) {
+        try { hooks().exitCallableCall(token, outcome) } catch (throwable: Throwable) { recordFailure(throwable) }
+    }
+
     @JvmStatic
     fun enterMethod(methodId: Long, methodName: String): Long {
         return try {
@@ -244,6 +593,15 @@ internal object JankHunterHooks {
     }
 
     @JvmStatic
+    fun workerFailure(token: Long, instanceId: Long, runAttempt: Int, throwable: Throwable) {
+        try {
+            hooks().workerFailure(token, instanceId, runAttempt, throwable)
+        } catch (hookFailure: Throwable) {
+            recordFailure(hookFailure)
+        }
+    }
+
+    @JvmStatic
     fun classifyWorkerOutcome(result: Any?): Int {
         return try {
             hooks().classifyWorkerOutcome(result)
@@ -279,6 +637,14 @@ internal object JankHunterHooks {
             recordFailure(throwable)
         }
     }
+
+    @JvmStatic
+    fun wrapRunnable(executor: Any?, runnable: Runnable?, ownerName: String?): Runnable? =
+        RuntimeHookGuard.value(runnable) { hooks().wrapExecutorRunnable(executor, runnable, ownerName) }
+
+    @JvmStatic
+    fun <T> wrapCallable(executor: Any?, callable: Callable<T>?, ownerName: String?): Callable<T>? =
+        RuntimeHookGuard.value(callable) { hooks().wrapExecutorCallable(executor, callable, ownerName) }
 
     @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
@@ -318,6 +684,38 @@ internal object JankHunterHooks {
             recordFailure(throwable)
             0L
         }
+    }
+
+    @JvmStatic
+    fun wrapCausalCoroutineBlock(block: Function2<*, *, *>?, siteId: Long, source: String, line: Int, origin: Int): Function2<*, *, *>? =
+        RuntimeHookGuard.value(block) { hooks().wrapCausalCoroutineBlock(block, siteId, source, line, origin) }
+
+    @JvmStatic
+    fun enterCausalCoroutineSegment(continuation: Any?, owner: String, siteId: Long, source: String, line: Int, origin: Int): Long =
+        RuntimeHookGuard.value(0L) { hooks().enterCausalCoroutineSegment(continuation, owner, siteId, source, line, origin) }
+
+    @JvmStatic
+    fun coroutineBuilderReturned(prepared: Function2<*, *, *>?, job: Any?) {
+        RuntimeHookGuard.run { hooks().coroutineBuilderReturned(prepared, job) }
+    }
+
+    @JvmStatic
+    fun coroutineBuilderThrew(prepared: Function2<*, *, *>?) {
+        RuntimeHookGuard.run { hooks().coroutineBuilderThrew(prepared) }
+    }
+
+    @JvmStatic
+    fun beginCoroutineJobCancel(job: Any?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        RuntimeHookGuard.value(0L) { hooks().beginCoroutineJobCancel(job, siteId, source, line, origin) }
+
+    @JvmStatic
+    fun coroutineJobCancelReturned(job: Any?, token: Long) {
+        RuntimeHookGuard.run { hooks().coroutineJobCancelReturned(job, token) }
+    }
+
+    @JvmStatic
+    fun coroutineJobCancelThrew(job: Any?, token: Long) {
+        RuntimeHookGuard.run { hooks().coroutineJobCancelThrew(job, token) }
     }
 
     @JvmStatic
@@ -368,6 +766,23 @@ internal object JankHunterHooks {
         } catch (throwable: Throwable) {
             recordFailure(throwable)
         }
+    }
+
+    @JvmStatic
+    fun beginHandlerPost(handler: Any?, callback: Runnable?, siteId: Long, source: String,
+                         line: Int, origin: Int, requestedDelayMillis: Long): Long =
+        RuntimeHookGuard.value(0L) {
+            hooks().beginHandlerPost(handler, callback, siteId, source, line, origin, requestedDelayMillis)
+        }
+
+    @JvmStatic
+    fun handlerPostReturned(handler: Any?, callback: Runnable?, token: Long, posted: Boolean) {
+        RuntimeHookGuard.run { hooks().handlerPostReturned(handler, callback, token, posted) }
+    }
+
+    @JvmStatic
+    fun handlerPostThrew(handler: Any?, callback: Runnable?, token: Long) {
+        RuntimeHookGuard.run { hooks().handlerPostThrew(handler, callback, token) }
     }
 
     @JvmStatic

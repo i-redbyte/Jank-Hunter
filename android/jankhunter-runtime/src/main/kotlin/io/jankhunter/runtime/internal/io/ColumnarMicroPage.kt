@@ -20,7 +20,7 @@ internal class ColumnarMicroPage {
     private val stableOwnerAliases = LongArray(Jhlog.MAX_MICRO_PAGE_ROWS)
     private val operationIds = LongArray(Jhlog.MAX_MICRO_PAGE_ROWS)
     private val payloadLengths = IntArray(Jhlog.MAX_MICRO_PAGE_ROWS)
-    private val semanticCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
+    private val semanticCounts = LongArray(Jhlog.TYPE_WORKER_PROGRESS + 1)
     private var payloadArena = ByteArray(INITIAL_PAYLOAD_BYTES)
     private var payloadBytes = 0
 
@@ -40,6 +40,8 @@ internal class ColumnarMicroPage {
 
     var size: Int = 0
         private set
+
+    fun supportsType(recordType: Int): Boolean = recordType in 1..(1 shl TYPE_BITS)
 
     fun canAppend(payloadSize: Int): Boolean {
         return size < Jhlog.MAX_MICRO_PAGE_ROWS &&
@@ -62,6 +64,7 @@ internal class ColumnarMicroPage {
         producer: ProducerMetadataBuffer?,
         semanticEventCount: Long,
     ) {
+        check(supportsType(recordType))
         check(canAppend(payload.size))
         val index = size++
         recordTypes[index] = recordType.toByte()

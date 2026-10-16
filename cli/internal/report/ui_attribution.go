@@ -385,11 +385,6 @@ func microsecondsToMillisecondsCeilReport(value uint64) uint64 {
 	return result
 }
 
-func semanticUICauses(work []analyze.SemanticWorkStats, screenName string, deadlineMS uint64) []uiCauseInsight {
-	causes, _ := semanticUICausesWithTotal(work, screenName, deadlineMS)
-	return causes
-}
-
 func semanticUICausesWithTotal(
 	work []analyze.SemanticWorkStats,
 	screenName string,
@@ -1103,11 +1098,6 @@ func runtimeCallNarrative(path []string) (title, explanation, action string) {
 	}
 }
 
-func networkCauses(summary analyze.Summary, screenName string) []uiCauseInsight {
-	causes, _ := networkCausesWithTotal(summary, screenName)
-	return causes
-}
-
 func networkCausesWithTotal(summary analyze.Summary, screenName string) ([]uiCauseInsight, int) {
 	selected := newBoundedCandidates[analyze.SignalContextStats](uiScreenCauseLimit)
 	for _, context := range summary.SignalContexts {
@@ -1150,11 +1140,6 @@ func networkCauseBetter(left, right analyze.SignalContextStats) bool {
 		return left.RouteSample < right.RouteSample
 	}
 	return left.Owner < right.Owner
-}
-
-func logSpamCauses(summary analyze.Summary, screenName string) []uiCauseInsight {
-	causes, _ := logSpamCausesWithTotal(summary, screenName)
-	return causes
 }
 
 func logSpamCausesWithTotal(summary analyze.Summary, screenName string) ([]uiCauseInsight, int) {

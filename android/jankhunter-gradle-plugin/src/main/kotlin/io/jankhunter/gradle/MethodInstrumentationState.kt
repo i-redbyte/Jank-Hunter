@@ -30,6 +30,9 @@ internal class MethodInstrumentationState {
     val methodTryEnd = Label()
     val methodExceptionHandler = Label()
     var currentLine: Int? = null
+    var causalRunTokenLocal: Int = -1
+    var causalCallableTokenLocal: Int = -1
+    var workerSiteReportedLocal: Int = -1
     var databaseInvocationOriginIndex = 0
     var constructorBodyEntered = false
 

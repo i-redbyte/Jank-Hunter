@@ -12,7 +12,7 @@ import org.junit.Test
 
 class RuntimeGraphAdmissionTest {
     @Test
-    fun zeroBudgetRotationRejectsEdgeAndUnwindsStack() = withBlockedConsumer(0L) { graph ->
+    fun rotationRejectsEdgeAndUnwindsStack() = withBlockedConsumer { graph ->
         val parent = graph.enter(1L, "parent", true)
         val child = graph.enter(2L, "child", true)
         producer(graph).registry.single().buffer.rotationRequested = true
@@ -27,9 +27,7 @@ class RuntimeGraphAdmissionTest {
     }
 
     @Test
-    fun interruptedSaturatedGraphPreservesInterruptAndAccountsLoss() = withBlockedConsumer(
-        TimeUnit.SECONDS.toNanos(5L),
-    ) { graph ->
+    fun interruptedSaturatedGraphPreservesInterruptAndAccountsLoss() = withBlockedConsumer { graph ->
         val capacity = RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY * RUNTIME_GRAPH_PAGE_MAX_KEYS
         repeat(capacity) { record(graph, it.toLong() + 2L) }
         Thread.currentThread().interrupt()
@@ -49,7 +47,7 @@ class RuntimeGraphAdmissionTest {
         graph.recordSemantic(1L, "caller", callee, "callee", 1L, true)
     }
 
-    private fun withBlockedConsumer(waitNanos: Long, block: (RuntimeCallGraph) -> Unit) {
+    private fun withBlockedConsumer(block: (RuntimeCallGraph) -> Unit) {
         val directory = Files.createTempDirectory("jankhunter-graph-admission").toFile()
         val release = CountDownLatch(1)
         val entered = CountDownLatch(1)
@@ -58,7 +56,6 @@ class RuntimeGraphAdmissionTest {
         )
         val graph = RuntimeCallGraph(
             { 1L }, { null }, { 0L }, { 4096 },
-            admissionWaitNanos = { waitNanos },
             consumerLoopObserver = {
                 entered.countDown()
                 check(release.await(5L, TimeUnit.SECONDS))

@@ -49,7 +49,7 @@ internal object JankHunterAutomaticDependencies {
 
     private fun Dependency.matchesJankHunterDependency(group: String, artifactId: String): Boolean {
         if (this is ProjectDependency) {
-            return name == artifactId || path == ":$artifactId"
+            return name == artifactId || compatibleProjectPath() == ":$artifactId"
         }
         return this.group == group && name == artifactId
     }

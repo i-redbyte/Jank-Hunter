@@ -2,9 +2,15 @@ package io.jankhunter.runtime.internal.system
 
 import android.os.Debug
 import io.jankhunter.runtime.JankHunterBinaryStorage
+import io.jankhunter.runtime.JankHunterStoragePolicy
 import io.jankhunter.runtime.RuntimeLongSource
 import io.jankhunter.runtime.RuntimeHookGuard
+import io.jankhunter.runtime.internal.io.SessionStorageBudget
+import io.jankhunter.runtime.internal.io.SessionArtifactReadLeases
+import io.jankhunter.runtime.internal.io.SessionArtifactPath
 import java.io.File
+import java.io.IOException
+import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -17,6 +23,9 @@ internal class RetainedHeapDumper(
     private val clock: RuntimeLongSource = RuntimeLongSource { android.os.SystemClock.elapsedRealtime() },
     private val wallClock: RuntimeLongSource = RuntimeLongSource { System.currentTimeMillis() },
     private val dumpHprof: (String) -> Unit = { path -> Debug.dumpHprofData(path) },
+    private val managedDirectoryProvider: (() -> File)? = null,
+    private val storagePolicy: JankHunterStoragePolicy? = null,
+    private val storageRoot: File = directory,
 ) {
     @Volatile
     private var binaryStorage = binaryStorage
@@ -26,6 +35,7 @@ internal class RetainedHeapDumper(
     private val dumpCount = AtomicInteger()
 
     fun maybeDump(className: String?, holder: String?, ageMs: Long, count: Long): Result {
+        if (storagePolicy?.allowsExtension("hprof") == false) return Result.Skipped("storage_extension")
         if (ageMs < minAgeMs) {
             return Result.Skipped("min_age")
         }
@@ -53,30 +63,43 @@ internal class RetainedHeapDumper(
         return try {
             val fileName = "retained-${wallClock.getAsLong()}-${safeName(className)}-${nextCount}.hprof"
             val storage = binaryStorage
-            val file = dumpToFile(fileName, storage)
-            if (!enforceRetention(storage, file)) {
+            val managedDirectory = if (storage == null) managedDirectoryProvider?.invoke() ?: directory else directory
+            val file = dumpToFile(fileName, storage, managedDirectory)
+            if (!enforceRetention(storage, file, managedDirectory)) {
                 deleteDump(storage, file)
                 throw RetentionCleanupException()
             }
             Result.Dumped(file, safeName(className), safeName(holder), ageMs, count)
         } catch (error: Throwable) {
             dumpCount.decrementAndGet()
-            lastDumpAtMs.compareAndSet(now, last)
+            // Avoid repeatedly pausing ART for a dump that the host storage budget cannot admit.
+            if (error !is HeapAdmissionException) lastDumpAtMs.compareAndSet(now, last)
             RuntimeHookGuard.rethrowFatal(error)
-            Result.Failed(error.javaClass.simpleName ?: "error")
+            if (error is HeapAdmissionException) Result.Skipped("storage_limit")
+            else Result.Failed(error.javaClass.simpleName ?: "error")
         }
     }
 
-    private fun dumpToFile(fileName: String, storage: JankHunterBinaryStorage?): File {
+    private fun dumpToFile(fileName: String, storage: JankHunterBinaryStorage?, managedDirectory: File): File {
         if (storage == null) {
-            directory.mkdirs()
-            val file = File(directory, fileName)
+            managedDirectory.mkdirs()
+            val file = File(managedDirectory, fileName)
+            val pending = File.createTempFile(".jh-heap-", ".pending", managedDirectory)
             return try {
-                dumpHprof(file.absolutePath)
+                dumpHprof(pending.absolutePath)
+                if (pending.length() <= 0L) throw IOException("Heap dump writer produced an empty file")
+                RandomAccessFile(pending, "rw").use { it.fd.sync() }
+                val policy = storagePolicy
+                if (policy != null) {
+                    if (!SessionStorageBudget.publishHeapDump(storageRoot, policy, pending, file)) {
+                        throw HeapAdmissionException()
+                    }
+                } else if (file.exists() || !pending.renameTo(file)) {
+                    throw IOException("Cannot publish completed Jank Hunter heap dump")
+                }
                 file
-            } catch (error: Throwable) {
-                file.delete()
-                throw error
+            } finally {
+                pending.delete()
             }
         }
 
@@ -95,10 +118,33 @@ internal class RetainedHeapDumper(
         }
     }
 
-    private fun enforceRetention(storage: JankHunterBinaryStorage?, newest: File): Boolean {
+    private fun enforceRetention(
+        storage: JankHunterBinaryStorage?,
+        newest: File,
+        managedDirectory: File,
+    ): Boolean {
+        val session = managedDirectory.parentFile
+        val root = session?.parentFile?.takeIf {
+            SessionArtifactPath.isCanonicalId(managedDirectory.name) &&
+                SessionArtifactPath.parseSessionDirectoryName(session.name) != null
+        }
+        return if (storage == null && storagePolicy == null && root != null) {
+            SessionArtifactReadLeases.mutate(root, blocked = true) {
+                enforceRetentionUnlocked(storage, newest, managedDirectory)
+            }
+        } else {
+            enforceRetentionUnlocked(storage, newest, managedDirectory)
+        }
+    }
+
+    private fun enforceRetentionUnlocked(
+        storage: JankHunterBinaryStorage?,
+        newest: File,
+        managedDirectory: File,
+    ): Boolean {
         val paths = try {
             if (storage == null) {
-                directory.listFiles { file -> file.isFile }.orEmpty().map(File::getAbsolutePath)
+                managedDirectory.listFiles { file -> file.isFile }.orEmpty().map(File::getAbsolutePath)
             } else {
                 storage.listFiles()
             }
@@ -124,7 +170,8 @@ internal class RetainedHeapDumper(
     private fun deleteDump(storage: JankHunterBinaryStorage?, file: File): Boolean {
         return try {
             if (storage == null) {
-                !file.exists() || file.delete()
+                if (storagePolicy != null) SessionStorageBudget.deleteHeapDump(storageRoot, file)
+                else !file.exists() || file.delete()
             } else {
                 storage.delete(file.name)
                 storage.listFiles().none { path -> File(path).name == file.name }
@@ -177,6 +224,8 @@ internal class RetainedHeapDumper(
             return out.toString().take(96).ifEmpty { "unknown" }
         }
 
+        internal fun isManagedHeapDumpFileName(fileName: String): Boolean = managedHeapDump(fileName) != null
+
         private fun managedHeapDump(path: String): ManagedHeapDump? {
             val name = File(path).name
             if (!name.startsWith(MANAGED_DUMP_PREFIX) || !name.endsWith(MANAGED_DUMP_SUFFIX)) return null
@@ -217,4 +266,5 @@ internal class RetainedHeapDumper(
     )
 
     private class RetentionCleanupException : IllegalStateException("managed HPROF retention cleanup failed")
+    private class HeapAdmissionException : IOException("Host storage policy rejected the completed heap dump")
 }

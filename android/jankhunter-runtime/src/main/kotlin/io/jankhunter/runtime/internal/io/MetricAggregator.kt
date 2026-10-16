@@ -1,6 +1,10 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.RuntimeHookFailureTracker
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
@@ -12,7 +16,8 @@ import kotlin.math.min
  * explicit loss counter; BEST_EFFORT may evict a cold key to keep newer evidence.
  *
  * Existing keys are updated without a global exclusive monitor. A shared lifecycle read lock keeps
- * flush lossless, while the admission lock is only taken for a new key or an LRU eviction. Flush
+ * accepted updates consistent with flush. Producers reject immediately on contention and expose
+ * the rejected sample count. The admission lock is only attempted for new keys or LRU eviction. Flush
  * swaps the complete active batch under the lifecycle write lock and emits it after producers have
  * resumed on the next batch.
  */
@@ -20,6 +25,7 @@ internal class MetricAggregator(
     maxKeys: Int,
     private val exactAdmission: Boolean = false,
 ) {
+    private val rejected = AtomicLong()
     private val capacity = maxKeys.coerceIn(0, MAX_KEYS_HARD_LIMIT)
     private val lruEvictionEnabled = !exactAdmission && capacity in 1..LRU_EVICTION_MAX_KEYS
     private val initialMapCapacity = min(capacity, DEFAULT_INITIAL_MAP_CAPACITY)
@@ -35,7 +41,10 @@ internal class MetricAggregator(
         if (value == 0L) return
 
         val producerLock = producerLock()
-        producerLock.lock()
+        if (producerLock == null || !producerLock.tryLock()) {
+            reject()
+            return
+        }
         try {
             val batch = active
             if (value < 0L) {
@@ -48,11 +57,15 @@ internal class MetricAggregator(
                 saturatedAddAndGet(batch.dropped, 1L)
                 return
             }
-            while (true) {
+            repeat(2) {
                 val existing = batch.counters[normalizedName]
                 if (existing != null && existing.add(value)) return
 
-                synchronized(batch.admissionLock) {
+                if (!batch.admissionLock.tryLock()) {
+                    reject()
+                    return
+                }
+                try {
                     val raced = batch.counters[normalizedName]
                     if (raced != null) {
                         if (raced.add(value)) return
@@ -66,8 +79,9 @@ internal class MetricAggregator(
                         batch.counters[normalizedName] = created
                         return
                     }
-                }
+                } finally { batch.admissionLock.unlock() }
             }
+            reject()
         } finally {
             producerLock.unlock()
         }
@@ -83,7 +97,10 @@ internal class MetricAggregator(
 
     private fun gaugeInternal(name: String?, value: Long, requestedMode: MetricAggregationMode?) {
         val producerLock = producerLock()
-        producerLock.lock()
+        if (producerLock == null || !producerLock.tryLock()) {
+            reject()
+            return
+        }
         try {
             val batch = active
             if (value < 0L) {
@@ -96,11 +113,15 @@ internal class MetricAggregator(
                 saturatedAddAndGet(batch.dropped, 1L)
                 return
             }
-            while (true) {
+            repeat(2) {
                 val existing = batch.gauges[normalizedName]
                 if (existing != null && existing.add(value, requestedMode)) return
 
-                synchronized(batch.admissionLock) {
+                if (!batch.admissionLock.tryLock()) {
+                    reject()
+                    return
+                }
+                try {
                     val raced = batch.gauges[normalizedName]
                     if (raced != null) {
                         if (raced.add(value, requestedMode)) return
@@ -115,8 +136,9 @@ internal class MetricAggregator(
                         batch.gauges[normalizedName] = created
                         return
                     }
-                }
+                } finally { batch.admissionLock.unlock() }
             }
+            reject()
         } finally {
             producerLock.unlock()
         }
@@ -131,12 +153,18 @@ internal class MetricAggregator(
         for ((name, value) in drained.gauges) {
             emitGauge(sink, name, value.snapshot())
         }
-        drained.dropped.get().takeIf { it > 0L }?.let {
+        val losses = saturatedAdd(drained.dropped.get(), rejected.getAndSet(0L))
+        losses.takeIf { it > 0L }?.let {
             sink.counter(DROPPED_METRIC_NAME, it)
         }
         drained.invalidNegative.get().takeIf { it > 0L }?.let {
             sink.counter(INVALID_METRIC_NAME, it)
         }
+    }
+
+    private fun reject() {
+        rejected.incrementAndGet()
+        RuntimeHookFailureTracker.record(RuntimeHookFailureReason.REGISTRY_CONTENTION)
     }
 
     private fun swapActiveBatch(): Batch {
@@ -152,10 +180,14 @@ internal class MetricAggregator(
         }
     }
 
-    private fun producerLock(): ReentrantReadWriteLock.ReadLock {
+    private fun producerLock(): ReentrantReadWriteLock.ReadLock? {
         val identity = System.identityHashCode(Thread.currentThread())
         val mixed = identity xor (identity ushr PRODUCER_HASH_SHIFT)
-        return producerLocks[mixed and producerStripeMask]
+        val stripe = mixed and producerStripeMask
+        // tryLock may barge past a queued writer even on a fair read/write lock.
+        // Yield admission so a maintenance flush can acquire every stripe.
+        if (lifecycleLocks[stripe].hasQueuedThreads()) return null
+        return producerLocks[stripe]
     }
 
     private fun emitGauge(sink: Sink, name: String, gauge: GaugeSnapshot) {
@@ -242,7 +274,7 @@ internal class MetricAggregator(
         val gauges = ConcurrentHashMap<String, GaugeValue>(initialMapCapacity.coerceIn(1, INITIAL_GAUGE_CAPACITY))
         val dropped = AtomicLong()
         val invalidNegative = AtomicLong()
-        val admissionLock = Any()
+        val admissionLock = ReentrantLock()
         private var reusableEvictionScratch: EvictionScratch? = null
 
         fun size(): Int = counters.size + gauges.size
@@ -349,10 +381,15 @@ internal class MetricAggregator(
                 block()
                 return true
             }
-            while (true) {
+            var admitted = false
+            var attempts = 32
+            while (attempts-- > 0) {
                 val writers = lifecycle.get()
                 if (writers == RETIRED) return false
-                if (lifecycle.compareAndSet(writers, writers + 1)) break
+                if (lifecycle.compareAndSet(writers, writers + 1)) { admitted = true; break }
+            }
+            if (!admitted) {
+                return false
             }
             return try {
                 block()
@@ -395,34 +432,36 @@ internal class MetricAggregator(
         retirementEnabled: Boolean,
         initialMode: MetricAggregationMode,
     ) : MetricValue(retirementEnabled) {
-        private val sampleLock = Any()
-        private var count = 0L
+        private val sampleLock = ReentrantLock()
+        @Volatile private var count = 0L
         private var total = 0L
         private var totalHigh = 0L
         private var max = 0L
         private var last = 0L
         private var mode = initialMode
 
-        fun add(value: Long, requestedMode: MetricAggregationMode?): Boolean = update {
-            // One publication point keeps count, both sum words and last/mode coherent.
-            // This replaces the prior three atomic additions plus the last-value monitor.
-            synchronized(sampleLock) {
-                if (count < Long.MAX_VALUE) count++
-                val previous = total
-                total += value
-                // Samples are nonnegative signed longs: an unsigned carry crosses negative to positive.
-                if (previous < 0L && total >= 0L) totalHigh++
-                if (value > max) max = value
-                last = value
-                if (requestedMode != null) mode = requestedMode
+        fun add(value: Long, requestedMode: MetricAggregationMode?): Boolean {
+            if (!sampleLock.tryLock()) {
+                return false
             }
+            try {
+                return update {
+                    if (count < Long.MAX_VALUE) count++
+                    val previous = total
+                    total += value
+                    if (previous < 0L && total >= 0L) totalHigh++
+                    if (value > max) max = value
+                    last = value
+                    if (requestedMode != null) mode = requestedMode
+                }
+            } finally { sampleLock.unlock() }
         }
 
-        fun snapshot(): GaugeSnapshot = synchronized(sampleLock) {
+        fun snapshot(): GaugeSnapshot = sampleLock.withLock {
             GaugeSnapshot(count, total, totalHigh, max, last, mode)
         }
 
-        override fun sampleCount(): Long = synchronized(sampleLock) { count }
+        override fun sampleCount(): Long = count
     }
 
     private data class GaugeSnapshot(
@@ -457,12 +496,17 @@ internal class MetricAggregator(
             return normalized.takeIf { it.length <= MAX_METRIC_NAME_CHARS }
         }
 
+        private fun saturatedAdd(left: Long, right: Long): Long =
+            if (Long.MAX_VALUE - left < right) Long.MAX_VALUE else left + right
+
         private fun saturatedAddAndGet(target: AtomicLong, delta: Long): Long {
-            while (true) {
+            repeat(32) {
                 val current = target.get()
                 val updated = if (Long.MAX_VALUE - current < delta) Long.MAX_VALUE else current + delta
                 if (target.compareAndSet(current, updated)) return updated
             }
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COUNTER_CONTENTION)
+            return target.get()
         }
 
     }

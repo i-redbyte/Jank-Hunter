@@ -39,6 +39,9 @@ internal data class InstrumentationDiagnosticsRecord(
     val hooks: Map<HookDiagnosticKey, Int>,
     val decisions: Map<DecisionDiagnosticKey, Int>,
     val annotations: Map<AnnotationDiagnosticKey, Int>,
+    val metadataStatus: KotlinMetadataAnalysisStatus = KotlinMetadataAnalysisStatus.ABSENT,
+    val metadataVersion: String = "",
+    val metadataReader: String = "",
 )
 
 internal class InstrumentationDiagnosticsClassBuilder(
@@ -54,10 +57,30 @@ internal class InstrumentationDiagnosticsClassBuilder(
     private val hooks = linkedMapOf<HookDiagnosticKey, Int>()
     private val decisions = linkedMapOf<DecisionDiagnosticKey, Int>()
     private val annotations = linkedMapOf<AnnotationDiagnosticKey, Int>()
+    private var metadataStatus = KotlinMetadataAnalysisStatus.ABSENT
+    private var metadataVersion = ""
+    private var metadataReader = ""
+
+    fun recordKotlinMetadata(index: KotlinGeneratedMethodIndex) {
+        metadataStatus = index.analysisStatus
+        metadataVersion = index.metadataVersion
+        metadataReader = index.readerId.orEmpty()
+        recordKotlinMetadata(index.analysisStatus)
+    }
 
     fun recordSkippedMethod(reason: String) {
         methods += 1
         skippedMethods[reason] = (skippedMethods[reason] ?: 0) + 1
+    }
+
+    fun recordKotlinMetadata(status: KotlinMetadataAnalysisStatus) {
+        if (status == KotlinMetadataAnalysisStatus.READABLE || status == KotlinMetadataAnalysisStatus.ABSENT) return
+        val key = DecisionDiagnosticKey(
+            kind = "warning", module = "kotlin_metadata", family = "metadata",
+            reason = "kotlin_metadata_${status.name.lowercase()}", method = className, line = null,
+            detail = "Bytecode fallback; generated-method classification is incomplete; annotation preserved",
+        )
+        decisions[key] = (decisions[key] ?: 0) + 1
     }
 
     fun recordMethod(ignored: Boolean, annotation: AnnotationDiagnosticKey?) {
@@ -164,6 +187,23 @@ internal class InstrumentationDiagnosticsClassBuilder(
         }
     }
 
+    /** Publish only hooks that survived the bytecode size guard. */
+    fun mergeMethod(record: InstrumentationDiagnosticsRecord) {
+        methods += record.methods
+        ignoredMethods += record.ignoredMethods
+        methodFilterIncluded += record.methodFilterIncluded
+        methodFilterExcluded += record.methodFilterExcluded
+        mergeCounts(methodFilterReasons, record.methodFilterReasons)
+        mergeCounts(skippedMethods, record.skippedMethods)
+        mergeCounts(hooks, record.hooks)
+        mergeCounts(decisions, record.decisions)
+        mergeCounts(annotations, record.annotations)
+    }
+
+    private fun <K> mergeCounts(target: MutableMap<K, Int>, source: Map<K, Int>) {
+        source.forEach { (key, count) -> target[key] = (target[key] ?: 0) + count }
+    }
+
     fun finish(): InstrumentationDiagnosticsRecord {
         return InstrumentationDiagnosticsRecord(
             pass = pass,
@@ -178,6 +218,9 @@ internal class InstrumentationDiagnosticsClassBuilder(
             hooks = hooks.toMap(),
             decisions = decisions.toMap(),
             annotations = annotations.toMap(),
+            metadataStatus = metadataStatus,
+            metadataVersion = metadataVersion,
+            metadataReader = metadataReader,
         )
     }
 }
@@ -188,7 +231,7 @@ internal object InstrumentationDiagnosticsWriter {
         InstrumentationArtifactFiles.writeClassShard(directoryPath, record.className, toJsonLine(record))
     }
 
-    private fun toJsonLine(record: InstrumentationDiagnosticsRecord): String {
+    internal fun toJsonLine(record: InstrumentationDiagnosticsRecord): String {
         return buildString {
             append("{\"format\":")
             append(ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT)
@@ -197,6 +240,12 @@ internal object InstrumentationDiagnosticsWriter {
             append('"')
             append(",\"class\":\"")
             append(escapeJsonString(record.className))
+            append("\",\"metadataStatus\":\"")
+            append(record.metadataStatus.name)
+            append("\",\"metadataVersion\":\"")
+            append(escapeJsonString(record.metadataVersion))
+            append("\",\"metadataReader\":\"")
+            append(escapeJsonString(record.metadataReader))
             append("\",\"methods\":")
             append(record.methods)
             append(",\"ignoredMethods\":")

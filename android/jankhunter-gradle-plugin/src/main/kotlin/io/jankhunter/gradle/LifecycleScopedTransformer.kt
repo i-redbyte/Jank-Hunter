@@ -12,6 +12,8 @@ internal class LifecycleScopedTransformer(
     private val selected: Set<String>,
     private val diagnosticsDirectory: String,
     private val canAddAncestorAccessor: (LifecycleClassHeader) -> Boolean = { false },
+    private val metadataCompatibilityMode: JankHunterMetadataCompatibilityMode = JankHunterMetadataCompatibilityMode.COMPATIBILITY,
+    private val sdkHookAbi: HookAbiIndex? = null,
     private val diagnostic: (String) -> Unit,
 ) {
     private val plans = index.newWorkMap<Int>()
@@ -103,7 +105,7 @@ internal class LifecycleScopedTransformer(
             node.accept(JankHunterClassVisitor(
                 next = writer,
                 className = node.name.replace('/', '.'),
-                config = lifecycleHookConfig(diagnosticsDirectory),
+                config = lifecycleHookConfig(diagnosticsDirectory).copy(metadataCompatibilityMode = metadataCompatibilityMode),
                 classHierarchy = index.superclasses(node.name).toSet(),
                 instrumentationMarkerDescriptor = LifecycleInstrumentationMarker.DESCRIPTOR,
                 markerOnlyWhenHookApplied = true,
@@ -137,16 +139,26 @@ internal class LifecycleScopedTransformer(
                 fragmentViewOwner = root,
             ).emit()
             result.visitAnnotation(ACCESSOR_MARKER, false).visitEnd()
-            if (fragment) diagnoseCustomDelegates(node)
+            if (fragment) {
+                if (result.attrs == null) result.attrs = ArrayList()
+                result.attrs.add(diagnoseCustomDelegates(node))
+            }
         }
-        return ClassWriter(0).also { result.accept(it) }.toByteArray()
+        return ClassWriter(0).also { result.accept(sdkHookAbi?.visitor(it) ?: it) }.toByteArray()
     }
 
-    private fun diagnoseCustomDelegates(node: ClassNode) {
+    private fun diagnoseCustomDelegates(node: ClassNode): InstrumentationEvidenceAttribute {
         var metadata = KotlinGeneratedMethodIndex.EMPTY
         (node.visibleAnnotations.orEmpty() + node.invisibleAnnotations.orEmpty())
             .firstOrNull { it.desc == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR }
-            ?.accept(KotlinGeneratedMethodIndex.collectingVisitor(null) { metadata = it })
+            ?.accept(KotlinGeneratedMethodIndex.collectingVisitor(
+                null, metadataCompatibilityMode, node.name, MetadataDecodePathway.LIFECYCLE,
+            ) { metadata = it })
+        val record = InstrumentationDiagnosticsClassBuilder(node.name.replace('/', '.'), "lifecycle_metadata")
+        record.recordKotlinMetadata(metadata)
+        val finished = record.finish()
+        if (diagnosticsDirectory.isNotBlank()) InstrumentationDiagnosticsWriter.write(
+            java.io.File(diagnosticsDirectory, "metadata").path, finished)
         val properties = metadata.delegatedProperties.filterValues { it != "Lkotlin/Lazy;" }.keys.toMutableSet()
         node.fields.filter {
             it.access and Opcodes.ACC_STATIC == 0 && it.name.endsWith("\$delegate") && it.desc != "Lkotlin/Lazy;"
@@ -154,6 +166,7 @@ internal class LifecycleScopedTransformer(
         properties.sorted().forEach {
             diagnostic("${node.name}.$it: custom delegate is not invoked; implement JankHunterBindingAccessor to expose existing bindings")
         }
+        return InstrumentationEvidenceAttribute("lifecycle_metadata", InstrumentationDiagnosticsWriter.toJsonLine(finished))
     }
 
     private fun validateAccessorHeader(header: LifecycleClassHeader) {

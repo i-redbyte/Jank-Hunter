@@ -46,9 +46,8 @@ internal class LifecycleFrameTypes(private val index: LifecycleClassIndex) {
         return false
     }
 
-    private fun header(name: String): LifecycleClassHeader = checkNotNull(index.header(name)) {
-        "Missing class metadata while computing lifecycle frames: $name"
-    }
+    private fun header(name: String): LifecycleClassHeader =
+        index.header(name) ?: throw MissingFrameTypeException(name)
 
     private fun referenceComponent(array: String): String? = when (array.getOrNull(1)) {
         '[' -> array.substring(1)
@@ -60,3 +59,7 @@ internal class LifecycleFrameTypes(private val index: LifecycleClassIndex) {
         private const val OBJECT = "java/lang/Object"
     }
 }
+
+internal class MissingFrameTypeException(val internalName: String) : IllegalStateException(
+    "Missing class metadata while computing instrumentation frames: $internalName",
+)

@@ -8,6 +8,11 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
+type embeddedSymbolKey struct {
+	ID     uint64
+	Origin jhlog.SymbolOrigin
+}
+
 type memoryLeakStats struct {
 	className            string
 	holder               string
@@ -138,6 +143,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		return
 	}
 	c.applyAttribution(dict, event.Attribution)
+	c.recordThreadAnnotation(dict, event)
 	c.summary.EventCount++
 	if !c.seenEvent {
 		c.seenEvent = true
@@ -166,10 +172,15 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	if event.Operation != nil {
 		c.operationAnalysis.recordLifecycle(dict, event, c.currentAttrScreen, c.filter)
 	} else if event.Database == nil && event.DatabaseTransaction == nil && event.Stall == nil {
-		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner)
+		metricName := ""
+		if event.Metric != nil {
+			metricName = attrValue(jhlog.ResolveSymbol(dict, event.Metric.MetricRef))
+		}
+		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner, metricName)
 	}
 	switch {
 	case event.Session != nil:
+		c.causalAnalysis.session(event.Session.CollectorFlags)
 		c.summary.CollectorSessions++
 		c.summary.CollectorFlagsAny |= event.Session.CollectorFlags
 		if event.Session.CollectorFlags&uint64(jhlog.CollectorDatabase) != 0 {
@@ -178,6 +189,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Session.CollectorFlags&uint64(jhlog.CollectorWorker) != 0 {
 			c.enableWorkerCorrelation()
 		}
+		c.threadAnalysis.resourceOn = event.Session.CollectorFlags&uint64(jhlog.CollectorThread) != 0
 		if c.summary.CollectorSessions == 1 {
 			c.summary.CollectorFlagsAll = event.Session.CollectorFlags
 		} else {
@@ -224,6 +236,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if c.workerCorrelationOn {
 			c.recordWorkerHTTP(event)
 		}
+		httpOutcome := "completed"
+		if httpEventFailed(event.HTTP, event.Flags) {
+			httpOutcome = "failed"
+		}
+		c.recordThreadResource(event, "http", initiator, route, httpOutcome, event.HTTP.DurationMS)
 		c.networkTotals.add(event.HTTP, event.Flags, c.currentLogIndex, event.TimeMS, true)
 		routeStats := c.networkRoutes[route]
 		if routeStats == nil {
@@ -307,6 +324,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			return
 		}
 		c.markCohort()
+		dbOutcome := "unknown"
+		if event.Database.Outcome == jhlog.DatabaseOutcomeSuccess {
+			dbOutcome = "completed"
+		}
+		if event.Database.Outcome == jhlog.DatabaseOutcomeFailure {
+			dbOutcome = "failed"
+		}
+		c.recordThreadResource(event, "database", source, "", dbOutcome, ceilMicrosToMillis(event.Database.DurationUS))
 		c.databaseTotals.add(event.Database, event.Flags, c.currentLogIndex, event.TimeMS)
 		c.databaseTelemetry.add(event.Database)
 		framework := databaseFrameworkName(event.Database.Framework)
@@ -455,10 +480,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.summary.NetworkMetered = event.Context.NetworkMetered
 		c.summary.NetworkValidated = event.Context.NetworkValidated
 		c.summary.NetworkVPN = event.Context.NetworkVPN
-		if c.summary.BatteryMinPct == 0 || event.Context.BatteryPct < c.summary.BatteryMinPct {
+		if c.summary.ContextCount == 1 || event.Context.BatteryPct < c.summary.BatteryMinPct {
 			c.summary.BatteryMinPct = event.Context.BatteryPct
 		}
-		if c.summary.AvailMemoryMinKB == 0 || event.Context.AvailMemoryKB < c.summary.AvailMemoryMinKB {
+		if c.summary.ContextCount == 1 || event.Context.AvailMemoryKB < c.summary.AvailMemoryMinKB {
 			c.summary.AvailMemoryMinKB = event.Context.AvailMemoryKB
 		}
 		if event.Context.LowMemory {
@@ -476,7 +501,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			logIndex: c.currentLogIndex, timeMS: event.TimeMS, value: event.Memory.PSSKB, count: 1,
 		}
 		if c.workerCorrelationOn {
-			c.workerMemory = append(c.workerMemory, point)
+			c.recordWorkerMemory(point)
 		} else {
 			c.workerPriorMemory = point
 			c.workerPriorMemorySet = true
@@ -518,6 +543,15 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if c.workerCorrelationOn {
 			c.recordWorkerIO(event)
 		}
+		ioOutcome := "unknown"
+		if event.IO.Outcome == jhlog.IOOutcomeSuccess {
+			ioOutcome = "completed"
+		}
+		if event.IO.Outcome == jhlog.IOOutcomeFailure {
+			ioOutcome = "failed"
+		}
+		c.recordThreadResource(event, ioOperationName(event.IO.Operation), source, "", ioOutcome,
+			ceilMicrosToMillis(event.IO.DurationUS))
 		operation := ioOperationName(event.IO.Operation)
 		mainThread := event.Flags&uint64(jhlog.FlagThreadMain) != 0
 		key := ioStatsKey{
@@ -617,10 +651,37 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.markCohort()
 		kind := jhlog.ResolveSymbol(dict, event.Problem.KindRef)
 		c.addProblemWindow(context, kind, event.Problem.WindowMS, event.Problem.Count, event.Problem.MaxMS)
+	case event.DiagnosticEvent != nil && event.CausalEvent != nil:
+		c.causalAnalysis.record(event.CausalEvent)
+	case event.DiagnosticEvent != nil && event.ThreadLifecycle != nil:
+		c.recordThreadLifecycle(event)
+	case event.DiagnosticEvent != nil && event.CoroutineSegment != nil:
+		c.recordCoroutineSegment(event)
+	case event.DiagnosticEvent != nil && event.WorkerIdentity != nil:
+		c.recordWorkerIdentity(event)
+	case event.DiagnosticEvent != nil && event.WorkSubmission != nil:
+		c.recordWorkSubmission(event)
+	case event.DiagnosticEvent != nil && event.WorkChainEdge != nil:
+		c.recordWorkChainEdge(event)
+	case event.DiagnosticEvent != nil && event.WorkChainRoot != nil:
+		c.recordWorkChainRoot(event)
+	case event.DiagnosticEvent != nil && event.WorkRegistry != nil:
+		c.recordWorkRegistry(event)
+	case event.DiagnosticEvent != nil && event.WorkerCatalog != nil:
+		c.recordWorkerCatalog(event)
+	case event.DiagnosticEvent != nil && event.WorkerFailure != nil:
+		c.recordWorkerFailure(event)
+	case event.DiagnosticEvent != nil && event.WorkerProgress != nil:
+		c.recordWorkerProgress(event)
+	case event.DiagnosticEvent != nil && event.ThreadSnapshot != nil:
+		c.recordThreadSnapshot(event)
 	case event.Worker != nil:
 		c.recordWorker(dict, event)
 	case event.RuntimeCall != nil:
 		caller := c.currentAttrOwner
+		if _, _, _, _, semantic := parseSemanticRuntimeCaller(caller); semantic {
+			c.semanticRuntimeCalls = saturatingUint64Sum(c.semanticRuntimeCalls, event.RuntimeCall.Count)
+		}
 		callee := c.resolveOwnerRef(dict, event.RuntimeCall.CalleeRef)
 		key := c.contextKey("", "")
 		context := key.stats()
@@ -942,9 +1003,8 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func counterDelta(first, last uint64) uint64 {
-	if last >= first {
-		return last - first
-	}
-	return last
+func (c *collector) resetAttribution() {
+	c.currentAttrScreen = "unknown"
+	c.currentAttrOwner = "unknown"
+	c.currentOperationID = 0
 }

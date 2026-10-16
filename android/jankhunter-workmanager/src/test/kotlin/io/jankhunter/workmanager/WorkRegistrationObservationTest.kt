@@ -19,6 +19,77 @@ import org.junit.Test
 
 class WorkRegistrationObservationTest {
     @Test
+    fun stopCancelsOnlyDiagnosticQueryAndReleasesPendingObservation() {
+        val request = request()
+        val operation = CompletableFuture.completedFuture(Unit)
+        val query = ObservationFuture()
+        var accepted = 0
+        val listener = WorkEnqueueListener(operation, WorkEnqueueBatch.capture(request),
+            WorkerEnqueueSink { _, _ -> accepted++ }, WorkRegistrationLookup { query })
+        listener.run()
+        listener.cancelObservation()
+        assertEquals(true, query.isCancelled)
+        assertFalse(operation.isCancelled)
+        listener.run()
+        assertEquals(0, accepted)
+        assertReleased(listener)
+    }
+
+    @Test
+    fun stopDuringQueryDispatchDoesNotWaitOrPublishTheLateResult() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val proceed = java.util.concurrent.CountDownLatch(1)
+        val query = ObservationFuture()
+        val request = request()
+        var accepted = 0
+        val listener = WorkEnqueueListener(CompletableFuture.completedFuture(Unit), WorkEnqueueBatch.capture(request),
+            WorkerEnqueueSink { _, _ -> accepted++ }, WorkRegistrationLookup {
+                entered.countDown()
+                check(proceed.await(2, TimeUnit.SECONDS))
+                query
+            })
+        val worker = Thread(listener)
+        worker.start()
+        try {
+            org.junit.Assert.assertTrue(entered.await(2, TimeUnit.SECONDS))
+            listener.cancelObservation()
+        } finally {
+            proceed.countDown()
+            worker.join(3000)
+        }
+        assertFalse(worker.isAlive)
+        query.complete(registered(request.id))
+        assertEquals(0, accepted)
+        assertEquals(true, query.isCancelled)
+        assertReleased(listener)
+    }
+
+    @Test
+    fun stopBeforeOperationCompletesNeverStartsARegistrationQuery() {
+        val operation = CompletableFuture<Unit>()
+        var queries = 0
+        val listener = WorkEnqueueListener(operation, WorkEnqueueBatch.capture(request()),
+            WorkerEnqueueSink { _, _ -> error("late callback") },
+            WorkRegistrationLookup { queries++; ObservationFuture() })
+        listener.cancelObservation()
+        operation.complete(Unit)
+        listener.run()
+        assertEquals(0, queries)
+        assertFalse(operation.isCancelled)
+        assertReleased(listener)
+    }
+
+    private fun assertReleased(listener: WorkEnqueueListener) {
+        for (field in WorkEnqueueListener::class.java.declaredFields) {
+            if (!Modifier.isStatic(field.modifiers) && !field.type.isPrimitive &&
+                field.name !in setOf("work", "cancelled")) {
+                field.isAccessible = true
+                assertNull("completed listener retained ${field.name}", field.get(listener))
+            }
+        }
+    }
+
+    @Test
     fun successfulOperationDoesNotPublishAbsentUUID() {
         val request = request()
         var accepted = 0
@@ -58,17 +129,19 @@ class WorkRegistrationObservationTest {
     }
 
     @Test
-    fun longBatchOfAlreadyCompletedQueriesUsesBoundedCallStack() {
+    fun largeBatchRespectsCaptureBudgetAndUsesBoundedCallStack() {
         val requests = List(10_000) { request() }
         var accepted = 0
         var queries = 0
+        val batch = WorkEnqueueBatch.capture(requests)
         WorkEnqueueListener(
-            CompletableFuture.completedFuture(Unit), WorkEnqueueBatch.capture(requests),
+            CompletableFuture.completedFuture(Unit), batch,
             WorkerEnqueueSink { _, _ -> accepted++ },
             WorkRegistrationLookup { id -> queries++; ObservationFuture().apply { complete(registered(id)) } },
         ).run()
-        assertEquals(requests.size, queries)
-        assertEquals(requests.size, accepted)
+        assertEquals(WorkEnqueueBatch.CAPTURE_LIMIT, queries)
+        assertEquals(WorkEnqueueBatch.CAPTURE_LIMIT, accepted)
+        assertEquals(requests.size - WorkEnqueueBatch.CAPTURE_LIMIT, batch.omittedRequests)
     }
 
     @Test
@@ -111,12 +184,7 @@ class WorkRegistrationObservationTest {
         listener.run()
         assertEquals(5, index)
         assertEquals(listOf(WorkerTelemetry.instanceId(requests.last().id)), observed)
-        for (field in WorkEnqueueListener::class.java.declaredFields) {
-            if (!Modifier.isStatic(field.modifiers) && !field.type.isPrimitive && field.name != "work") {
-                field.isAccessible = true
-                assertNull("completed listener retained ${field.name}", field.get(listener))
-            }
-        }
+        assertReleased(listener)
     }
 
     @Test

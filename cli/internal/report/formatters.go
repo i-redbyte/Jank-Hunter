@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,12 +98,44 @@ func formatDurationNs(ns uint64) string {
 func humanDataSizeKB(kb uint64) string {
 	switch {
 	case kb >= 1024*1024:
-		return fmt.Sprintf("%.1f ГБ", float64(kb)/1024/1024)
+		return scaledDataSize(kb, 1024*1024, " ГБ")
 	case kb >= 1024:
-		return fmt.Sprintf("%.1f МБ", float64(kb)/1024)
+		return scaledDataSize(kb, 1024, " МБ")
 	default:
-		return fmt.Sprintf("%d КБ", kb)
+		return wholeDataSize(kb, " КБ")
 	}
+}
+
+func humanDataSizeBytes(bytes uint64) string {
+	const (
+		kib = uint64(1024)
+		mib = 1024 * kib
+		gib = 1024 * mib
+	)
+	switch {
+	case bytes >= gib:
+		return scaledDataSize(bytes, gib, " ГБ")
+	case bytes >= mib:
+		return scaledDataSize(bytes, mib, " МБ")
+	case bytes >= kib:
+		return scaledDataSize(bytes, kib, " КБ")
+	default:
+		return wholeDataSize(bytes, " Б")
+	}
+}
+
+func scaledDataSize(value, divisor uint64, suffix string) string {
+	var buffer [32]byte
+	formatted := strconv.AppendFloat(buffer[:0], float64(value)/float64(divisor), 'f', 1, 64)
+	formatted = append(formatted, suffix...)
+	return string(formatted)
+}
+
+func wholeDataSize(value uint64, suffix string) string {
+	var buffer [32]byte
+	formatted := strconv.AppendUint(buffer[:0], value, 10)
+	formatted = append(formatted, suffix...)
+	return string(formatted)
 }
 
 func tooltipHTML(label, body string) template.HTML {

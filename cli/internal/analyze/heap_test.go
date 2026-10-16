@@ -137,8 +137,11 @@ func TestHprofClassHierarchyCachesOnlyBoundedLayoutSize(t *testing.T) {
 		fields:  []hprofField{{name: "child", typ: hprofTypeInt}},
 	}
 
-	if !parser.classHierarchyResolved(2) || !parser.classHierarchyResolved(2) {
+	if !parser.classHierarchyResolved(2) {
 		t.Fatal("complete class hierarchy was not resolved")
+	}
+	if !parser.classHierarchyResolved(2) {
+		t.Fatal("cached class hierarchy was not resolved")
 	}
 	if got := parser.instanceLayoutBytes[2]; got != 8 {
 		t.Fatalf("cached instance layout = %d bytes, want 8", got)

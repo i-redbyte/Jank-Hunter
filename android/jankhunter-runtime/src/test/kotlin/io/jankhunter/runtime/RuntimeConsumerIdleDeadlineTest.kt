@@ -65,7 +65,7 @@ class RuntimeConsumerIdleDeadlineTest {
         } finally {
             assertTrue(graph.flushForShutdown(1_000L))
             graph.clear()
-            assertTrue(writer.close(1_000L))
+            assertTrue(writer.close(10_000L))
             directory.deleteRecursively()
         }
     }

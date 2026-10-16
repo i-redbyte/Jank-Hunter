@@ -17,7 +17,11 @@ internal object InstrumentationClassSelector {
     fun evaluate(
         params: JankHunterInstrumentationParameters,
         classData: ClassData,
+        classOrigin: CausalCodeOrigin = CausalCodeOrigin.UNKNOWN,
     ): InstrumentationClassSelection {
+        if (InstrumentationPackages.isImplementationClass(classData.className)) {
+            return InstrumentationClassSelection(false, false, false, false, false)
+        }
         val includePackages = params.includePackages.getOrElse(emptySet())
         val excludePackages = params.excludePackages.getOrElse(emptySet())
         val includeWholeApplication = params.includeWholeApplication.getOrElse(false)
@@ -29,6 +33,8 @@ internal object InstrumentationClassSelector {
             webSocketsEnabled ||
             params.handlers.getOrElse(false) ||
             params.executors.getOrElse(false) ||
+            params.threadLifecycle.getOrElse(false) ||
+            params.concurrencyDiagnostics.getOrElse(false) ||
             params.coroutines.getOrElse(false) ||
             params.interactionOperations.getOrElse(false) ||
             params.lifecycleLeaks.getOrElse(false) ||
@@ -57,12 +63,21 @@ internal object InstrumentationClassSelector {
                 includeWholeApplication = true,
             )
         return InstrumentationClassSelection(
-            runtime = runtimeHooksEnabled && !alreadyInstrumented && !generatedDiClass &&
+            runtime = runtimeHooksEnabled && !alreadyInstrumented && !generatedDiClass && (
                 InstrumentationMatcher.matchesNormalizedClassName(
                     normalizedClassName,
                     includePackages,
                     excludePackages,
                     includeWholeApplication,
+                ) || ((params.threadLifecycle.getOrElse(false) || params.concurrencyDiagnostics.getOrElse(false)) &&
+                    classOrigin == CausalCodeOrigin.PROJECT &&
+                    InstrumentationMatcher.matchesNormalizedClassName(
+                        normalizedClassName,
+                        emptySet(),
+                        excludePackages + InstrumentationPackages.implementationPackages,
+                        includeWholeApplication = true,
+                        includeBuiltinExcludes = false,
+                    ))
                 ),
             networkBoundary = networkBoundaryEnabled && boundaryMatches,
             databaseBoundary = databaseBoundaryEnabled && boundaryMatches &&
@@ -95,12 +110,11 @@ internal object InstrumentationClassSelector {
             InstrumentationMatcher.matchesNormalizedClassName(
                 normalizedClassName,
                 includePackages,
-                JANK_HUNTER_PACKAGES,
+                InstrumentationPackages.implementationPackages,
                 includeBuiltinExcludes = false,
             )
         }
     }
 
     private const val JANK_HUNTER_RUNTIME_PACKAGE = "io.jankhunter.runtime."
-    private val JANK_HUNTER_PACKAGES = setOf("io.jankhunter")
 }

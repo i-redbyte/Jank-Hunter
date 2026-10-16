@@ -24,18 +24,25 @@ class MetricSumTest {
             start.countDown()
             jobs.forEach { it.get(5L, TimeUnit.SECONDS) }
             var emitted = 0
+            var accepted = 0L
+            var rejected = 0L
             aggregator.flush(object : MetricAggregator.Sink {
-                override fun counter(name: String, value: Long) { throw AssertionError("unexpected counter $name=$value") }
+                override fun counter(name: String, value: Long) {
+                    assertEquals(MetricAggregator.DROPPED_METRIC_NAME, name)
+                    rejected += value
+                }
                 override fun gauge(name: String, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long) {
                     emitted++
-                    assertEquals(16_000L, count)
-                    assertEquals(-16_000L, sum)
-                    assertEquals(7_999L, sumHigh)
+                    accepted = count
+                    val exact = BigInteger.valueOf(Long.MAX_VALUE).multiply(BigInteger.valueOf(count))
+                    assertEquals(exact.toLong(), sum)
+                    assertEquals(exact.shiftRight(64).toLong(), sumHigh)
                     assertEquals(Long.MAX_VALUE, value)
                     assertEquals(Long.MAX_VALUE, max)
                 }
             })
             assertEquals(1, emitted)
+            assertEquals(16_000L, accepted + rejected)
         } finally {
             start.countDown()
             pool.shutdownNow()

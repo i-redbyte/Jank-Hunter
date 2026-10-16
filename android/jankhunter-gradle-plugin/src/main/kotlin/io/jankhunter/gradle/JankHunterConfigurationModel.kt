@@ -29,6 +29,8 @@ enum class JankHunterFeature : JankHunterFeatureSelection {
     BINDER_IPC,
     METHOD_COUNTERS,
     HEAP_DUMPS,
+    THREAD_SAMPLING,
+    CONCURRENCY_DIAGNOSTICS,
 }
 
 enum class JankHunterFeatureBundle(
@@ -43,6 +45,9 @@ enum class JankHunterFeatureBundle(
             JankHunterFeature.HANDLERS,
             JankHunterFeature.EXECUTORS,
             JankHunterFeature.COROUTINES,
+            JankHunterFeature.THREAD_SAMPLING,
+            JankHunterFeature.WORKERS,
+            JankHunterFeature.CONCURRENCY_DIAGNOSTICS,
         ),
     ),
     ANDROID_SYSTEM_ALL(

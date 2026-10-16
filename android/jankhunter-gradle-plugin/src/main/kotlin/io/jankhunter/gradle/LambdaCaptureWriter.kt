@@ -142,6 +142,15 @@ internal object LambdaCaptureWriter {
         }
     }
 
+    fun records(className: String, captures: List<LambdaCapture>): String = buildString {
+        var start = 0
+        while (start < captures.size) {
+            val end = (start + LAMBDA_CAPTURES_PER_RECORD).coerceAtMost(captures.size)
+            append(record(className.replace('/', '.'), captures, start, end))
+            start = end
+        }
+    }
+
     private fun record(
         className: String,
         captures: List<LambdaCapture>,

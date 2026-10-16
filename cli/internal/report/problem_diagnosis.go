@@ -45,10 +45,25 @@ type dataQualityAnalyzerNote struct {
 }
 
 func problemReportHeadline(summary analyze.ProblemSummary) string {
-	if summary.Total > 0 && strings.TrimSpace(summary.Headline) != "" {
-		return summary.Headline
+	if summary.Total > 0 {
+		return fmt.Sprintf("Требуют внимания: %s", russianCount(summary.Total, "проблема", "проблемы", "проблем"))
 	}
 	return "В записанном сценарии явных проблем не обнаружено."
+}
+
+func problemSummaryPriority(summary analyze.ProblemSummary) string {
+	switch {
+	case summary.Critical > 0:
+		return "критичный"
+	case summary.High > 0:
+		return "высокий"
+	case summary.Medium > 0:
+		return "средний"
+	case summary.Low > 0:
+		return "низкий"
+	default:
+		return "нет"
+	}
 }
 
 func problemReportVerdict(summary analyze.ProblemSummary) string {
@@ -331,6 +346,30 @@ func problemActionableLimitations(limitations []string) []string {
 			continue
 		}
 		result = appendUniqueReportText(result, limitation)
+	}
+	return result
+}
+
+func problemQualityNotes(summary analyze.Summary) []dataQualityAnalyzerNote {
+	findings := summary.ProblemIncidents
+	if len(findings) == 0 {
+		findings = summary.Problems
+	}
+	const limit = 20
+	result := make([]dataQualityAnalyzerNote, 0, min(len(findings), limit))
+	for index := range findings {
+		limitations := problemActionableLimitations(findings[index].Limitations)
+		if len(limitations) == 0 {
+			continue
+		}
+		area := strings.TrimSpace(findings[index].Title)
+		if area == "" {
+			area = "Проблема " + findings[index].DetectorID
+		}
+		result = append(result, dataQualityAnalyzerNote{Area: area, Detail: strings.Join(limitations, "; ")})
+		if len(result) == limit {
+			break
+		}
 	}
 	return result
 }

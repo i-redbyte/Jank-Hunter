@@ -37,6 +37,12 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
     abstract val executors: Property<Boolean>
 
     @get:Input
+    abstract val threadLifecycle: Property<Boolean>
+
+    @get:Input
+    abstract val concurrencyDiagnostics: Property<Boolean>
+
+    @get:Input
     abstract val coroutines: Property<Boolean>
 
     @get:Input
@@ -81,8 +87,19 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
     @get:Input
     abstract val excludePackages: SetProperty<String>
 
+    @get:Input
+    abstract val metadataCompatibilityMode: Property<JankHunterMetadataCompatibilityMode>
+
+    @get:Input
+    abstract val metadataReaderIdentity: Property<String>
+
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
+
+    init {
+        metadataCompatibilityMode.convention(JankHunterMetadataCompatibilityMode.COMPATIBILITY)
+        metadataReaderIdentity.convention(MetadataReaderCapabilities.identity)
+    }
 
     @TaskAction
     fun write() {
@@ -122,6 +139,8 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
             appendHook("logSpam", logSpam.getOrElse(false))
             appendHook("classGraph", classGraph.getOrElse(false))
             appendHook("lambdaCaptures", classGraph.getOrElse(false))
+            appendHook("threadLifecycle", threadLifecycle.getOrElse(false))
+            appendHook("concurrencyDiagnostics", concurrencyDiagnostics.getOrElse(false))
             appendHook("runtimeCallGraph", runtimeCallGraph.getOrElse(false))
             appendHook("databaseTracing", databaseTracing.getOrElse(false))
             appendHook("ioTracing", ioTracing.getOrElse(false))
@@ -132,6 +151,11 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
             appendJsonArray(includePackages.getOrElse(emptySet()))
             append(",\"excludePackages\":")
             appendJsonArray(excludePackages.getOrElse(emptySet()))
+            append(",\"metadataCompatibilityMode\":\"")
+            append(metadataCompatibilityMode.get().name)
+            append("\",\"metadataReaderIdentity\":\"")
+            append(escapeJsonString(metadataReaderIdentity.get()))
+            append('"')
             append('}')
         }
     }
@@ -158,6 +182,16 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
 
 @CacheableTask
 abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
+    @get:org.gradle.api.tasks.Classpath
+    abstract val inputJars: org.gradle.api.provider.ListProperty<org.gradle.api.file.RegularFile>
+
+    @get:org.gradle.api.tasks.Classpath
+    abstract val inputDirectories: org.gradle.api.provider.ListProperty<org.gradle.api.file.Directory>
+
+    init {
+        inputJars.convention(emptyList())
+        inputDirectories.convention(emptyList())
+    }
     @get:Internal
     abstract val classGraphDirectory: DirectoryProperty
 
@@ -200,19 +234,48 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
     abstract val diagnosticsOutputFile: RegularFileProperty
 
     @get:OutputFile
+    @get:Optional
+    abstract val metadataCompatibilityOutputFile: RegularFileProperty
+
+    @get:OutputFile
     abstract val androidComponentCatalogOutputFile: RegularFileProperty
+
+    @get:OutputFile
+    @get:Optional
+    abstract val dependencyInjectionRecordsFile: RegularFileProperty
 
     @TaskAction
     fun merge() {
-        InstrumentationArtifactFiles.mergeJsonl(classGraphDirectory.orNull?.asFile, classGraphOutputFile.get().asFile)
-        InstrumentationArtifactFiles.mergeJsonl(
-            lambdaCaptureDirectory.orNull?.asFile,
-            lambdaCaptureOutputFile.get().asFile,
-        )
-        InstrumentationArtifactFiles.mergeJsonlFiles(diagnosticsFiles.files, diagnosticsOutputFile.get().asFile)
-        InstrumentationArtifactFiles.mergeJsonl(
-            androidComponentCatalogDirectory.orNull?.asFile,
-            androidComponentCatalogOutputFile.get().asFile,
-        )
+        val metadata = metadataCompatibilityOutputFile.orNull?.let { MetadataCompatibilitySummary() }
+        if (inputJars.get().isEmpty() && inputDirectories.get().isEmpty()) {
+            InstrumentationArtifactFiles.mergeJsonlFiles(classGraphFiles.files, classGraphOutputFile.get().asFile)
+            InstrumentationArtifactFiles.mergeJsonlFiles(lambdaCaptureFiles.files, lambdaCaptureOutputFile.get().asFile)
+            InstrumentationArtifactFiles.mergeJsonlFiles(diagnosticsFiles.files, diagnosticsOutputFile.get().asFile) { metadata?.accept(it) }
+            InstrumentationArtifactFiles.mergeJsonlFiles(androidComponentCatalogFiles.files, androidComponentCatalogOutputFile.get().asFile)
+        } else {
+            val outputs = linkedMapOf(
+                "class_graph" to classGraphOutputFile.get().asFile,
+                "lambda_capture" to lambdaCaptureOutputFile.get().asFile,
+                "android_component" to androidComponentCatalogOutputFile.get().asFile,
+                "diagnostics" to diagnosticsOutputFile.get().asFile,
+            )
+            dependencyInjectionRecordsFile.orNull?.let { outputs["di"] = it.asFile }
+            InstrumentationArtifactFiles.writeManyAtomically(outputs) { writers ->
+                InstrumentationEvidenceAttribute.forEachRecord(
+                    inputJars.get().map { it.asFile }, inputDirectories.get().map { it.asFile },
+                ) { kind, content ->
+                    val diagnostic = kind == "main" || kind == "causal" || kind == "lifecycle" || kind == "lifecycle_metadata"
+                    val writer = writers[if (diagnostic) "diagnostics" else kind]
+                    content.lineSequence().filter(String::isNotBlank).forEach { line ->
+                        if (diagnostic) metadata?.accept(line)
+                        writer?.write(line)
+                        writer?.write("\n")
+                    }
+                }
+            }
+        }
+        metadataCompatibilityOutputFile.orNull?.asFile?.let { file ->
+            InstrumentationArtifactFiles.writeAtomically(file, checkNotNull(metadata).toJson())
+        }
     }
 }

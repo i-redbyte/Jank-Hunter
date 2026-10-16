@@ -9,6 +9,7 @@ SMOKE_JAVA_HOME="${SMOKE_JAVA_HOME:-}"
 SMOKE_AGP_VERSION="${SMOKE_AGP_VERSION:-}"
 ANDROID_BUILD_TOOLS_VERSION="${ANDROID_BUILD_TOOLS_VERSION:-}"
 SMOKE_CONFIGURATION_CACHE="${SMOKE_CONFIGURATION_CACHE:-1}"
+SMOKE_METADATA_COMPATIBILITY_MODE="${SMOKE_METADATA_COMPATIBILITY_MODE:-COMPATIBILITY}"
 SMOKE_MARKER_NAME=".jankhunter-gradle-smoke-owned"
 SMOKE_MARKER_VALUE="jankhunter-gradle-smoke:v1"
 SMOKE_RUN_DIR=""
@@ -32,6 +33,7 @@ Environment:
   ANDROID_BUILD_TOOLS_VERSION  Installed Build Tools version; defaults to the highest installed.
   SMOKE_HELPER_SOURCE          Helper source: external (default), project, or composite.
   SMOKE_CONFIGURATION_CACHE    Set to 0 to disable the create/reuse configuration-cache check.
+  SMOKE_METADATA_COMPATIBILITY_MODE  COMPATIBILITY (default) or STRICT for metadataCompatibilityMode DSL.
   SMOKE_WORK_DIR               Parent for a unique cold run directory preserved for inspection.
   KEEP_SMOKE_DIR               Set to 1 to preserve an automatically created work directory.
 EOF
@@ -346,6 +348,7 @@ jankHunter {
     tuning.heapDumps.maxCount = 1
     tuning.heapDumps.minRetainedAgeMs = 30_000
     scope = io.jankhunter.gradle.JankHunterInstrumentationScope.NAMESPACE_AND_PACKAGES
+    metadataCompatibilityMode.set(io.jankhunter.gradle.JankHunterMetadataCompatibilityMode.$SMOKE_METADATA_COMPATIBILITY_MODE)
 }
 
 dependencies {
@@ -633,6 +636,10 @@ main() {
   esac
   require_boolean_environment KEEP_SMOKE_DIR "$KEEP_SMOKE_DIR"
   require_boolean_environment SMOKE_CONFIGURATION_CACHE "$SMOKE_CONFIGURATION_CACHE"
+  case "$SMOKE_METADATA_COMPATIBILITY_MODE" in
+    COMPATIBILITY|STRICT) ;;
+    *) fail "SMOKE_METADATA_COMPATIBILITY_MODE must be COMPATIBILITY or STRICT, found: $SMOKE_METADATA_COMPATIBILITY_MODE" ;;
+  esac
   SMOKE_COMPILE_SDK="$(resolve_compile_sdk)"
   [[ "$SMOKE_COMPILE_SDK" =~ ^[1-9][0-9]*$ ]] ||
     fail "SMOKE_COMPILE_SDK must be a positive integer, found: $SMOKE_COMPILE_SDK"
@@ -796,6 +803,11 @@ main() {
   require_file_contains "$diagnostics" '"intent":"logspam.android.util.Log.d"' "Log hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.install_event_listener_factory"' "OkHttp hook diagnostics"
   require_file_contains "$diagnostics" '"intent":"okhttp.wrap_websocket_listener"' "WebSocket hook diagnostics"
+  require_file_contains "$diagnostics" '"metadataStatus":"' "Metadata diagnostics"
+  local hook_abi="$fixture_dir/app/build/intermediates/jankhunter/debug/sdk-hook-abi.bin"
+  [[ -f "$hook_abi" ]] || fail "Missing SDK hook ABI preflight output: $hook_abi"
+  local metadata_compatibility="$fixture_dir/app/build/generated/jankhunter/debug/metadata-compatibility.json"
+  require_file_contains "$metadata_compatibility" '"schema":1' "Metadata compatibility summary"
   local feature_diagnostics="$fixture_dir/feature/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl"
   require_file_contains "$feature_diagnostics" '"format":2,"pass":"lifecycle"' "Versioned lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"owner":"smoke.feature"' "Feature annotation diagnostics"

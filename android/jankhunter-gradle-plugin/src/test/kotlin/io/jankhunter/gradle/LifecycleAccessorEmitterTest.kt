@@ -68,6 +68,23 @@ class LifecycleAccessorEmitterTest {
         assertEquals(2, captured.size)
         assertSame(binding, captured[0])
         assertSame(root, captured[1])
+
+        var customCalls = 0
+        set(instance, "pending", object : Lazy<Any> {
+            override val value: Any get() { customCalls++; return binding }
+            override fun isInitialized(): Boolean { customCalls++; return true }
+        })
+        captured.clear()
+        candidateClass.getMethod(LifecycleAccessorEmitter.VISIT_METHOD, sinkClass, String::class.java)
+            .invoke(instance, sink, "owner")
+        assertEquals("Injected inspection executed arbitrary application Lazy code", 0, customCalls)
+        assertEquals(2, captured.size)
+
+        set(instance, "pending", lazyOf(binding))
+        captured.clear()
+        candidateClass.getMethod(LifecycleAccessorEmitter.VISIT_METHOD, sinkClass, String::class.java)
+            .invoke(instance, sink, "owner")
+        assertEquals("Known initialized standard Lazy remains observable", 4, captured.size)
     }
 
     private fun set(instance: Any, name: String, value: Any) {

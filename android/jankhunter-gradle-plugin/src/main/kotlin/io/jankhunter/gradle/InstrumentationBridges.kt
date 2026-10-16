@@ -98,6 +98,10 @@ internal object DefaultInstrumentationBridgeProvider : InstrumentationBridgeProv
         OkHttp3Bridge,
         AndroidHandlerBridge,
         JdkExecutorBridge,
+        JdkThreadBridge,
+        WorkSubmissionBridge,
+        WorkBuilderBridge,
+        WorkChainBridge,
         KotlinxCoroutinesBridge,
         AndroidViewInteractionOperationBridge,
         AndroidLogSpamBridge,
@@ -123,11 +127,13 @@ internal object VersionedBridgeCatalog {
     val okHttp: List<VersionedInstrumentationBridge> = registry.family("okhttp")
     val handlers: List<VersionedInstrumentationBridge> = registry.family("handler")
     val executors: List<VersionedInstrumentationBridge> = registry.family("executor")
+    val threads: List<VersionedInstrumentationBridge> = registry.family("thread")
     val coroutines: List<VersionedInstrumentationBridge> = registry.family("coroutines")
     val interactionOperations: List<VersionedInstrumentationBridge> = registry.family("interaction-operation")
     val logSpam: List<VersionedInstrumentationBridge> = registry.family("logspam")
     val io: List<VersionedInstrumentationBridge> = registry.family("io")
     val database: List<VersionedInstrumentationBridge> = registry.family("database")
+    val workSubmissions: List<VersionedInstrumentationBridge> = registry.family("work-submission")
 
     fun matchOkHttp(call: MethodCall, intents: Set<String>): VersionedBridgeMatch? {
         return okHttp.firstNotNullOfOrNull { bridge ->
@@ -545,7 +551,16 @@ private object JdkExecutorBridge : VersionedInstrumentationBridge {
     override val family: String = "executor"
     override val signatures: List<VersionedBridgeSignature> =
         HookSignatureCatalog.executorRunnableSignatures.map(::executorSignature) +
-            HookSignatureCatalog.executorCallableSignatures.map(::executorSignature)
+            HookSignatureCatalog.executorCallableSignatures.map(::executorSignature) +
+            VersionedBridgeSignature.exact(
+                SignatureSpec(
+                    id = "jankhunter.tracked_executor.execute",
+                    owners = setOf("io/jankhunter/runtime/JankHunterTrackedExecutor"),
+                    names = setOf("execute"),
+                    descriptors = setOf("(Ljava/lang/Runnable;)V"),
+                ),
+                HookIntent.ExecutorRunnable(ExecutorRunnableKind.SINGLE_RUNNABLE),
+            )
 
     private fun executorSignature(signature: IntentSignature): VersionedBridgeSignature {
         return if (signature.spec.names == setOf("submit")) {
@@ -639,3 +654,84 @@ private val timberDescriptors = setOf(
     "(Ljava/lang/Throwable;Ljava/lang/String;[Ljava/lang/Object;)V",
     "(Ljava/lang/Throwable;)V",
 )
+
+private object JdkThreadBridge : VersionedInstrumentationBridge {
+    override val id = "jdk.thread.bridge.v1"
+    override val family = "thread"
+    override val signatures = listOf(
+        VersionedBridgeSignature.exact(SignatureSpec(
+            id = "jdk.thread.start", owners = setOf("java/lang/Thread"), names = setOf("start"), descriptors = setOf("()V"),
+        ), HookIntent.ThreadStart),
+        VersionedBridgeSignature.covariantObjectReturn(IntentSignature(SignatureSpec(
+            id = "jdk.thread_factory.new_thread", owners = setOf("java/util/concurrent/ThreadFactory"), names = setOf("newThread"),
+            descriptors = setOf("(Ljava/lang/Runnable;)Ljava/lang/Thread;"),
+        ), HookIntent.ThreadFactoryReturn)),
+    )
+}
+
+private object WorkSubmissionBridge : VersionedInstrumentationBridge {
+    override val id = "androidx.work.submission.v1"
+    override val family = "work-submission"
+    override val signatures = listOf(
+        "enqueue" to setOf("(Landroidx/work/WorkRequest;)Landroidx/work/Operation;", "(Ljava/util/List;)Landroidx/work/Operation;"),
+        "enqueueUniqueWork" to setOf(
+            "(Ljava/lang/String;Landroidx/work/ExistingWorkPolicy;Landroidx/work/OneTimeWorkRequest;)Landroidx/work/Operation;",
+            "(Ljava/lang/String;Landroidx/work/ExistingWorkPolicy;Ljava/util/List;)Landroidx/work/Operation;",
+        ),
+        "enqueueUniquePeriodicWork" to setOf(
+            "(Ljava/lang/String;Landroidx/work/ExistingPeriodicWorkPolicy;Landroidx/work/PeriodicWorkRequest;)Landroidx/work/Operation;",
+        ),
+    ).map { (name, descriptors) ->
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.$name", setOf("androidx/work/WorkManager"),
+            setOf(name), descriptors), HookIntent.WorkSubmission)
+    }
+}
+
+private object WorkBuilderBridge : VersionedInstrumentationBridge {
+    override val id = "androidx.work.builder.v1"
+    override val family = "work-submission"
+    private val owner = setOf("androidx/work/WorkRequest\$Builder",
+        "androidx/work/OneTimeWorkRequest\$Builder", "androidx/work/PeriodicWorkRequest\$Builder")
+    override val signatures = listOf(
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.builder.backoff",
+            owner, setOf("setBackoffCriteria"), setOf(
+                "(Landroidx/work/BackoffPolicy;JLjava/util/concurrent/TimeUnit;)Landroidx/work/WorkRequest\$Builder;",
+            )), HookIntent.WorkBuilderBackoff),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.builder.backoff_duration",
+            owner, setOf("setBackoffCriteria"), setOf(
+                "(Landroidx/work/BackoffPolicy;Ljava/time/Duration;)Landroidx/work/WorkRequest\$Builder;",
+            )), HookIntent.WorkBuilderBackoffDuration),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.builder.expedited",
+            owner, setOf("setExpedited"), setOf(
+                "(Landroidx/work/OutOfQuotaPolicy;)Landroidx/work/WorkRequest\$Builder;",
+            )), HookIntent.WorkBuilderExpedited),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.builder.build",
+            owner, setOf("build"), setOf("()Landroidx/work/WorkRequest;")), HookIntent.WorkBuilderBuild),
+    )
+}
+
+private object WorkChainBridge : VersionedInstrumentationBridge {
+    override val id = "androidx.work.chain.v1"
+    override val family = "work-submission"
+    override val signatures = listOf(
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.begin_with",
+            setOf("androidx/work/WorkManager"), setOf("beginWith"), setOf(
+                "(Landroidx/work/OneTimeWorkRequest;)Landroidx/work/WorkContinuation;",
+                "(Ljava/util/List;)Landroidx/work/WorkContinuation;",
+            )), HookIntent.WorkChainRoot),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.begin_unique_work",
+            setOf("androidx/work/WorkManager"), setOf("beginUniqueWork"), setOf(
+                "(Ljava/lang/String;Landroidx/work/ExistingWorkPolicy;Landroidx/work/OneTimeWorkRequest;)Landroidx/work/WorkContinuation;",
+                "(Ljava/lang/String;Landroidx/work/ExistingWorkPolicy;Ljava/util/List;)Landroidx/work/WorkContinuation;",
+            )), HookIntent.WorkChainRoot),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.chain_then",
+            setOf("androidx/work/WorkContinuation"), setOf("then"), setOf(
+                "(Landroidx/work/OneTimeWorkRequest;)Landroidx/work/WorkContinuation;",
+                "(Ljava/util/List;)Landroidx/work/WorkContinuation;",
+            )), HookIntent.WorkChainChild),
+        VersionedBridgeSignature.exact(SignatureSpec("androidx.work.chain_combine",
+            setOf("androidx/work/WorkContinuation"), setOf("combine"), setOf(
+                "(Ljava/util/List;)Landroidx/work/WorkContinuation;",
+            )), HookIntent.WorkChainCombine),
+    )
+}

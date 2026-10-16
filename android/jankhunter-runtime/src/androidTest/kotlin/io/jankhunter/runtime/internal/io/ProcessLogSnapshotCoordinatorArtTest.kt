@@ -20,10 +20,10 @@ class ProcessLogSnapshotCoordinatorArtTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val directory = context.cacheDir.resolve("jankhunter-snapshot-${System.nanoTime()}").apply { mkdirs() }
         val first = ProcessLogSnapshotCoordinator.start(context, directory, "app") { _ ->
-            JankHunterLogSnapshot(10L, listOf("/data/main.jhlog"))
+            JankHunterLogSnapshot(10L, listOf("/data/main.jhlog"), logByteLimits = listOf(1024L))
         }
         val second = ProcessLogSnapshotCoordinator.start(context, directory, "app:remote") { _ ->
-            JankHunterLogSnapshot(15L, listOf("/data/remote.jhlog"))
+            JankHunterLogSnapshot(15L, listOf("/data/remote.jhlog"), logByteLimits = listOf(4096L))
         }
         val start = CountDownLatch(1)
         val done = CountDownLatch(2)
@@ -129,6 +129,7 @@ class ProcessLogSnapshotCoordinatorArtTest {
         assertNotNull(snapshot)
         requireNotNull(snapshot)
         assertEquals(listOf("/data/main.jhlog", "/data/remote.jhlog"), snapshot.logPaths)
+        assertEquals(listOf(1024L, 4096L), snapshot.logByteLimits)
         assertEquals(2, snapshot.processCount)
         assertEquals(5L, snapshot.captureSkewMs)
     }

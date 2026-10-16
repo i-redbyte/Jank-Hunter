@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/bits"
@@ -24,22 +25,42 @@ const (
 )
 
 type workerRawEvent struct {
-	logIndex   uint64
-	sequence   uint64
-	timeMS     uint64
-	instanceID uint64
-	durationMS uint64
-	flags      uint64
-	worker     string
-	screen     string
-	operation  string
-	owner      string
-	scope      string
-	stage      jhlog.WorkerStage
-	outcome    jhlog.WorkerOutcome
-	runAttempt uint32
-	generation uint32
-	stopReason uint32
+	unixMS            *uint64
+	process, threadID string
+	logIndex          uint64
+	sequence          uint64
+	timeMS            uint64
+	instanceID        uint64
+	operationID       uint64
+	durationMS        uint64
+	flags             uint64
+	worker            string
+	screen            string
+	operation         string
+	owner             string
+	scope             string
+	stage             jhlog.WorkerStage
+	outcome           jhlog.WorkerOutcome
+	runAttempt        uint32
+	generation        uint32
+	stopReason        uint32
+}
+
+type workerRawFailure struct {
+	scope, process, exceptionClass, stack string
+	logIndex, timeMS, instanceID          uint64
+	runAttempt, generation                uint32
+	stackTruncated                        bool
+	excluded                              bool
+}
+
+type workerRawProgress struct {
+	scope, process                               string
+	logIndex, timeMS, instanceID                 uint64
+	runAttempt, generation                       uint32
+	stage                                        uint64
+	omittedUpdates, omittedKeys, truncatedFields uint64
+	fields                                       []jhlog.WorkDataField
 }
 
 type workerCostInterval struct {
@@ -68,17 +89,31 @@ type workerMetricPoint struct {
 // workerCollectorState keeps the optional cross-event histories together. Its slices and identity
 // map remain nil until Worker evidence enables correlation, so non-Worker logs pay only scalars.
 type workerCollectorState struct {
-	workerEvents         []workerRawEvent
-	workerHTTP           []workerCostInterval
-	workerIO             []workerCostInterval
-	workerMemory         []workerPoint
-	workerMetrics        []workerMetricPoint
-	workerLogIdentities  map[uint64]string
-	workerEventSequence  uint64
-	workerSeenInLog      bool
-	workerCorrelationOn  bool
-	workerPriorMemory    workerPoint
-	workerPriorMemorySet bool
+	workChainEdges           workChainState
+	workSubmissions          workSubmissionState
+	workerCorrelationDropped uint64
+	workerIdentity           workerIdentityState
+	workerLifecycleBytes     int
+	workerLifecycleDropped   uint64
+	workerFailureBytes       int
+	workerFailureDropped     uint64
+	workerFailures           []workerRawFailure
+	workerProgress           []workerRawProgress
+	workerProgressBytes      int
+	workerProgressDropped    uint64
+	workRegistry             workRegistryCollectorState
+	workerCatalog            *WorkerCatalogAnalysis
+	workerEvents             []workerRawEvent
+	workerHTTP               []workerCostInterval
+	workerIO                 []workerCostInterval
+	workerMemory             []workerPoint
+	workerMetrics            []workerMetricPoint
+	workerLogIdentities      map[uint64]string
+	workerEventSequence      uint64
+	workerSeenInLog          bool
+	workerCorrelationOn      bool
+	workerPriorMemory        workerPoint
+	workerPriorMemorySet     bool
 }
 
 func (s *workerCollectorState) startLog() {
@@ -99,7 +134,21 @@ func (s *workerCollectorState) finishLog(logIndex uint64, result jhlog.StreamRes
 }
 
 func (s *workerCollectorState) release() {
+	s.workRegistry = workRegistryCollectorState{}
+	s.workSubmissions = workSubmissionState{}
+	s.workChainEdges = workChainState{}
+	s.workerIdentity = workerIdentityState{}
+	s.workerCatalog = nil
 	s.workerEvents = nil
+	s.workerLifecycleBytes = 0
+	s.workerLifecycleDropped = 0
+	s.workerFailureBytes = 0
+	s.workerFailureDropped = 0
+	s.workerFailures = nil
+	s.workerProgress = nil
+	s.workerProgressBytes = 0
+	s.workerProgressDropped = 0
+	s.workerCorrelationDropped = 0
 	s.workerHTTP = nil
 	s.workerIO = nil
 	s.workerMemory = nil
@@ -270,22 +319,28 @@ type workerScopeSignals struct {
 }
 
 func (c *collector) recordWorker(dict map[uint64]string, event jhlog.Event) {
-	c.workerSeenInLog = true
 	c.enableWorkerCorrelation()
 	worker := normalizeWorkerName(c.resolveOwnerRef(dict, event.Worker.WorkerRef))
 	context := c.eventContext("", "")
 	if !c.matchesFilters("", context, []string{worker}, worker, context.Owner) {
 		return
 	}
+	if !c.retainWorkerLifecycle(worker, context) {
+		return
+	}
+	c.workerSeenInLog = true
 	c.databaseCorrelation.addWorker(databaseTimelineContext{
 		screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
 	}, event)
 	c.markCohort()
 	c.workerEventSequence++
 	c.workerEvents = append(c.workerEvents, workerRawEvent{
+		unixMS:  observationUnixMS(c.workRegistry.anchorElapsedMS, c.workRegistry.anchorUnixMS, event.TimeMS),
+		process: c.currentProcess, threadID: workerProducerThread(event.Producer),
 		logIndex: c.currentLogIndex, sequence: c.workerEventSequence, timeMS: event.TimeMS,
 		instanceID: event.Worker.InstanceID, durationMS: event.Worker.DurationMS,
-		flags: event.Flags, worker: worker, screen: context.Screen, operation: context.Operation,
+		operationID: c.currentOperationID,
+		flags:       event.Flags, worker: worker, screen: context.Screen, operation: context.Operation,
 		owner: context.Owner, stage: event.Worker.Stage,
 		outcome: event.Worker.Outcome, runAttempt: event.Worker.RunAttempt,
 		generation: event.Worker.Generation, stopReason: event.Worker.StopReason,
@@ -298,13 +353,16 @@ func (c *collector) enableWorkerCorrelation() {
 	}
 	c.workerCorrelationOn = true
 	if c.workerPriorMemorySet {
-		c.workerMemory = append(c.workerMemory, c.workerPriorMemory)
+		c.recordWorkerMemory(c.workerPriorMemory)
 		c.workerPriorMemory = workerPoint{}
 		c.workerPriorMemorySet = false
 	}
 }
 
 func (c *collector) recordWorkerHTTP(event jhlog.Event) {
+	if !c.retainWorkerCorrelation() {
+		return
+	}
 	startMS := saturatingSub(event.TimeMS, event.HTTP.DurationMS)
 	c.workerHTTP = append(c.workerHTTP, workerCostInterval{
 		logIndex: c.currentLogIndex, startMS: startMS, endMS: event.TimeMS,
@@ -315,6 +373,9 @@ func (c *collector) recordWorkerHTTP(event jhlog.Event) {
 }
 
 func (c *collector) recordWorkerIO(event jhlog.Event) {
+	if !c.retainWorkerCorrelation() {
+		return
+	}
 	durationMS := event.IO.DurationUS / 1_000
 	if event.IO.DurationUS%1_000 != 0 {
 		durationMS++
@@ -326,7 +387,7 @@ func (c *collector) recordWorkerIO(event jhlog.Event) {
 }
 
 func (c *collector) recordWorkerMetric(name string, event jhlog.Event) {
-	if !isWorkerCorrelationMetric(name) {
+	if !isWorkerCorrelationMetric(name) || !c.retainWorkerCorrelation() {
 		return
 	}
 	count := event.Metric.Count
@@ -362,7 +423,7 @@ func isWorkerCorrelationMetric(name string) bool {
 }
 
 func (c *collector) finalizeWorkerAnalysis() *WorkerAnalysis {
-	if len(c.workerEvents) == 0 {
+	if len(c.workerEvents) == 0 && len(c.workerFailures) == 0 && len(c.workerProgress) == 0 {
 		return nil
 	}
 	for index := range c.workerEvents {
@@ -382,7 +443,20 @@ func (c *collector) finalizeWorkerAnalysis() *WorkerAnalysis {
 		return left.sequence < right.sequence
 	})
 
-	analysis := &WorkerAnalysis{}
+	analysis := &WorkerAnalysis{DroppedLifecycleEvents: c.workerLifecycleDropped, DroppedCorrelationEvents: c.workerCorrelationDropped}
+	analysis.Attempts, analysis.DroppedAttempts = buildWorkerAttempts(c.workerEvents)
+	analysis.UnattributedForegroundEvents = attachWorkerForeground(analysis.Attempts, c.workerEvents)
+	for index := range c.workerFailures {
+		c.workerFailures[index].scope = c.workerScope(c.workerFailures[index].logIndex)
+	}
+	analysis.DroppedFailureEvents = saturatingUint64Sum(c.workerFailureDropped,
+		attachWorkerFailures(&analysis.Attempts, c.workerFailures))
+	for index := range c.workerProgress {
+		c.workerProgress[index].scope = hex.EncodeToString([]byte(c.workerScope(c.workerProgress[index].logIndex)))
+	}
+	analysis.UnattributedProgressEvents = attachWorkerProgress(analysis.Attempts, c.workerProgress)
+	analysis.DroppedProgressEvents = c.workerProgressDropped
+	c.bindWorkerAttempts(analysis)
 	aggregates := make(map[string]*workerAggregate)
 	executions := make([]workerExecution, 0, len(c.workerEvents)/2)
 	queued := make([]workerScopedInterval, 0, len(c.workerEvents)/3)
@@ -539,6 +613,15 @@ func processWorkerInstance(
 		aggregate.stats.MissingFinish += uint64(missingFinishes)
 		analysis.Executions += uint64(missingFinishes)
 		aggregate.stats.Executions += uint64(missingFinishes)
+		for index := 0; index < starts.len(); index++ {
+			start := starts.at(index)
+			if !start.matched {
+				// A start proves activity at this instant, not through the end of the log.
+				point := workerScopedInterval{scope: start.event.scope, startMS: start.event.timeMS, endMS: start.event.timeMS}
+				*running = append(*running, point)
+				aggregate.running = append(aggregate.running, point)
+			}
+		}
 	}
 }
 
@@ -576,6 +659,9 @@ func recordWorkerOutcome(analysis *WorkerAnalysis, stats *WorkerStats, outcome j
 	case jhlog.WorkerOutcomeRetry:
 		analysis.Retries++
 		stats.Retries++
+	case jhlog.WorkerOutcomeStopped:
+		analysis.Stopped++
+		stats.Stopped++
 	case jhlog.WorkerOutcomeCancelled:
 		analysis.Cancelled++
 		stats.Cancelled++
@@ -741,6 +827,8 @@ type workerCostValue struct {
 type workerCostSample struct {
 	timeMS uint64
 	workerCostValue
+	durationHigh uint64
+	bytesHigh    uint64
 }
 
 type workerCostIndex struct {
@@ -764,8 +852,12 @@ func workerCostPrefix(values []workerCostSample) {
 	for index := 1; index < len(values); index++ {
 		values[index].count = saturatingUint64Sum(values[index].count, values[index-1].count)
 		values[index].failures = saturatingUint64Sum(values[index].failures, values[index-1].failures)
-		values[index].duration = saturatingUint64Sum(values[index].duration, values[index-1].duration)
-		values[index].bytes = saturatingUint64Sum(values[index].bytes, values[index-1].bytes)
+		// Keep exact prefixes: saturating before subtraction loses later costs
+		// when an earlier, unrelated interval has already filled the sum.
+		values[index].duration, values[index].durationHigh = addMetricSum(
+			values[index-1].duration, values[index-1].durationHigh, values[index].duration, 0)
+		values[index].bytes, values[index].bytesHigh = addMetricSum(
+			values[index-1].bytes, values[index-1].bytesHigh, values[index].bytes, 0)
 	}
 }
 
@@ -775,17 +867,29 @@ func (i workerCostIndex) query(startMS, endMS uint64) workerCostValue {
 	return subtractWorkerCost(workerCostPrefixAt(i.starts, started), workerCostPrefixAt(i.ends, ended))
 }
 
-func workerCostPrefixAt(values []workerCostSample, length int) workerCostValue {
+func workerCostPrefixAt(values []workerCostSample, length int) workerCostSample {
 	if length == 0 {
-		return workerCostValue{}
+		return workerCostSample{}
 	}
-	return values[length-1].workerCostValue
+	return values[length-1]
 }
 
-func subtractWorkerCost(left, right workerCostValue) workerCostValue {
+func subtractWorkerCost(left, right workerCostSample) workerCostValue {
+	difference := func(low, high, priorLow, priorHigh uint64) uint64 {
+		low, borrow := bits.Sub64(low, priorLow, 0)
+		high, underflow := bits.Sub64(high, priorHigh, borrow)
+		if underflow != 0 {
+			return 0
+		}
+		if high != 0 {
+			return math.MaxUint64
+		}
+		return low
+	}
 	return workerCostValue{
 		count: saturatingSub(left.count, right.count), failures: saturatingSub(left.failures, right.failures),
-		duration: saturatingSub(left.duration, right.duration), bytes: saturatingSub(left.bytes, right.bytes),
+		duration: difference(left.duration, left.durationHigh, right.duration, right.durationHigh),
+		bytes:    difference(left.bytes, left.bytesHigh, right.bytes, right.bytesHigh),
 	}
 }
 
@@ -972,6 +1076,7 @@ func workerOutcomeValues(analysis *WorkerAnalysis) []NamedValue {
 		{Name: "failure", Value: analysis.Failures},
 		{Name: "retry", Value: analysis.Retries},
 		{Name: "cancelled", Value: analysis.Cancelled},
+		{Name: "stopped", Value: analysis.Stopped},
 	}
 	result := values[:0]
 	for _, value := range values {

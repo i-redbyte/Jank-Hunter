@@ -60,7 +60,7 @@ class JankStatsFrameCallbackTest {
     @Test
     fun frameFailuresAreCountedAndFatalErrorsPropagate() {
         val before = RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_FRAME)
-        val callback = JankStatsFrameCallback { _, _ -> error("application callback") }
+        val callback = checkNotNull(JankHunterJankStats.createFrameListener { _, _ -> error("application callback") }) as JankStats.OnFrameListener
         callback.onFrame(FrameData(1L, 16L, false, emptyList()))
         assertEquals(before + 1L, RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_FRAME))
         val fatal = JankHunterJankStatsTest.FatalTestError()

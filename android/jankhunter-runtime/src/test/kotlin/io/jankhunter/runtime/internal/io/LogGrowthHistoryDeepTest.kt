@@ -12,6 +12,15 @@ import org.junit.Test
 
 class LogGrowthHistoryDeepTest {
     @Test
+    fun dayDisplayUsesStableDigitsIndependentlyOfDeviceLocale() {
+        val previous = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG"))
+            assertEquals("15.10.2026", dayKeyToDisplayString(20261015))
+        } finally { java.util.Locale.setDefault(previous) }
+    }
+
+    @Test
     fun diskHistoryRetainsExactNewestWindowAcrossBothRingBoundaries() {
         val directory = Files.createTempDirectory("jankhunter-growth-capacity").toFile()
         try {

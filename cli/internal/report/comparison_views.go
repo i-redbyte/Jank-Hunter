@@ -12,6 +12,195 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/datavalue"
 )
 
+type comparisonOverviewBalance struct {
+	Improved         int
+	Regressed        int
+	Unchanged        int
+	Mixed            int
+	Excluded         int
+	NotObservedAfter int
+}
+
+type comparisonOverviewItem struct {
+	Name   string
+	Detail string
+	Change analyze.ComparisonChange
+	Tone   string
+}
+
+type comparisonOverviewView struct {
+	Headline  string
+	ScopeLine string
+	Tone      string
+	Balance   comparisonOverviewBalance
+	Changed   []comparisonOverviewItem
+	Unchanged []comparisonOverviewItem
+	Excluded  []comparisonOverviewItem
+}
+
+func comparisonOverview(comparison analyze.Comparison) comparisonOverviewView {
+	view := comparisonOverviewView{
+		Headline:  comparisonOutcomeHeadline(comparison.Outcome, comparison.Scope.Comparability),
+		ScopeLine: comparisonScopeLine(comparison.Scope),
+		Tone:      comparisonOutcomeTone(comparison.Outcome),
+	}
+	view.Changed = make([]comparisonOverviewItem, 0, len(comparison.Scope.Changes))
+	view.Unchanged = make([]comparisonOverviewItem, 0, len(comparison.Scope.Changes))
+	view.Excluded = make([]comparisonOverviewItem, 0, len(comparison.Scope.Metrics)+len(comparison.ProblemComparison.Deltas))
+	for _, change := range comparison.Scope.Changes {
+		item := comparisonMetricOverviewItem(change)
+		switch change.Change {
+		case analyze.ChangeImproved:
+			view.Balance.Improved++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeRegressed:
+			view.Balance.Regressed++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeMixed:
+			view.Balance.Mixed++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeUnchanged:
+			view.Balance.Unchanged++
+			view.Unchanged = append(view.Unchanged, item)
+		default:
+			view.Balance.Excluded++
+			view.Excluded = append(view.Excluded, item)
+		}
+	}
+	for _, delta := range comparison.ProblemComparison.Deltas {
+		item := comparisonProblemOverviewItem(delta)
+		if !delta.Comparable || delta.Change == analyze.ChangeInsufficientData || delta.Change == analyze.ChangeNotComparable {
+			view.Balance.Excluded++
+			if delta.Observation == analyze.ObservationNotObservedAfter {
+				view.Balance.NotObservedAfter++
+			}
+			view.Excluded = append(view.Excluded, item)
+			continue
+		}
+		switch delta.Change {
+		case analyze.ChangeImproved:
+			view.Balance.Improved++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeRegressed:
+			view.Balance.Regressed++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeMixed:
+			view.Balance.Mixed++
+			view.Changed = append(view.Changed, item)
+		case analyze.ChangeUnchanged:
+			view.Balance.Unchanged++
+			view.Unchanged = append(view.Unchanged, item)
+		default:
+			view.Balance.Excluded++
+			view.Excluded = append(view.Excluded, item)
+		}
+	}
+	return view
+}
+
+func comparisonOutcomeHeadline(outcome analyze.ComparisonChange, comparability analyze.ScenarioComparability) string {
+	switch outcome {
+	case analyze.ChangeImproved:
+		if comparability == analyze.ScenarioPartial {
+			return "В сопоставленной части стало лучше"
+		}
+		return "Стало лучше"
+	case analyze.ChangeRegressed:
+		if comparability == analyze.ScenarioPartial {
+			return "В сопоставленной части стало хуже"
+		}
+		return "Стало хуже"
+	case analyze.ChangeUnchanged:
+		return "Заметных изменений не обнаружено"
+	case analyze.ChangeMixed:
+		return "Результат смешанный"
+	case analyze.ChangeNotComparable:
+		return "В этих записях разные сценарии"
+	default:
+		return "Пока недостаточно данных для общего вывода"
+	}
+}
+
+func comparisonOutcomeTone(outcome analyze.ComparisonChange) string {
+	switch outcome {
+	case analyze.ChangeImproved:
+		return "ok"
+	case analyze.ChangeRegressed:
+		return "high"
+	case analyze.ChangeMixed:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func comparisonScopeLine(scope analyze.ComparisonScope) string {
+	switch scope.Comparability {
+	case analyze.ScenarioFull:
+		return "Сценарии двух записей сопоставлены полностью. Вывод относится только к записанной работе."
+	case analyze.ScenarioPartial:
+		if scope.CommonSubpathGroups > 0 && scope.ExactMatchGroups == 0 {
+			return fmt.Sprintf("Найдена общая последовательность действий: база %s, проверяемый прогон %s. Метрики целых сценариев не сравниваются, потому что начало или продолжение различаются.", coveragePhrase(scope.Baseline), coveragePhrase(scope.Candidate))
+		}
+		if scope.CommonSubpathGroups > 0 {
+			return fmt.Sprintf("Сопоставлена часть сценариев: база %s, проверяемый прогон %s; дополнительно найдено общих подпутей: %d. Итог рассчитан только по полностью совпавшим действиям.", coveragePhrase(scope.Baseline), coveragePhrase(scope.Candidate), scope.CommonSubpathGroups)
+		}
+		return fmt.Sprintf("Сопоставлена часть сценариев: база %s, проверяемый прогон %s. Остальная работа не влияет на итог.", coveragePhrase(scope.Baseline), coveragePhrase(scope.Candidate))
+	case analyze.ScenarioNone:
+		return "Общей части для честного сравнения нет. Запишите одинаковый сценарий в приложении и повторите сравнение."
+	default:
+		return "Область сравнения определить не удалось. Добавьте метки сценария или используйте записи с поддержкой профилей операций."
+	}
+}
+
+func coveragePhrase(coverage analyze.ScenarioCoverage) string {
+	duration := fmt.Sprintf("по длительности %d мс из неизвестного объёма", coverage.MatchedDurationMS)
+	if coverage.DurationKnown {
+		duration = fmt.Sprintf("по длительности %d из %d мс", coverage.MatchedDurationMS, coverage.TotalDurationMS)
+	}
+	if !coverage.TotalKnown {
+		return fmt.Sprintf("сопоставлено %d, общий объём неизвестен; %s", coverage.Matched, duration)
+	}
+	return fmt.Sprintf("%d из %d; %s", coverage.Matched, coverage.Total, duration)
+}
+
+func comparisonMetricOverviewItem(change analyze.MetricChange) comparisonOverviewItem {
+	detail := "Данные для сопоставления недоступны."
+	if change.Before != nil && change.After != nil {
+		detail = fmt.Sprintf("%g → %g %s", *change.Before, *change.After, change.Unit)
+	} else if change.Eligibility.Reason != analyze.ReasonNone {
+		detail = "Не вошло в сравнение: " + string(change.Eligibility.Reason)
+	}
+	return comparisonOverviewItem{Name: change.Name, Detail: detail, Change: change.Change, Tone: comparisonOutcomeTone(change.Change)}
+}
+
+func comparisonProblemOverviewItem(delta analyze.ProblemDelta) comparisonOverviewItem {
+	name := delta.Fingerprint
+	if delta.Candidate != nil && delta.Candidate.Title != "" {
+		name = delta.Candidate.Title
+	} else if delta.Baseline != nil && delta.Baseline.Title != "" {
+		name = delta.Baseline.Title
+	}
+	detail := delta.Note
+	switch delta.Observation {
+	case analyze.ObservationNotObservedAfter:
+		if delta.Change == analyze.ChangeImproved && delta.Note != "" {
+			detail = delta.Note
+		} else {
+			detail = "После изменений проблема не наблюдалась, но это не подтверждает её устранение без одинакового выполнения целевого сценария."
+		}
+	case analyze.ObservationObservedOnlyAfter:
+		detail = "Проблема наблюдалась только в проверяемой записи; вывод зависит от одинакового выполнения целевого сценария."
+	case analyze.ObservationTargetNotExercised:
+		detail = "Целевой сценарий не выполнялся в одной из записей."
+	case analyze.ObservationMeasurementUnavailable:
+		detail = "Нужное измерение недоступно."
+	case analyze.ObservationAmbiguousMatch:
+		detail = "Найдено несколько возможных соответствий; автоматический выбор не сделан."
+	}
+	return comparisonOverviewItem{Name: name, Detail: detail, Change: delta.Change, Tone: comparisonOutcomeTone(delta.Change)}
+}
+
 type routeCompareRow struct {
 	Route             string
 	BaselineCount     int

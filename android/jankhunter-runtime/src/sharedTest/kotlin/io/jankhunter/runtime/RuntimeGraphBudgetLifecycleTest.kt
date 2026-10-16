@@ -80,7 +80,7 @@ class RuntimeGraphBudgetLifecycleTest {
     fun coldProducerDenialCountsKnownSemanticEdgesAndUnknownMethodEntriesSeparately() {
         val root = Files.createTempDirectory("jh-graph-cold-budget").toFile()
         val writer = AsyncLogWriterFactory().open(root, JankHunterConfig.builder().autoStartCollectors(false).build(), "main")
-        val graph = RuntimeCallGraph({ 0L }, { null }, { 0L }, { 16 }, exactAdmission = { false },
+        val graph = RuntimeCallGraph({ 0L }, { null }, { 0L }, { 16 },
             producerStorageLimitBytes = 16_384L)
         val ready = List(3) { CountDownLatch(1) }
         val release = CountDownLatch(1)

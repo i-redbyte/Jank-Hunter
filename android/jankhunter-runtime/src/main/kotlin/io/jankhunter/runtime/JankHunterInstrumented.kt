@@ -14,3 +14,8 @@ internal annotation class JankHunterLifecycleInstrumented
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.BINARY)
 internal annotation class JankHunterLifecycleAccessorsV1
+
+/** Idempotency marker for the separate causal provenance pass. */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.BINARY)
+internal annotation class JankHunterCausalInstrumented

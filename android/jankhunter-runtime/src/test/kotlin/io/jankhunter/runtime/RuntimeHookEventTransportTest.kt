@@ -20,6 +20,75 @@ import org.junit.Test
 
 class RuntimeHookEventTransportTest {
     @Test
+    fun saturatedEventProducerReturnsBeforeConsumerIsReleased() {
+        val directory = Files.createTempDirectory("jankhunter-events-no-producer-wait").toFile()
+        val writer = writer(directory)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport({ 16 }, { 16 },
+            consumerLoopObserver = { entered.countDown(); release.await() })
+        transport.start(writer)
+        val applicationThread = Thread {
+            try { repeat(257) { transport.recordMethod(it.toLong(), "method") } }
+            finally { done.countDown() }
+        }
+        try {
+            assertTrue(entered.await(5L, TimeUnit.SECONDS))
+            applicationThread.start()
+            assertTrue("event producer waited for the consumer", done.await(100L, TimeUnit.MILLISECONDS))
+            assertEquals(256L, transport.acceptedForTest())
+            assertEquals(257L, transport.attemptedForTest())
+            assertEquals(0L, transport.backpressureCountForTest())
+        } finally {
+            applicationThread.interrupt()
+            release.countDown()
+            applicationThread.join(5_000L)
+            transport.stopAndFlush(5_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun retainedTerminatedThreadsDoNotRetainProducerBuffers() = withTransport { transport ->
+        val retained = List(32) { index -> Thread { transport.recordMethod(index.toLong(), "method") } }
+        retained.forEach(Thread::start)
+        retained.forEach { it.join(5_000L); assertFalse(it.isAlive) }
+        assertTrue(transport.flushBlocking(5_000L))
+        assertEquals(32L, transport.acceptedForTest())
+        assertEquals(32L, transport.emittedForTest())
+        assertEquals("terminated Thread references retained diagnostic arrays", 0, transport.registeredProducerCountForTest())
+        assertEquals(32, retained.size)
+    }
+
+    @Test
+    fun stalledConsumerCannotAllocateUnboundedProducerArrays() {
+        val directory = Files.createTempDirectory("jankhunter-events-producer-quota").toFile()
+        val writer = writer(directory)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val transport = RuntimeHookEventTransport({ 16 }, { 16 }, consumerLoopObserver = { entered.countDown(); release.await() })
+        transport.start(writer)
+        try {
+            assertTrue(entered.await(5L, TimeUnit.SECONDS))
+            // Retain the Thread objects to prevent GC from acting as a hidden resource limit.
+            val retained = List(513) { index -> Thread { transport.recordMethod(index.toLong(), "method") } }
+            retained.forEach { it.start(); it.join(5_000L); assertFalse(it.isAlive) }
+            assertEquals(512, transport.registeredProducerCountForTest())
+            assertEquals(512L, transport.acceptedForTest())
+            assertEquals(513L, transport.attemptedForTest())
+        } finally {
+            release.countDown()
+            transport.stopAndFlush(5_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun acceptedEventsAreEitherEmittedOrReportedLost() = withTransport { transport ->
         repeat(10_000) { transport.recordMethod(it.toLong() and 7L, "method") }
 
@@ -61,7 +130,7 @@ class RuntimeHookEventTransportTest {
 
             assertEquals(1L, transport.acceptedForTest())
             assertEquals(1L, transport.emittedForTest())
-            val file = directory.listFiles { candidate -> candidate.extension == "jhlog" }.orEmpty().single()
+            val file = directory.walkTopDown().single { candidate -> candidate.isFile && candidate.extension == "jhlog" }
             val decoded = decodedChunks(file.readBytes())
             assertTrue(
                 "stable symbol tokens were not embedded",
@@ -106,25 +175,26 @@ class RuntimeHookEventTransportTest {
     }
 
     @Test
-    fun exactBufferBackpressurePreservesBurst() {
+    fun historicalExactSettingAccountsBurstLossWithoutWaiting() {
         val directory = Files.createTempDirectory("jankhunter-runtime-hook-backpressure").toFile()
         val writer = writer(directory)
         val transport = RuntimeHookEventTransport(
             maxCounterKeys = { 16 },
             maxLogSpamKeys = { 16 },
-            exactAdmission = { true },
-            admissionWaitNanos = { TimeUnit.SECONDS.toNanos(1L) },
             consumerDelayNanos = TimeUnit.MILLISECONDS.toNanos(10L),
         )
         transport.start(writer)
         try {
-            repeat(10_000) { event -> assertTrue(transport.recordMethod(event.toLong() and 7L, "method")) }
+            var admitted = 0L
+            repeat(10_000) { event -> if (transport.recordMethod(event.toLong() and 7L, "method")) admitted++ }
             val observedBackpressure = transport.backpressureCountForTest()
             assertTrue(transport.flushBlocking(10_000L))
-            assertEquals(10_000L, transport.acceptedForTest())
-            assertEquals(10_000L, transport.emittedForTest())
+            assertEquals(admitted, transport.acceptedForTest())
+            assertEquals(admitted, transport.emittedForTest())
+            assertEquals(10_000L, transport.attemptedForTest())
             assertEquals(0L, transport.acceptedLossForTest())
-            assertTrue(observedBackpressure > 0L)
+            assertTrue(admitted < 10_000L)
+            assertEquals(0L, observedBackpressure)
         } finally {
             transport.stopAndFlush(5_000L)
             transport.clear()
@@ -158,7 +228,6 @@ class RuntimeHookEventTransportTest {
         val transport = RuntimeHookEventTransport(
             maxCounterKeys = { 16 },
             maxLogSpamKeys = { 16 },
-            exactAdmission = { true },
             consumerDelayNanos = TimeUnit.MILLISECONDS.toNanos(100L),
         )
         transport.start(writer)
@@ -185,7 +254,6 @@ class RuntimeHookEventTransportTest {
         val transport = RuntimeHookEventTransport(
             maxCounterKeys = { 16 },
             maxLogSpamKeys = { 16 },
-            exactAdmission = { true },
             consumerLoopObserver = {
                 consumerEntered.countDown()
                 releaseConsumer.await()
@@ -219,7 +287,6 @@ class RuntimeHookEventTransportTest {
         val transport = RuntimeHookEventTransport(
             maxCounterKeys = { 16 },
             maxLogSpamKeys = { 16 },
-            exactAdmission = { true },
             publisherAdmissionObserver = {
                 admitted.countDown()
                 assertTrue("publisher release timed out", release.await(5L, TimeUnit.SECONDS))
@@ -259,7 +326,6 @@ class RuntimeHookEventTransportTest {
         val transport = RuntimeHookEventTransport(
             maxCounterKeys = { 16 },
             maxLogSpamKeys = { 16 },
-            exactAdmission = { true },
             consumerLoopObserver = {
                 consumerEntered.countDown()
                 assertTrue("consumer failure trigger timed out", failConsumer.await(5L, TimeUnit.SECONDS))

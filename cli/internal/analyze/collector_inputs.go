@@ -127,3 +127,42 @@ func (c *collector) latestQualityTotals() map[uint64]uint64 {
 	}
 	return totals
 }
+
+func (c *collector) unobservedAcceptedEvents() uint64 {
+	unobserved := uint64(0)
+	// Producer acceptance is cumulative and may include events queued beyond a rotation
+	// capture frontier. Only a terminal producer boundary proves that residual gap was lost.
+	for _, state := range c.qualitySnapshots {
+		if state.terminal {
+			continue
+		}
+		accepted := state.snapshot.Counters[jhlog.QualityAcceptedEventTotal]
+		written := state.snapshot.Counters[jhlog.QualityWrittenEventTotal]
+		known := transportEventLoss(state.snapshot.Counters, jhlog.QualityLossIOLost,
+			jhlog.QualityLossOversized, jhlog.QualityLossSizeLimit, jhlog.QualityLossStorageBudget)
+		if accepted > written && accepted-written > known {
+			unobserved = saturatingUint64Sum(unobserved, accepted-written-known)
+		}
+	}
+
+	return unobserved
+}
+
+func isTerminalQualityBoundary(result jhlog.StreamResult) bool {
+	if !result.Sealed || result.SegmentEnd == nil {
+		return false
+	}
+	switch result.SegmentEnd.Reason {
+	case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown, jhlog.SegmentEndIOError, jhlog.SegmentEndSizeLimit, jhlog.SegmentEndStorageBudget:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalAcceptedGap(gap, unobserved uint64) uint64 {
+	if gap <= unobserved {
+		return 0
+	}
+	return gap - unobserved
+}

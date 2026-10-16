@@ -11,6 +11,49 @@ import org.junit.Test
 
 class CrossProcessFileLocksTest {
     @Test
+    fun nonblockingSelectionRejectsAnExistingFileLockWithoutRunningTheTransaction() {
+        val directory = Files.createTempDirectory("jh-busy-selection").toFile()
+        try {
+            java.io.RandomAccessFile(File(directory, ".storage-directory.lock"), "rw").use { file ->
+                file.channel.lock().use {
+                    assertThrows(IOException::class.java) {
+                        CrossProcessFileLocks.withoutLockWait {
+                            CrossProcessFileLocks.withDirectoryLock(directory, ".storage-directory.lock") {
+                                fail("busy storage must not be changed")
+                            }
+                        }
+                    }
+                }
+            }
+            assertEquals(0, processLockCount(directory))
+            // The nonblocking mode must not escape into an unrelated transaction.
+            CrossProcessFileLocks.withDirectoryLock(directory, ".storage-directory.lock") { }
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test
+    fun nonblockingSelectionRejectsABusyInProcessMutex() {
+        val directory = Files.createTempDirectory("jh-busy-process-selection").toFile()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val owner = Thread {
+            CrossProcessFileLocks.withDirectoryLock(directory, ".storage-directory.lock") {
+                entered.countDown()
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            }
+        }
+        try {
+            owner.start()
+            check(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertThrows(IOException::class.java) {
+                CrossProcessFileLocks.withoutLockWait {
+                    CrossProcessFileLocks.withDirectoryLock(directory, ".storage-directory.lock") { fail("busy mutex") }
+                }
+            }
+        } finally { release.countDown(); owner.join(5_000); directory.deleteRecursively() }
+    }
+
+    @Test
     fun completedScopesReleaseMonitorsWhileAnUnrelatedOwnerRemainsActive() {
         val directory = Files.createTempDirectory("jankhunter-unrelated-lock").toFile()
         try {

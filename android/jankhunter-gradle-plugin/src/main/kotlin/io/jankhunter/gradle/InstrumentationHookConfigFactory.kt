@@ -3,6 +3,7 @@ package io.jankhunter.gradle
 /** Single mapping boundary from Gradle providers to the immutable ASM instrumentation model. */
 internal object InstrumentationHookConfigFactory {
     fun create(params: JankHunterInstrumentationParameters): HookConfig = HookConfig(
+        metadataCompatibilityMode = params.metadataCompatibilityMode.getOrElse(JankHunterMetadataCompatibilityMode.COMPATIBILITY),
         autoInit = params.autoInit.getOrElse(false),
         methodCounters = params.methodCounters.getOrElse(false),
         methodFilterMode = params.methodFilterMode.getOrElse(JankHunterMethodFilterMode.FILTER),
@@ -11,6 +12,8 @@ internal object InstrumentationHookConfigFactory {
         okHttpHelperAvailable = params.okHttpHelperAvailable.getOrElse(false),
         handlers = params.handlers.getOrElse(false),
         executors = params.executors.getOrElse(false),
+        threadLifecycle = params.threadLifecycle.getOrElse(false),
+        concurrencyDiagnostics = params.concurrencyDiagnostics.getOrElse(false),
         coroutines = params.coroutines.getOrElse(false),
         interactionOperations = params.interactionOperations.getOrElse(false),
         logSpam = params.logSpam.getOrElse(false),

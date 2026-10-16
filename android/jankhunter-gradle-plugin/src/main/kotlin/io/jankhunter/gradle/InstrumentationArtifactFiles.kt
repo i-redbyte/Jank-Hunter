@@ -8,6 +8,18 @@ import java.nio.file.StandardCopyOption
 import java.util.Locale
 
 internal object InstrumentationArtifactFiles {
+    fun writeManyAtomically(outputs: Map<String, File>, write: (Map<String, Writer>) -> Unit) {
+        val entries = outputs.entries.toList()
+        val writers = HashMap<String, Writer>()
+        fun open(index: Int) {
+            if (index == entries.size) write(writers)
+            else {
+                val entry = entries[index]
+                writeAtomically(entry.value) { writer -> writers[entry.key] = writer; open(index + 1) }
+            }
+        }
+        open(0)
+    }
     fun writeClassShard(directoryPath: String, className: String, text: String) {
         val shard = classShard(directoryPath, className) ?: return
         if (text.isBlank()) {
@@ -30,7 +42,7 @@ internal object InstrumentationArtifactFiles {
         writeAtomically(target) { writer -> writer.write(text) }
     }
 
-    private fun writeAtomically(target: File, write: (Writer) -> Unit) {
+    fun writeAtomically(target: File, write: (Writer) -> Unit) {
         val parent = requireNotNull(target.absoluteFile.parentFile) { "Artifact target must have a parent: $target" }
         Files.createDirectories(parent.toPath())
         val tmp = Files.createTempFile(parent.toPath(), ".${target.name}.", ".tmp").toFile()
@@ -95,7 +107,7 @@ internal object InstrumentationArtifactFiles {
         )
     }
 
-    fun mergeJsonlFiles(files: Collection<File>, outputFile: File) {
+    fun mergeJsonlFiles(files: Collection<File>, outputFile: File, consume: (String) -> Unit = {}) {
         writeAtomically(outputFile) { writer ->
             files
                 .sortedWith(compareBy<File> { it.name }.thenBy { it.parentFile.name })
@@ -104,6 +116,7 @@ internal object InstrumentationArtifactFiles {
                         lines.forEach { line ->
                             val trimmed = line.trim()
                             if (trimmed.isNotEmpty()) {
+                                consume(trimmed)
                                 writer.write(trimmed)
                                 writer.write("\n")
                             }

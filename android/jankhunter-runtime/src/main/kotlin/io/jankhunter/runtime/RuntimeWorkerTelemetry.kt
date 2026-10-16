@@ -1,11 +1,18 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.WorkSubmissionObservation
+import io.jankhunter.runtime.internal.io.WorkSubmissionPolicy
+import io.jankhunter.runtime.internal.io.WorkChainEdgeObservation
+import io.jankhunter.runtime.internal.io.QualityCounterId
 import android.os.Looper
 import android.os.SystemClock
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
+import io.jankhunter.runtime.internal.io.WorkerProgressObservation
 import io.jankhunter.runtime.internal.io.Jhlog
 import java.lang.ref.WeakReference
+
+private const val MAX_CHAIN_PARENTS = 8
 
 internal class RuntimeWorkerTelemetry(
     private val access: RuntimeTelemetryAccess,
@@ -26,10 +33,157 @@ internal class RuntimeWorkerTelemetry(
             mostSignificantBits xor instanceSalt,
             java.lang.Long.rotateLeft(leastSignificantBits, ID_ROTATION),
         )
-        return mixed.nonZero()
+        val id = mixed.nonZero()
+        RuntimeHookGuard.run {
+            if (isEnabled()) access.writer?.workerIdentity(id, mostSignificantBits, leastSignificantBits)
+        }
+        return id
     }
 
     fun enqueued(instanceId: Long, periodic: Boolean) = registrationEvent(instanceId, periodic, Jhlog.WORKER_STAGE_ENQUEUED)
+
+    fun submitted(most: Long, least: Long, periodic: Boolean, uniqueName: String?, policy: String?, omitted: Int, expectedEpoch: Long = 0, callerSource: String? = null) {
+        RuntimeHookGuard.run {
+            if (!isEnabled()) return@run
+            val epoch = access.collectionEpoch ?: return@run
+            if (expectedEpoch != 0L && epoch.id != expectedEpoch) return@run
+            val selected = if (policy == null) WorkSubmissionPolicy.NONE else WorkSubmissionPolicy.valueOf(policy)
+            val name = submissionText(uniqueName)
+            val source = submissionText(callerSource)?.takeIf { it.isNotEmpty() }
+            val hints = epoch.workBuilders.find(most, least)
+            access.ensureContextRecorded(activeWriter = epoch.writer)
+            epoch.writer.workSubmission(WorkSubmissionObservation(
+                most, least, SystemClock.elapsedRealtimeNanos().coerceAtLeast(0), periodic, name, selected,
+                omitted.coerceAtLeast(0), uniqueName != null && name != uniqueName,
+                source ?: if (hints != null) "unknown" else null, source != null && source != callerSource,
+                backoffPolicy = hints?.backoffPolicy ?: 0,
+                requestedBackoffMS = hints?.backoffDelayMS ?: 0,
+                quotaPolicy = hints?.quotaPolicy ?: 0,
+                requestedPeriodMS = hints?.periodMS.takeIf { periodic },
+                requestedFlexMS = hints?.flexMS.takeIf { periodic },
+                requestedInitialDelayMS = hints?.initialDelayMS,
+            ))
+        }
+    }
+
+    private fun submissionText(value: String?): String? = value?.let {
+        val end = minOf(it.length, 128)
+        it.substring(0, if (end > 0 && Character.isHighSurrogate(it[end - 1])) end - 1 else end)
+    }
+
+    fun registrationEpoch(): Long = RuntimeHookGuard.value(0L) {
+        if (isEnabled()) access.collectionEpoch?.id ?: 0L else 0L
+    }
+
+    fun builderPeriodic(builder: Any, periodMS: Long, flexMS: Long?) = builderHint {
+        it.workBuilders.periodic(builder, periodMS, flexMS)
+    }
+
+    fun builderInitialDelay(builder: Any, delayMS: Long) = builderHint {
+        it.workBuilders.initialDelay(builder, delayMS)
+    }
+
+    fun builderBackoff(builder: Any, policy: Int, delayMS: Long) = builderHint {
+        it.workBuilders.backoff(builder, policy, delayMS)
+    }
+
+    fun builderExpedited(builder: Any, quotaPolicy: Int) = builderHint {
+        it.workBuilders.expedited(builder, quotaPolicy)
+    }
+
+    fun builderBuilt(builder: Any, most: Long, least: Long) = builderHint {
+        it.workBuilders.built(builder, most, least)
+    }
+
+    private inline fun builderHint(crossinline capture: (RuntimeCollectionEpoch) -> Boolean) {
+        RuntimeHookGuard.run {
+            val epoch = access.collectionEpoch ?: return@run
+            if (isEnabled() && !capture(epoch)) epoch.writer.recordQuality(QualityCounterId.WORK_REQUEST_BUILDER_OMITTED)
+        }
+    }
+
+    fun chainOmitted(expectedEpoch: Long, count: Int) {
+        if (count <= 0) return
+        RuntimeHookGuard.run {
+            val epoch = access.collectionEpoch ?: return@run
+            if (isEnabled() && epoch.id == expectedEpoch) {
+                epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED, count.toLong())
+            }
+        }
+    }
+
+    fun chainRoot(expectedEpoch: Long, continuation: Any, most: Long, least: Long, uniqueName: String?, policy: String?, callerSource: String) {
+        RuntimeHookGuard.run {
+            val epoch = access.collectionEpoch ?: return@run
+            if (!isEnabled() || epoch.id != expectedEpoch) return@run
+            if (!epoch.workChains.root(continuation, most, least)) {
+                epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED)
+                return@run
+            }
+            val name = submissionText(uniqueName)
+            val source = submissionText(callerSource)?.takeIf(String::isNotEmpty) ?: "unknown"
+            access.ensureContextRecorded(activeWriter = epoch.writer)
+            epoch.writer.workChainRoot(WorkSubmissionObservation(
+                most, least, SystemClock.elapsedRealtimeNanos().coerceAtLeast(0), false,
+                name, if (policy == null) WorkSubmissionPolicy.NONE else WorkSubmissionPolicy.valueOf(policy), 0,
+                nameTruncated = uniqueName != null && name != uniqueName,
+                callerSource = source, sourceTruncated = source != callerSource,
+            ))
+        }
+    }
+
+    fun chainChild(expectedEpoch: Long, parent: Any, continuation: Any, most: Long, least: Long, callerSource: String) {
+        RuntimeHookGuard.run {
+            val epoch = access.collectionEpoch ?: return@run
+            if (!isEnabled() || epoch.id != expectedEpoch) return@run
+            val observedNanos = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0)
+            val source = submissionText(callerSource)?.takeIf(String::isNotEmpty) ?: "unknown"
+            var contextRecorded = false
+            val retained = epoch.workChains.then(parent, continuation, most, least) { prerequisite, child ->
+                if (!contextRecorded) {
+                    access.ensureContextRecorded(activeWriter = epoch.writer)
+                    contextRecorded = true
+                }
+                epoch.writer.workChainEdge(WorkChainEdgeObservation(
+                    prerequisite.most, prerequisite.least, child.most, child.least, observedNanos, source,
+                    sourceTruncated = source != callerSource,
+                ))
+            }
+            if (!retained) epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED)
+        }
+    }
+
+    fun chainCombine(expectedEpoch: Long, parents: List<*>, continuation: Any) {
+        RuntimeHookGuard.run {
+            val epoch = access.collectionEpoch ?: return@run
+            if (!isEnabled() || epoch.id != expectedEpoch) return@run
+            if (!isMaterialized(parents)) {
+                epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED)
+                return@run
+            }
+            if (parents.size > MAX_CHAIN_PARENTS) {
+                epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED,
+                    (parents.size - MAX_CHAIN_PARENTS).toLong())
+            }
+            if (!epoch.workChains.combine(parents, continuation)) {
+                epoch.writer.recordQuality(QualityCounterId.WORK_CHAIN_DECLARATION_OMITTED)
+            }
+        }
+    }
+
+    fun observeRegistration(expectedEpoch: Long, cancel: Runnable): JankHunterWorkRegistration? = RuntimeHookGuard.value(null) {
+        if (!isEnabled()) return@value null
+        val epoch = access.collectionEpoch ?: return@value null
+        if (expectedEpoch == 0L || epoch.id != expectedEpoch) return@value null
+        epoch.registrations.reserve(cancel) { instanceId, periodic ->
+            RuntimeHookGuard.run {
+                if (isEnabled() && access.collectionEpoch === epoch && instanceId != 0L) {
+                    recordEvent(0L, null, instanceId, Jhlog.WORKER_STAGE_REGISTERED_OBSERVED,
+                        Jhlog.WORKER_OUTCOME_UNKNOWN, periodic = periodic, activeWriter = epoch.writer)
+                }
+            }
+        }
+    }
 
     fun registeredObserved(instanceId: Long, periodic: Boolean) =
         registrationEvent(instanceId, periodic, Jhlog.WORKER_STAGE_REGISTERED_OBSERVED)
@@ -49,6 +203,38 @@ internal class RuntimeWorkerTelemetry(
     }
 
     fun isEnabled(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.WORKERS)
+
+    fun failed(token: Long, instanceId: Long, runAttempt: Int, generation: Int, throwable: Throwable) {
+        RuntimeHookGuard.run {
+            if (token == 0L || instanceId == 0L || runAttempt < 0 || generation < 0 || !isEnabled()) return@run
+            val epoch = access.collectionEpoch ?: return@run
+            if (!epoch.tokens.isActive(token, RuntimeAsyncTokenTable.WORKER)) return@run
+            val observation = captureWorkerFailure(instanceId, runAttempt, generation,
+                SystemClock.elapsedRealtimeNanos().coerceAtLeast(0), throwable)
+            access.ensureContextRecorded(activeWriter = epoch.writer)
+            epoch.writer.workerFailure(observation)
+        }
+    }
+
+    fun progressRequested(token: Long, instanceId: Long, runAttempt: Int, generation: Int, observedNanos: Long,
+                          fields: List<JankHunterWorkDataField>, omittedKeys: Int, truncatedFields: Int) =
+        recordProgress(token, WorkerProgressObservation(1, instanceId, runAttempt, generation,
+            observedNanos, 0, fields, omittedKeys, truncatedFields))
+
+    fun progressOmitted(token: Long, instanceId: Long, runAttempt: Int, generation: Int,
+                        observedNanos: Long, omittedUpdates: Int) =
+        recordProgress(token, WorkerProgressObservation(2, instanceId, runAttempt, generation,
+            observedNanos, omittedUpdates, emptyList(), 0, 0))
+
+    private fun recordProgress(token: Long, observation: WorkerProgressObservation) {
+        RuntimeHookGuard.run {
+            if (token == 0L || observation.instanceId == 0L || !isEnabled()) return@run
+            val epoch = access.epochForCompletion(token) ?: return@run
+            if (!epoch.tokens.isActive(token, RuntimeAsyncTokenTable.WORKER)) return@run
+            access.ensureContextRecorded(activeWriter = epoch.writer)
+            epoch.writer.workerProgress(observation)
+        }
+    }
 
     fun started(
         instanceId: Long,
@@ -83,6 +269,23 @@ internal class RuntimeWorkerTelemetry(
             generation = generation,
         )
         token
+    }
+
+    fun foreground(token: Long, instanceId: Long, workerName: String, runAttempt: Int,
+                   generation: Int, entered: Boolean) {
+        RuntimeHookGuard.run {
+            if (token == 0L || instanceId == 0L || !isEnabled()) return@run
+            val epoch = access.epochForCompletion(token) ?: return@run
+            if (!epoch.tokens.isActive(token, RuntimeAsyncTokenTable.WORKER)) return@run
+            val normalized = normalizedName(workerName)
+            recordEvent(
+                workerId = stableId(normalized), workerName = normalized, instanceId = instanceId,
+                stage = if (entered) Jhlog.WORKER_STAGE_FOREGROUND_ENTERED else
+                    Jhlog.WORKER_STAGE_FOREGROUND_ATTEMPT_BOUNDARY,
+                outcome = Jhlog.WORKER_OUTCOME_UNKNOWN, runAttempt = runAttempt, generation = generation,
+                activeWriter = epoch.writer,
+            )
+        }
     }
 
     fun finished(
@@ -250,6 +453,7 @@ internal class RuntimeWorkerTelemetry(
             JankHunterWorkerOutcome.FAILURE -> Jhlog.WORKER_OUTCOME_FAILURE
             JankHunterWorkerOutcome.RETRY -> Jhlog.WORKER_OUTCOME_RETRY
             JankHunterWorkerOutcome.CANCELLED -> Jhlog.WORKER_OUTCOME_CANCELLED
+            JankHunterWorkerOutcome.STOPPED -> Jhlog.WORKER_OUTCOME_STOPPED
             JankHunterWorkerOutcome.UNKNOWN -> Jhlog.WORKER_OUTCOME_UNKNOWN
         }
     }

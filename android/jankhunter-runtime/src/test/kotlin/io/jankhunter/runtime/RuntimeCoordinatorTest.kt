@@ -8,6 +8,15 @@ import org.junit.Test
 
 class RuntimeCoordinatorTest {
     @Test
+    fun initializationFailureDoesNotExposeRawExceptionMessages() {
+        val state = RuntimeState()
+        val coordinator = RuntimeCoordinator(state) { 1L }
+        coordinator.recordInitFailure(IllegalStateException("private-message-secret"), 1L, null, null)
+        org.junit.Assert.assertNull(state.initDiagnostics.failureMessage)
+        org.junit.Assert.assertEquals("IllegalStateException", state.initDiagnostics.failureClass)
+    }
+
+    @Test
     fun hooksRequireStartedWriterAndRuntimeFlag() {
         val state = RuntimeState()
         val coordinator = RuntimeCoordinator(state) { 1L }

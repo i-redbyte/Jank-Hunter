@@ -117,7 +117,7 @@ func detectScaleAndCollectRobust(paths []string, options analyze.Options, budget
 			robust.add(event, dict, symbols)
 			return budget.err()
 		}
-		streamResult, streamErr := stalls.streamWithResult(path, symbols, consume)
+		streamResult, streamErr := stalls.streamInputWithResult(input, symbols, consume)
 		if streamErr == nil {
 			_, streamErr = analyze.ValidateMappingInputs([]analyze.SessionInput{{Path: path, Header: streamResult.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping)
 		}
@@ -207,7 +207,7 @@ func collectBucketedMathInputs(paths []string, options analyze.Options, scale ti
 			networkCollector.add(normalizedEvent, dict, symbols)
 			return budget.err()
 		}
-		streamResult, streamErr := stalls.streamWithResult(path, symbols, consume)
+		streamResult, streamErr := stalls.streamInputWithResult(input, symbols, consume)
 		if streamErr == nil {
 			_, streamErr = analyze.ValidateMappingInputs([]analyze.SessionInput{{Path: path, Header: streamResult.Header}}, options.ObfuscationMap, options.AllowUnverifiedMapping)
 		}

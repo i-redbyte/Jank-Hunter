@@ -1,0 +1,44 @@
+# Only target entrypoints and reflection declarations retain names; helpers optimize/obfuscate.
+-keep class com.fixture.compat.CompatibilityProbe { public static java.lang.String verify(); }
+-keep class com.fixture.compat.HotPathProbe { public static java.lang.String verify(android.content.Context); }
+-keep class com.fixture.compat.Reflected { *; }
+-keepattributes RuntimeVisibleAnnotations,AnnotationDefault
+-keep class kotlin.Metadata { *; }
+# The test APK shares this dependency with the target and invokes its original ABI.
+-keep class androidx.tracing.Trace { *; }
+-keep class kotlin.jvm.internal.Lambda { *; }
+-keep class kotlin.jvm.internal.FunctionBase { *; }
+-keep class kotlin.jvm.functions.Function0 { *; }
+-keep class kotlin.jvm.functions.Function1 { *; }
+-keep class kotlin.Unit { *; }
+-keep class kotlin.Result { *; }
+-keep class kotlin.LazyKt { *; }
+-keep class kotlin.ResultKt { *; }
+-keep class kotlin.collections.ArraysKt* { *; }
+-keep class kotlin.collections.CollectionsKt* { *; }
+-keep class kotlin.collections.SetsKt { *; }
+-keep class kotlin.comparisons.ComparisonsKt { *; }
+-keep class kotlin.coroutines.ContinuationKt { *; }
+-keep class kotlin.coroutines.intrinsics.IntrinsicsKt { *; }
+-keep class kotlin.coroutines.jvm.internal.Boxing { *; }
+-keep class kotlin.coroutines.jvm.internal.DebugProbesKt { *; }
+-keep class kotlin.coroutines.jvm.internal.SpillingKt { *; }
+-keep class kotlin.coroutines.jvm.internal.SuspendLambda { *; }
+-keep class kotlin.io.FilesKt* { *; }
+-keep class kotlin.io.ByteStreamsKt { *; }
+-keep class kotlin.io.CloseableKt { *; }
+-keep class kotlin.jvm.internal.StringCompanionObject { *; }
+-keep class kotlin.jvm.internal.FunctionReference { *; }
+-keep class kotlin.jvm.internal.FunctionReferenceImpl { *; }
+-keep class kotlin.jvm.internal.AdaptedFunctionReference { *; }
+-keep class kotlin.jvm.internal.Ref$BooleanRef { *; }
+-keep class kotlin.jvm.internal.Ref$ObjectRef { *; }
+-keep class kotlin.ranges.RangesKt { *; }
+-keep class kotlin.sequences.SequencesKt* { *; }
+-keep class kotlin.text.StringsKt* { *; }
+-keep class kotlin.time.Duration { *; }
+-keep class kotlin.time.DurationKt { *; }
+-keep class kotlin.jvm.internal.Intrinsics { *; }
+
+-keep class com.fixture.compat.StabilityBenchmark { public static java.lang.String run(android.content.Context,java.lang.String,int); }
+-keep class com.fixture.compat.RegistryFootprint { public static java.lang.String capture(android.content.Context); }

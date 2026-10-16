@@ -35,7 +35,7 @@ def publication(repository, group, artifact, version, extension, classifier=""):
 def validate(repository, version, cli_version, run_cli):
     for name, extension in (
         ("annotations", "jar"), ("runtime", "aar"), ("okhttp3", "aar"),
-        ("workmanager", "aar"), ("android-sdk", "aar"), ("gradle-plugin", "jar"),
+        ("workmanager", "aar"), ("jankstats", "aar"), ("android-sdk", "aar"), ("gradle-plugin", "jar"),
     ):
         artifact, _, _ = publication(repository, "io.jankhunter", f"jankhunter-{name}", version, extension)
         if name == "gradle-plugin":

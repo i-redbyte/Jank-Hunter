@@ -16,6 +16,19 @@ REPOSITORY_ROOT = PROJECT_ROOT.parent
 ANDROID_ROOT = PROJECT_ROOT / "android"
 ANDROID_GRADLEW = ANDROID_ROOT / "gradlew"
 JANK_HUNTER_PREFIX = "jank-hunter/"
+JANK_HUNTER_SPEC_PREFIXES = tuple(
+    f"specs/{directory}/"
+    for directory in (
+        "010-metadata-adaptive-instrumentation",
+        "011-runtime-enabled-state",
+        "012-branch-reliability-review",
+        "013-observation-modes",
+        "014-cumulative-reconfiguration",
+        "015-android-integration-audit",
+        "016-global-kotlin-audit",
+        "017-worker-schedules",
+    )
+)
 JANK_HUNTER_CI_CONTROL_PATHS = frozenset(
     {
         "CODEOWNERS",
@@ -41,6 +54,7 @@ def is_jank_hunter_only_change(changed_paths: Sequence[str]) -> bool:
     return has_jank_hunter_change and all(
         path.startswith(JANK_HUNTER_PREFIX)
         or path in JANK_HUNTER_CI_CONTROL_PATHS
+        or path.startswith(JANK_HUNTER_SPEC_PREFIXES)
         for path in normalized
     )
 
@@ -94,7 +108,13 @@ def command_plan(check: Check) -> tuple[tuple[str, ...], ...]:
     if check is Check.STATIC_ANALYSIS:
         return (prefix + ("detekt",) + common,)
     if check is Check.ASSEMBLE:
-        return (prefix + ("assembleRelease",) + common,)
+        return (
+            prefix + ("assembleRelease",) + common,
+            (sys.executable, "-B", str(PROJECT_ROOT / "scripts/validate-kotlin-boundary.py"),
+             "--artifact", str(ANDROID_ROOT / "jankhunter-runtime/build/outputs/aar/jankhunter-runtime-release.aar"),
+             "--artifact", str(ANDROID_ROOT / "jankhunter-okhttp3/build/outputs/aar/jankhunter-okhttp3-release.aar"),
+             "--artifact", str(ANDROID_ROOT / "jankhunter-workmanager/build/outputs/aar/jankhunter-workmanager-release.aar")),
+        )
     if check is Check.UNIT_TESTS:
         return (
             prefix
@@ -103,6 +123,12 @@ def command_plan(check: Check) -> tuple[tuple[str, ...], ...]:
                 ":jankhunter-gradle-plugin:test",
             )
             + common,
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_jank_hunter_ci.py"),
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_stability*.py"),
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_release_environment.py"),
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_kotlin_boundary.py"),
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_wire_generate.py"),
+            (sys.executable, "-B", str(PROJECT_ROOT / "wire/generate.py"), "--check"),
         )
     raise AssertionError(f"Unsupported check: {check}")
 

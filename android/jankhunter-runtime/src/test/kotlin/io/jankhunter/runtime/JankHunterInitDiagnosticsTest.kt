@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -103,10 +102,10 @@ class JankHunterInitDiagnosticsTest {
         val diagnostics = awaitWriterFailure()
         assertEquals("failed", diagnostics.status)
         assertEquals(diagnostics.toString(), "IOException", diagnostics.failureClass)
-        assertTrue(diagnostics.failureMessage.orEmpty().contains("Cannot create Jank Hunter metadata directory"))
+        assertNull(diagnostics.failureMessage)
         assertEquals("com.example", diagnostics.processName)
         assertTrue(diagnostics.logDirectory.orEmpty().endsWith("files/jankhunter"))
-        assertNotNull(diagnostics.failureMessage)
+        assertNull(diagnostics.failureMessage)
         assertFalse(JankHunter.isStarted())
 
         assertTrue(filesDir.delete())
@@ -162,7 +161,7 @@ class JankHunterInitDiagnosticsTest {
         JankHunterTelemetry.counter("storage.valve.after", 1L)
         JankHunter.shutdown()
         assertTrue(bootstrap.jhlogs().isEmpty())
-        assertTrue(target.directory.jhlogs().size >= 2)
+        assertEquals(1, target.directory.jhlogs().size)
     }
 
     @Test
@@ -190,7 +189,7 @@ class JankHunterInitDiagnosticsTest {
     }
 
     @Test
-    fun reconfigureUsesInitialConfigAsBaseAndPreservesSelectedStorage() {
+    fun reconfigurePreservesLatestConfigAndSelectedStorage() {
         val root = tempDir()
         val bootstrap = File(root, "bootstrap")
         val target = FileStorage(File(root, "external"))
@@ -212,12 +211,12 @@ class JankHunterInitDiagnosticsTest {
         assertSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
 
         assertTrue(JankHunter.reconfigure("remote_config") { })
-        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+        assertSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
         JankHunterTelemetry.counter("reconfigured.storage", 1L)
         JankHunter.shutdown()
 
         assertTrue(bootstrap.jhlogs().isEmpty())
-        assertTrue(target.directory.jhlogs().size >= 3)
+        assertEquals(1, target.directory.jhlogs().size)
     }
 
     @Test
@@ -293,6 +292,81 @@ class JankHunterInitDiagnosticsTest {
 
         assertTrue(initialExternal.directory.jhlogs().isEmpty())
         assertTrue(builtIn.jhlogs().isNotEmpty())
+    }
+
+    @Test
+    fun staleStorageUpdaterCannotOverrideNewSelectionOrPublishConflictingPolicy() {
+        for (change in listOf("replacement", "reset", "policy")) {
+            val root = tempDir()
+            val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+            val selected = FileStorage(File(root, "selected-external"))
+            val outdated = FileStorage(File(root, "outdated-external"))
+            JankHunter.init(context, JankHunterConfig.builder().autoStartCollectors(false)
+                .runtimeEnabled(false).logDirectory(File(root, "logs")).build())
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+            try {
+                val update = executor.submit<Boolean> {
+                    JankHunter.reconfigure { builder ->
+                        if (change == "policy") {
+                            builder.storagePolicy(JankHunterStoragePolicy(File(root, "policy"), Long.MAX_VALUE,
+                                Long.MAX_VALUE, setOf("jhlog"), emptySet(), 8192, true))
+                        } else builder.binaryStorage(if (change == "reset") null else outdated)
+                        entered.countDown()
+                        check(release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    }
+                }
+                assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(selected))
+                release.countDown()
+                assertFalse(update.get(10, java.util.concurrent.TimeUnit.SECONDS))
+                assertTrue(JankHunter.reconfigure { builder ->
+                    assertSame(selected, builder.build().binaryStorage())
+                    assertEquals(null, builder.build().storagePolicy())
+                })
+                assertFalse(JankHunter.isStarted())
+            } finally {
+                release.countDown()
+                executor.shutdownNow()
+                JankHunter.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun explicitStorageUpdateAndResetAreNotSilentlyDiscarded() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        val target = FileStorage(File(root, "requested-external"))
+        JankHunter.init(context, JankHunterConfig.builder().autoStartCollectors(false)
+            .logDirectory(File(root, "logs")).build())
+        assertTrue(JankHunter.reconfigure { it.binaryStorage(target) })
+        assertTrue(JankHunter.reconfigure { builder -> assertSame(target, builder.build().binaryStorage()) })
+        assertTrue(JankHunter.reconfigure { it.binaryStorage(null) })
+        assertTrue(JankHunter.reconfigure { builder -> assertEquals(null, builder.build().binaryStorage()) })
+        assertTrue(target.directory.jhlogs().isNotEmpty())
+    }
+
+    @Test
+    fun failedExplicitStorageReplacementRestoresSelectionAndPreviousFlags() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        val original = FileStorage(File(root, "original-external"))
+        val replacement = FileStorage(File(root, "replacement-external"))
+        JankHunter.init(context, JankHunterConfig.builder().autoStartCollectors(false)
+            .logDirectory(File(root, "logs")).binaryStorage(original).build())
+        assertTrue(JankHunter.reconfigure { it.runtimeFeatureEnabled(JankHunterRuntimeFeature.EXECUTORS, false) })
+        assertFalse(JankHunter.reconfigure { builder ->
+            builder.binaryStorage(replacement)
+                .processNameRedactor(JankHunterProcessNameRedactor { error("replacement startup failed") })
+        })
+        assertTrue(JankHunter.reconfigure { builder ->
+            val config = builder.build()
+            assertSame(original, config.binaryStorage())
+            assertFalse(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.EXECUTORS))
+        })
+        assertTrue(JankHunter.isStarted())
     }
 
     @Test
@@ -389,12 +463,20 @@ class JankHunterInitDiagnosticsTest {
 
         assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(target))
         JankHunterTelemetry.counter("storage.valve.external", 1L)
-        assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(null))
+        val restore = JankHunter.switchBinaryStorage(null)
+        assertTrue(
+            "Restoring built-in storage must be completed or executing: $restore",
+            restore == JankHunterStorageSwitchResult.SWITCHED || restore == JankHunterStorageSwitchResult.IN_PROGRESS,
+        )
         JankHunterTelemetry.counter("storage.valve.internal", 1L)
         JankHunter.shutdown()
 
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L)
+        while ((target.directory.jhlogs().isNotEmpty() || bootstrap.jhlogs().size != 1) &&
+            System.nanoTime() < deadline
+        ) Thread.sleep(10L)
         assertTrue(target.directory.jhlogs().isEmpty())
-        assertTrue(bootstrap.jhlogs().size >= 3)
+        assertEquals(1, bootstrap.jhlogs().size)
     }
 
     @Test
@@ -480,7 +562,7 @@ class JankHunterInitDiagnosticsTest {
         override fun close() = output.close()
     }
 
-    private fun File.jhlogs(): List<File> = listFiles { file -> file.isFile && file.extension == "jhlog" }
-        .orEmpty()
+    private fun File.jhlogs(): List<File> = walkTopDown()
+        .filter { file -> file.isFile && file.extension == "jhlog" }
         .toList()
 }

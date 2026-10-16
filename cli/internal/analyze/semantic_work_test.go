@@ -337,8 +337,8 @@ func TestSemanticWorkBuildsHumanReadableProblems(t *testing.T) {
 		t.Fatalf("room finding = %+v", room)
 	}
 	worker := findingByDetector(report.Problems, "cpu.worker_execution")
-	if worker == nil || !strings.Contains(worker.Title, "повтор") {
-		t.Fatalf("worker finding = %+v", worker)
+	if worker != nil {
+		t.Fatalf("routine retry became an application problem: %+v", worker)
 	}
 }
 

@@ -622,6 +622,25 @@ func TestCollectionQualitySeparatesTransportAndRuntimeGraphAdmissionLoss(t *test
 	}
 }
 
+func TestCollectionQualityIncludesCausalPreAdmissionLoss(t *testing.T) {
+	collector := newCollector("causal contention", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityAcceptedEventTotal: 100,
+		jhlog.QualityWrittenEventTotal:  100,
+		jhlog.EventQualityCounterID(jhlog.EventCausalEvent, jhlog.QualityLossAdmissionContention): 2,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "causal.jhlog", Header: collectionTestHeader(31, 0),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+	got := collector.summary.CollectionQuality
+	if got.KnownLostEvents != 2 || got.PreAdmissionLostEvents != 2 || got.AdmissionContentionLostEvents != 2 || got.Complete {
+		t.Fatalf("causal admission loss was hidden by accepted=written: %+v", got)
+	}
+}
+
 func TestCollectionQualityFailsClosedOnSuppressedRuntimeHookFailure(t *testing.T) {
 	collector := newCollector("hook failure", 1, Options{})
 	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
@@ -1084,6 +1103,7 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 			Status:        jhlog.SegmentStatusClosedClean,
 			Sealed:        true,
 			LatestQuality: &quality,
+			SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
 		})
 		if err := collector.validateSegmentIdentityConsistency(); err != nil {
 			t.Fatal(err)
@@ -1233,6 +1253,48 @@ func TestDiagnosticCompletenessDoesNotDoubleCountRuntimeGraphLoss(t *testing.T) 
 	score, components := collectionDiagnosticCompleteness(quality)
 	if score != 84 || components[1].EarnedPoints != 4 || components[3].EarnedPoints != 20 {
 		t.Fatalf("runtime graph loss must affect only graph component: score=%v components=%+v", score, components)
+	}
+}
+
+func TestDisabledRuntimeGraphAllowsRecordedSemanticWorkerSpansOnly(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		input      uint64
+		emitted    uint64
+		decoded    uint64
+		wantReason bool
+	}{
+		{name: "semantic only", input: 2, emitted: 2, decoded: 2},
+		{name: "unexpected graph call", input: 3, emitted: 3, decoded: 3, wantReason: true},
+		{name: "unaccounted semantic loss", input: 2, emitted: 1, decoded: 1, wantReason: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			collector := newCollector(test.name, 1, Options{})
+			dict := map[uint64]string{1: "jankhunter.semantic.v1.worker.retry.background", 2: "Worker"}
+			for index := uint64(0); index < 2; index++ {
+				collector.add(dict, jhlog.Event{
+					Type: jhlog.EventRuntimeCall, TimeMS: index + 1,
+					Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
+					RuntimeCall: &jhlog.RuntimeCallEvent{CalleeRef: jhlog.LocalSymbol(2), Count: 1},
+				})
+			}
+			quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+				jhlog.QualityRuntimeGraphDisabled:     1,
+				jhlog.QualityRuntimeGraphInputTotal:   test.input,
+				jhlog.QualityRuntimeGraphEmittedTotal: test.emitted,
+			}}
+			collector.addStreamResult(jhlog.StreamResult{
+				Source: "semantic.jhlog", Header: collectionTestHeader(41, 0),
+				Status: jhlog.SegmentStatusClosedClean, Sealed: true,
+				LatestQuality: &quality, RuntimeGraphLogicalCalls: test.decoded,
+			})
+			collector.finalizeCollectionQuality()
+			got := collector.summary.CollectionQuality
+			hasReason := warningsContain(got.Reasons, "конфигурация противоречит данным")
+			if hasReason != test.wantReason {
+				t.Fatalf("disabled graph/semantic quality = %+v", got)
+			}
+		})
 	}
 }
 
@@ -2981,6 +3043,7 @@ func TestRequireCleanCohortsDoesNotMisclassifyCollectionLoss(t *testing.T) {
 		},
 	}
 	comparison := Compare(baseline, candidate)
+	comparison.Scope.Comparability = ScenarioFull
 	if len(comparison.CohortWarnings) != 0 || len(comparison.QualityWarnings) == 0 {
 		t.Fatalf("warning classes = cohort:%+v quality:%+v", comparison.CohortWarnings, comparison.QualityWarnings)
 	}

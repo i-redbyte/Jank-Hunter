@@ -54,7 +54,7 @@ internal class RuntimeAndroidComponentTelemetry(
             durationUs = RuntimeTraceTokenSource.durationUs(token, nowUs),
             componentFlags = serviceComponentFlags(stage, resultCode, resultObject),
         )
-        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE, forceRefresh = false)
+        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE)
     }
 
     fun recordServiceForegroundTransition(
@@ -82,7 +82,7 @@ internal class RuntimeAndroidComponentTelemetry(
                 0L
             },
         )
-        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE, forceRefresh = true)
+        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE)
     }
 
     fun enterReceiverCallback(
@@ -107,7 +107,7 @@ internal class RuntimeAndroidComponentTelemetry(
             durationUs = 0L,
             componentFlags = flags,
         )
-        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE, forceRefresh = false)
+        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE)
         return token
     }
 
@@ -189,7 +189,7 @@ internal class RuntimeAndroidComponentTelemetry(
             RuntimeTraceTokenSource.durationUs(snapshot.token, tokens.nowUs()),
             snapshot.flags,
         )
-        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE, forceRefresh = false)
+        access.recordProcessState(writer, Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE)
     }
 }
 

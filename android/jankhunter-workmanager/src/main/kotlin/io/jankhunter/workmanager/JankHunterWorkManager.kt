@@ -9,11 +9,14 @@ import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import androidx.work.WorkRequest
 import com.google.common.util.concurrent.ListenableFuture
+import io.jankhunter.runtime.JankHunterWorkRegistration
 import io.jankhunter.runtime.JankHunterWorkerRuntime
 import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Enqueues one request and asynchronously records observed registration of its UUID. */
 fun WorkManager.enqueueWithJankHunter(request: WorkRequest): Operation =
@@ -28,45 +31,71 @@ fun WorkManager.enqueueUniqueWorkWithJankHunter(
     existingWorkPolicy: ExistingWorkPolicy,
     request: OneTimeWorkRequest,
 ): Operation = enqueueUniqueWork(uniqueWorkName, existingWorkPolicy, request)
-    .trackIfActive(this) { WorkEnqueueBatch.capture(request) }
+    .trackIfActive(this, uniqueWorkName, existingWorkPolicy.name) { WorkEnqueueBatch.capture(request) }
 
 fun WorkManager.enqueueUniqueWorkWithJankHunter(
     uniqueWorkName: String,
     existingWorkPolicy: ExistingWorkPolicy,
     requests: List<OneTimeWorkRequest>,
 ): Operation = enqueueUniqueWork(uniqueWorkName, existingWorkPolicy, requests)
-    .trackIfActive(this) { WorkEnqueueBatch.capture(requests) }
+    .trackIfActive(this, uniqueWorkName, existingWorkPolicy.name) { WorkEnqueueBatch.capture(requests) }
 
 fun WorkManager.enqueueUniquePeriodicWorkWithJankHunter(
     uniqueWorkName: String,
     existingPeriodicWorkPolicy: ExistingPeriodicWorkPolicy,
     request: PeriodicWorkRequest,
 ): Operation = enqueueUniquePeriodicWork(uniqueWorkName, existingPeriodicWorkPolicy, request)
-    .trackIfActive(this) { WorkEnqueueBatch.capture(request) }
+    .trackIfActive(this, uniqueWorkName, existingPeriodicWorkPolicy.name) { WorkEnqueueBatch.capture(request) }
 
-private inline fun Operation.trackIfActive(manager: WorkManager, capture: () -> WorkEnqueueBatch): Operation {
-    if (!JankHunterWorkerRuntime.isActive()) return this
+private inline fun Operation.trackIfActive(
+    manager: WorkManager, uniqueName: String? = null, policy: String? = null,
+    capture: () -> WorkEnqueueBatch,
+): Operation {
+    val epoch = JankHunterWorkerRuntime.registrationEpoch()
+    if (epoch == 0L) return this
     return try {
-        track(capture(), WorkRegistrationLookup(manager::getWorkInfoById))
+        val batch = capture()
+        batch.recordSubmission(epoch, uniqueName, policy)
+        track(epoch, batch, WorkRegistrationLookup(manager::getWorkInfoById))
     } catch (_: Throwable) {
         this
     }
 }
 
-private fun Operation.track(batch: WorkEnqueueBatch, lookup: WorkRegistrationLookup): Operation {
+private fun Operation.track(epoch: Long, batch: WorkEnqueueBatch, lookup: WorkRegistrationLookup): Operation {
+    var registration: JankHunterWorkRegistration? = null
+    var listener: WorkEnqueueListener? = null
     try {
         val completion = result
-        completion.addListener(
-            WorkEnqueueListener(completion, batch, RuntimeWorkerEnqueueSink, lookup),
-            DirectExecutor,
-        )
+        val reference = AtomicReference<WorkEnqueueListener?>()
+        val lease = JankHunterWorkerRuntime.observeRegistration(
+            epoch,
+            Runnable { reference.getAndSet(null)?.cancelObservation() },
+        ) ?: return this
+        registration = lease
+        val observation = WorkEnqueueListener(completion, batch, WorkerEnqueueSink(lease::observed), lookup, lease)
+        listener = observation
+        reference.set(observation)
+        if (lease.isActive()) completion.addListener(observation, DirectExecutor) else observation.cancelObservation()
     } catch (_: Throwable) {
+        listener?.cancelObservation()
+        registration?.close()
         // Telemetry is fail-open: WorkManager already owns the returned operation.
     }
     return this
 }
 
-internal class WorkEnqueueBatch private constructor(private val entries: LongArray) {
+internal class WorkEnqueueBatch private constructor(private val entries: LongArray, val omittedRequests: Int = 0) {
+    fun recordSubmission(epoch: Long, uniqueName: String?, policy: String?) {
+        for (index in 0 until size) {
+            JankHunterWorkerRuntime.submittedForEpoch(
+                epoch,
+                entries[index * ENTRY_WIDTH + UUID_MOST_OFFSET], entries[index * ENTRY_WIDTH + UUID_LEAST_OFFSET],
+                periodicAt(index), uniqueName, policy, if (index == 0) omittedRequests else 0,
+            )
+        }
+    }
+
     val size: Int
         get() = entries.size / ENTRY_WIDTH
 
@@ -91,9 +120,10 @@ internal class WorkEnqueueBatch private constructor(private val entries: LongArr
         }
 
         fun capture(requests: List<WorkRequest>): WorkEnqueueBatch {
-            val entries = LongArray(requests.size * ENTRY_WIDTH)
-            requests.forEachIndexed { index, request -> capture(request, entries, index * ENTRY_WIDTH) }
-            return WorkEnqueueBatch(entries)
+            val count = minOf(requests.size, CAPTURE_LIMIT)
+            val entries = LongArray(count * ENTRY_WIDTH)
+            for (index in 0 until count) capture(requests[index], entries, index * ENTRY_WIDTH)
+            return WorkEnqueueBatch(entries, requests.size - count)
         }
 
         private fun capture(request: WorkRequest, entries: LongArray, offset: Int) {
@@ -103,6 +133,7 @@ internal class WorkEnqueueBatch private constructor(private val entries: LongArr
             entries[offset + PERIODIC_OFFSET] = if (request is PeriodicWorkRequest) 1L else 0L
         }
 
+        const val CAPTURE_LIMIT = 128
         private const val ENTRY_WIDTH = 4
         private const val UUID_MOST_OFFSET = 2
         private const val UUID_LEAST_OFFSET = 3
@@ -124,7 +155,10 @@ internal class WorkEnqueueListener(
     batch: WorkEnqueueBatch,
     sink: WorkerEnqueueSink,
     lookup: WorkRegistrationLookup,
+    registration: JankHunterWorkRegistration? = null,
 ) : Runnable {
+    private val cancelled = AtomicBoolean()
+    private var registration: JankHunterWorkRegistration? = registration
     private val work = AtomicInteger()
     private var completion: Future<*>? = completion
     private var batch: WorkEnqueueBatch? = batch
@@ -132,6 +166,11 @@ internal class WorkEnqueueListener(
     private var lookup: WorkRegistrationLookup? = lookup
     private var pending: ListenableFuture<WorkInfo?>? = null
     private var index = 0
+
+    fun cancelObservation() {
+        cancelled.set(true)
+        run()
+    }
 
     override fun run() {
         if (work.getAndIncrement() != 0) return
@@ -147,6 +186,7 @@ internal class WorkEnqueueListener(
     }
 
     private fun drainReady() {
+        if (inactive()) { release(); return }
         completion?.let { operation ->
             if (!operation.isDone) return
             try {
@@ -163,13 +203,14 @@ internal class WorkEnqueueListener(
         }
         val entries = batch ?: return
         while (index < entries.size) {
+            if (inactive()) { release(); return }
             val query = pending ?: startQuery(entries) ?: continue
             if (!query.isDone) return
             pending = null
             val current = index++
             try {
                 val observed = query.get()
-                if (observed != null && entries.matchesUuidAt(current, observed.id)) {
+                if (!inactive() && observed != null && entries.matchesUuidAt(current, observed.id)) {
                     sink?.accepted(entries.instanceIdAt(current), entries.periodicAt(current))
                 }
             } catch (interrupted: InterruptedException) {
@@ -199,18 +240,18 @@ internal class WorkEnqueueListener(
         }
     }
 
+    private fun inactive(): Boolean = cancelled.get() || registration?.isActive() == false
+
     private fun release() {
-        completion = null
+        val query = pending
         pending = null
+        completion = null
         batch = null
         sink = null
         lookup = null
-    }
-}
-
-private object RuntimeWorkerEnqueueSink : WorkerEnqueueSink {
-    override fun accepted(instanceId: Long, periodic: Boolean) {
-        JankHunterWorkerRuntime.registeredObserved(instanceId, periodic)
+        registration?.close()
+        registration = null
+        query?.cancel(false)
     }
 }
 

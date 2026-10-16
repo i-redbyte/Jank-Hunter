@@ -8,8 +8,6 @@ import java.util.concurrent.atomic.AtomicLong
 internal class RuntimeHookEventTransport(
     private val maxCounterKeys: RuntimeIntSource,
     private val maxLogSpamKeys: RuntimeIntSource,
-    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
-    private val admissionWaitNanos: RuntimeLongSource = RuntimeLongSource { 5_000_000L },
     private val consumerDelayNanos: Long = 0L,
     private val publisherAdmissionObserver: (() -> Unit)? = null,
     private val consumerLoopObserver: (() -> Unit)? = null,
@@ -41,7 +39,7 @@ internal class RuntimeHookEventTransport(
         }
         lateinit var session: RuntimeHookEventSession
         session = RuntimeHookEventSession(
-            maxCounterKeys, maxLogSpamKeys, exactAdmission, admissionWaitNanos, consumerDelayNanos,
+            maxCounterKeys, maxLogSpamKeys, consumerDelayNanos,
             publisherAdmissionObserver, consumerLoopObserver, consumerThreadFactory, producerRegistrationObserver,
             onStopped = { onStopped(session) },
         )

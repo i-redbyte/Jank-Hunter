@@ -4,7 +4,6 @@ import android.util.Printer
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeLongSource
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -13,6 +12,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MainLooperDispatchMonitorTest {
+    @Test
+    fun applicationPrinterExceptionsKeepTheirOriginalIdentity() {
+        val failure = IllegalStateException("host printer failed")
+        val original = Printer { throw failure }
+        var installed: Printer? = original
+        val monitor = MainLooperDispatchMonitor(1L, recordDispatch = { _, _, _ -> },
+            getMessageLogging = { installed }, setMessageLogging = { installed = it }, clockMs = { 0L })
+        monitor.start()
+        val active = checkNotNull(installed)
+        assertSame(failure, assertThrows(IllegalStateException::class.java) { active.println("dispatch") })
+        monitor.stop()
+        assertSame(original, installed)
+    }
+
     @Test
     fun startDoesNotReplacePrinterWhenCurrentPrinterCannotBeRead() {
         var installations = 0
@@ -33,10 +46,10 @@ class MainLooperDispatchMonitorTest {
 
     @Test
     fun dispatchRecorderAndClockUsePrimitivePorts() {
-        val recorder = MainLooperDispatchMonitor::class.java.getDeclaredField("recordDispatch")
         val constructors = MainLooperDispatchMonitor::class.java.declaredConstructors
 
-        assertFalse(recorder.type == Function3::class.java)
+        assertTrue(constructors.any { it.parameterTypes.contains(DispatchSampleRecorder::class.java) })
+        assertTrue(constructors.none { it.parameterTypes.contains(Function3::class.java) })
         assertTrue(constructors.any { it.parameterTypes.contains(RuntimeLongSource::class.java) })
     }
 

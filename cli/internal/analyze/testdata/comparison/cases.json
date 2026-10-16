@@ -1,0 +1,33 @@
+{
+  "schema": "jankhunter.comparison-corpus/v1",
+  "cases": [
+    {
+      "name": "same-scenario-improved",
+      "baseline": [{"operation":"chat.open","screen":"Chat","count":100,"failures":10,"total_ms":20000,"steps":["load","render"]}],
+      "candidate": [{"operation":"chat.open","screen":"Chat","count":100,"failures":2,"total_ms":10000,"steps":["load","render"]}],
+      "comparability": "full",
+      "outcome": "improved"
+    },
+    {
+      "name": "partially-overlapping-work",
+      "baseline": [{"operation":"chat.open","screen":"Chat","count":40,"failures":0,"total_ms":4000,"steps":["load","render"]},{"operation":"search","screen":"Search","count":60,"failures":0,"total_ms":6000,"steps":["load","render"]}],
+      "candidate": [{"operation":"chat.open","screen":"Chat","count":40,"failures":0,"total_ms":4000,"steps":["load","render"]},{"operation":"attachments","screen":"Files","count":20,"failures":0,"total_ms":2000,"steps":["load","render"]}],
+      "comparability": "partial",
+      "outcome": "unchanged"
+    },
+    {
+      "name": "different-scenarios",
+      "baseline": [{"operation":"chat.open","screen":"Chat","count":40,"failures":0,"total_ms":4000,"steps":["load","render"]}],
+      "candidate": [{"operation":"video.call","screen":"Call","count":40,"failures":0,"total_ms":4000,"steps":["connect","stream"]}],
+      "comparability": "none",
+      "outcome": "not_comparable"
+    },
+    {
+      "name": "unique-common-subpath",
+      "baseline": [{"operation":"chat.open","screen":"Chat","count":40,"failures":0,"total_ms":4000,"steps":["open","load","render"]}],
+      "candidate": [{"operation":"chat.from.push","screen":"Chat","count":40,"failures":0,"total_ms":4000,"steps":["resolve","load","render","mark-read"]}],
+      "comparability": "partial",
+      "outcome": "insufficient_data"
+    }
+  ]
+}

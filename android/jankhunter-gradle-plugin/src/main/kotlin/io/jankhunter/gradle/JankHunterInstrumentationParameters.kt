@@ -1,11 +1,31 @@
 package io.jankhunter.gradle
 
 import com.android.build.api.instrumentation.InstrumentationParameters
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.tasks.Classpath
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 
 interface JankHunterInstrumentationParameters : InstrumentationParameters {
+    @get:Classpath
+    val sdkCompileFiles: ConfigurableFileCollection
+
+    @get:Classpath
+    val sdkRuntimeFiles: ConfigurableFileCollection
+
+    @get:Input
+    val sdkRequiredOwners: SetProperty<String>
+
+    @get:Input
+    val requireSdk: Property<Boolean>
+
+    @get:Input
+    val metadataCompatibilityMode: Property<JankHunterMetadataCompatibilityMode>
+
+    @get:Input
+    val metadataReaderIdentity: Property<String>
+
     @get:Input
     val autoInit: Property<Boolean>
 
@@ -32,6 +52,12 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
 
     @get:Input
     val executors: Property<Boolean>
+
+    @get:Input
+    val threadLifecycle: Property<Boolean>
+
+    @get:Input
+    val concurrencyDiagnostics: Property<Boolean>
 
     @get:Input
     val coroutines: Property<Boolean>

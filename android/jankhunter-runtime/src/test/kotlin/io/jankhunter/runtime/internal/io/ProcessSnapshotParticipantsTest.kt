@@ -111,7 +111,7 @@ class ProcessSnapshotParticipantsTest {
     private fun waitUntilBlocked(thread: Thread): Boolean {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
         while (System.nanoTime() < deadline) {
-            if (thread.state == Thread.State.BLOCKED) return true
+            if (thread.state == Thread.State.BLOCKED || thread.state == Thread.State.WAITING) return true
             Thread.yield()
         }
         return false

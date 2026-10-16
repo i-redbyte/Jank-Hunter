@@ -224,29 +224,6 @@ func cloneHeapPaths(paths [][]HeapPathElement) [][]HeapPathElement {
 	return out
 }
 
-func heapPathSummaries(paths [][]HeapPathElement) []string {
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		labels := make([]string, 0, len(path))
-		for _, step := range path {
-			label := strings.TrimPrefix(step.ClassName, "GC root: ")
-			if label == "" {
-				label = step.Kind
-			}
-			if step.FieldName != "" {
-				label = step.FieldName + " → " + label
-			}
-			if label != "" {
-				labels = append(labels, label)
-			}
-		}
-		if len(labels) > 0 {
-			out = append(out, strings.Join(labels, " → "))
-		}
-	}
-	return uniqueStrings(out)
-}
-
 func runtimeLeakFingerprint(className, holder string, item memoryLeakStats) string {
 	return strings.Join([]string{
 		normalizeLeakToken(className),
@@ -864,15 +841,6 @@ func normalizeHeapHolderFieldOwner(value string) string {
 		value = value[:dot]
 	}
 	return normalizeHeapHolderClass(value)
-}
-
-func firstPositive(values ...uint64) uint64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 func splitHolderReference(holder string) (string, string) {

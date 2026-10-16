@@ -4,19 +4,17 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import java.io.File
-import java.util.concurrent.TimeUnit
 import org.junit.Assert.*
 import org.junit.Test
 
 class RuntimeGraphBudgetArtTest {
     @Test
-    fun recoveredStackWritesExactEdgesAndExplicitUnknownCoverageToJhlog() {
+    fun recoveredStackAccountsForBoundedAdmissionAndExplicitUnknownCoverage() {
         val context = InstrumentationRegistry.getInstrumentation().context
         val root = File(context.cacheDir, "graph-storage-wire").apply { deleteRecursively() }
         val writer = AsyncLogWriterFactory().open(root, JankHunterConfig.builder().autoStartCollectors(false)
             .runtimeCallGraphEnabled(true).build(), "main")
         val graph = RuntimeCallGraph({ System.nanoTime() / 1_000_000L }, { "Screen" }, { 1L }, { 512 },
-            admissionWaitNanos = { TimeUnit.SECONDS.toNanos(2L) },
             producerStorageLimitBytes = 32_768L)
         val tokens = LongArray(263)
         try {
@@ -30,8 +28,10 @@ class RuntimeGraphBudgetArtTest {
             for (index in 255 downTo 0) graph.exit(tokens[index], index + 1L)
             assertTrue(graph.flushBlocking(5_000L))
             assertEquals(255L, graph.attemptedForTest())
-            assertEquals(255L, graph.acceptedForTest())
-            assertEquals(255L, graph.emittedForTest())
+            assertTrue(graph.acceptedForTest() > 0L)
+            assertEquals(255L, graph.acceptedForTest() +
+                generationQuality(writer, QualityCounterId.RUNTIME_GRAPH_PRODUCER_CAPACITY_LOSS))
+            assertEquals(graph.acceptedForTest(), graph.emittedForTest())
             assertEquals(0L, graph.acceptedEventLossForTest())
             assertEquals(7L, generationQuality(writer, QualityCounterId.RUNTIME_GRAPH_STORAGE_SKIPPED_ENTRY_TOTAL))
             assertTrue(graph.storagePeakForTest() <= 32_768L)

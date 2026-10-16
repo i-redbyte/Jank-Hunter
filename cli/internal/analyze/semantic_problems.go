@@ -29,33 +29,42 @@ func (b *problemBuilder) detectSemanticWork() {
 
 func (b *problemBuilder) detectWorkerLifecycle() {
 	for _, item := range b.summary.WorkerAnalysis.Workers {
-		badOutcomes := saturatingUint64Sum(item.Failures, item.Retries, item.Cancelled)
-		long := item.RunMaxMS >= workerLongExecutionMS
-		repeated := item.Executions >= workerRepeatedMinCount && item.TotalRunMS >= workerRepeatedTotalMS
+		failures := item.Failures
+		long := item.RunSamples > 0 && item.RunMaxMS >= workerLongExecutionMS
+		repeated := item.RunSamples > 0 && item.Executions >= workerRepeatedMinCount && item.TotalRunMS >= workerRepeatedTotalMS
 		mainThread := item.MainThreadStarts > 0
-		if badOutcomes == 0 && !long && !repeated && !mainThread {
+		if failures == 0 && !long && !repeated && !mainThread {
 			continue
 		}
 		where := []ProblemLocation{{
 			Screen: item.Screen, Operation: item.Operation,
 			Owner: firstKnown(item.Worker, item.Owner), Method: item.Worker,
 		}}
-		title := displayUnknown(item.Worker, "Worker") + " выполняется слишком долго"
+		title := displayUnknown(item.Worker, "Worker") + ": завершённая попытка достигла порога проверки 10 с"
 		subcategory := "worker_long"
-		if badOutcomes > 0 {
+		if failures > 0 {
 			title = displayUnknown(item.Worker, "Worker") + " имеет неуспешные завершения"
 			subcategory = "worker_unsuccessful"
 		} else if mainThread {
-			title = displayUnknown(item.Worker, "Worker") + " запускает работу на главном потоке"
+			title = displayUnknown(item.Worker, "Worker") + ": событие начала записано на главном потоке"
 			subcategory = "worker_main_thread"
 		} else if repeated {
-			title = displayUnknown(item.Worker, "Worker") + " часто повторяет долгую работу"
+			title = displayUnknown(item.Worker, "Worker") + ": выполнения класса накопили 30 с"
 			subcategory = "worker_repeated"
 		}
 		confidence, reasons, limits := problemConfidence(b.summary, item.Executions, 1, true)
+		if mainThread {
+			limits = append(limits, "Флаг главного потока относится только к событию начала: где выполнялись этапы Worker после него, неизвестно.")
+		}
+		if long {
+			limits = append(limits, "Порог 10 с - повод сопоставить завершённую попытку с ожидаемой длительностью задачи; сам по себе он не доказывает дефект или нагрузку на CPU.")
+		}
+		if repeated {
+			limits = append(limits, "Числа объединяют разные UUID одного класса: они не доказывают повторное выполнение одного задания. Частота запусков зависит от расписания и условий, а накопленное время само по себе не доказывает лишнюю работу.")
+		}
 		if item.MissingStart > 0 || item.MissingFinish > 0 {
 			limits = append(limits, fmt.Sprintf(
-				"Lifecycle неполон: без start - %d, без finish - %d; незакрытые интервалы не включены в длительность и корреляции.",
+				"Неполнота сбора lifecycle: без start - %d, без finish - %d; это ограничение данных, а не доказательство ошибки приложения. Незакрытые интервалы не включены в длительность и корреляции.",
 				item.MissingStart, item.MissingFinish,
 			))
 		}
@@ -64,8 +73,16 @@ func (b *problemBuilder) detectWorkerLifecycle() {
 		}
 		evidence := []ProblemEvidence{
 			{Name: "Число попыток Worker", Observed: fmt.Sprint(item.Executions), Unit: "events", Sample: u64ptr(item.Executions), Source: "worker_lifecycle"},
-			{Name: "Самое долгое завершённое выполнение", Observed: fmt.Sprint(item.RunMaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", workerLongExecutionMS), Source: "worker_lifecycle"},
-			{Name: "Неуспешные завершения", Observed: fmt.Sprint(badOutcomes), Unit: "events", Sample: u64ptr(badOutcomes), Source: "worker_lifecycle"},
+			{Name: "Завершения с ошибкой", Observed: fmt.Sprint(failures), Unit: "events", Sample: u64ptr(failures), Source: "worker_lifecycle"},
+		}
+		if item.Retries > 0 || item.Cancelled > 0 {
+			evidence = append(evidence, ProblemEvidence{Name: "Повторы и отмены", Observed: fmt.Sprintf("повторов %d, отмен %d", item.Retries, item.Cancelled), Unit: "events", Source: "worker_lifecycle"})
+		}
+		if item.RunSamples > 0 {
+			evidence = append(evidence, ProblemEvidence{Name: "Максимум завершённой попытки", Observed: fmt.Sprint(item.RunMaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("порог проверки %d ms", workerLongExecutionMS), Source: "worker_lifecycle"})
+		}
+		if mainThread {
+			evidence = append(evidence, ProblemEvidence{Name: "События начала на главном потоке", Observed: fmt.Sprint(item.MainThreadStarts), Unit: "events", Sample: u64ptr(item.MainThreadStarts), Source: "worker_lifecycle"})
 		}
 		if item.WaitSamples > 0 {
 			evidence = append(evidence, ProblemEvidence{Name: "Ожидание запуска p95", Observed: fmt.Sprint(item.WaitP95MS), Unit: "ms", Source: "worker_lifecycle"})
@@ -76,35 +93,46 @@ func (b *problemBuilder) detectWorkerLifecycle() {
 		if item.CPUSamples > 0 {
 			evidence = append(evidence, ProblemEvidence{Name: "Максимальная загрузка CPU устройства в окнах выполнения", Observed: fmt.Sprintf("%.2f", float64(item.MaxDeviceCPUPercentX100)/100), Unit: "%", Source: "worker_time_correlation"})
 		}
+		what := fmt.Sprintf("Зафиксировано %s в %s; завершено - %d, ошибок - %d, повторов - %d, отмен - %d, пик параллельных попыток - %d.",
+			russianCountUint64(item.Executions, "попытка", "попытки", "попыток"),
+			russianCountUint64(item.Instances, "экземпляре", "экземплярах", "экземплярах"),
+			item.Finished, failures, item.Retries, item.Cancelled, item.MaxConcurrency)
+		if item.RunSamples > 0 {
+			what += fmt.Sprintf(" Максимум завершённой попытки - %d мс.", item.RunMaxMS)
+		}
+		if mainThread {
+			what += fmt.Sprintf(" Событий начала на главном потоке - %d; это не измерение потока выполнения всей задачи.", item.MainThreadStarts)
+		}
+		action := "Сопоставить длительность и частоту запусков с ожидаемым сценарием; измерить отдельно дорогие этапы Worker."
+		if failures > 0 {
+			action = "Проверить причины завершения с ошибкой, условия запуска и ожидаемое поведение retry."
+		} else if mainThread {
+			action = "Проверить, выполнялись ли дорогие этапы Worker на главном потоке; если да, перенести их в фоновое выполнение."
+		}
 		b.add(ProblemFinding{
 			DetectorID: "cpu.worker_execution", DetectorVersion: b.cfg.Version,
 			Category: ProblemCategoryCPU, Subcategory: subcategory, Status: "observed",
 			Confidence: confidence, ConfidenceReasons: reasons, Title: title,
-			WhatHappened: fmt.Sprintf(
-				"Зафиксировано %s в %s; завершено - %d, неуспешно - %d, самое долгое - %d мс, ожидание запуска p95 - %d мс, пик параллельного выполнения - %d.",
-				russianCountUint64(item.Executions, "попытка", "попытки", "попыток"),
-				russianCountUint64(item.Instances, "экземпляре", "экземплярах", "экземплярах"),
-				item.Finished, badOutcomes, item.RunMaxMS, item.WaitP95MS, item.MaxConcurrency,
-			),
-			Where: where,
+			WhatHappened: what,
+			Where:        where,
 			Why: ProblemWhy{
 				ClaimLevel: "linked",
-				Summary:    "Типизированный lifecycle напрямую связал enqueue, start, finish, попытку, длительность и результат одного экземпляра Worker.",
+				Summary:    "Типизированный lifecycle записал доступные события enqueue, start и finish; длительность известна только для завершённых попыток, а поток дальнейших этапов не установлен.",
 			},
-			Impact:    []string{"Задержка фоновой синхронизации, повторная нагрузка на CPU, сеть и хранилище, расход батареи"},
+			Impact:    []string{"Возможна задержка фоновой задачи; влияние на интерфейс, CPU и батарею по этим событиям не установлено"},
 			Evidence:  evidence,
 			Frequency: &ProblemFrequency{Count: item.Executions, RatePerSec: ratePerSecond(item.Executions, b.summary.DurationMS)},
 			Cost:      &ProblemCost{WallTimeMS: nonZeroU64Ptr(item.TotalRunMS)},
 			PriorityBreakdown: priority(
-				workerProblemImpact(badOutcomes > 0 || mainThread),
+				workerProblemImpact(failures > 0),
 				boundedUint64RatioScore(item.RunMaxMS, workerLongExecutionMS, 7, 4, 25),
 				min(20, 4+int(math.Log2(float64(item.Executions)+1))*3),
-				locationBreadth(where), boolScore(badOutcomes > 0 && repeated, 5),
+				locationBreadth(where), boolScore(failures > 0 && repeated, 5),
 				"срыв фоновой работы", "длительность", "повторы", "контекст", "ошибка и повторы",
 			),
 			Recommendations: []ProblemRecommendation{{
-				Action:       "Проверить ограничения запуска и retry policy; затем разбить doWork на измеримые CPU, сетевые и файловые этапы и устранить главный поток",
-				Rationale:    "Полный lifecycle показывает очередь, фактическое выполнение и итог, а временные корреляции помогают выбрать первый дорогой этап для профилирования.",
+				Action:       action,
+				Rationale:    "События lifecycle и временные корреляции помогают выбрать участок для проверки, но не доказывают причину задержки или поток выполнения всей задачи.",
 				Verification: "Повторить условия запуска и сравнить число попыток, результаты, ожидание, длительность, параллелизм и коррелирующие сигналы.",
 			}},
 			Limitations: uniqueStrings(limits),
@@ -252,20 +280,26 @@ func (b *problemBuilder) detectWorkerWork(work []SemanticWorkStats) {
 		if item.Domain != SemanticDomainWorker || item.Count == 0 {
 			continue
 		}
-		badOutcome := item.Outcome == "failure" || item.Outcome == "retry" || item.Outcome == "cancelled"
+		badOutcome := item.Outcome == "failure"
 		long := item.MaxMS >= workerLongExecutionMS
 		repeated := item.Count >= workerRepeatedMinCount && item.TotalMS >= workerRepeatedTotalMS
 		if !badOutcome && !long && !repeated {
 			continue
 		}
 		where := []ProblemLocation{{Screen: item.Screen, Operation: item.ContextOperation, Owner: item.Owner, Method: item.Owner}}
-		title := displayUnknown(item.Owner, "Worker") + " выполняется слишком долго"
+		title := displayUnknown(item.Owner, "Worker") + ": граница выполнения достигла порога проверки 10 с"
 		if badOutcome {
 			title = displayUnknown(item.Owner, "Worker") + " завершился: " + workerOutcomeLabel(item.Outcome)
 		} else if repeated {
-			title = displayUnknown(item.Owner, "Worker") + " часто повторяет долгую работу"
+			title = displayUnknown(item.Owner, "Worker") + ": выполнения границы накопили 30 с"
 		}
 		confidence, reasons, limits := problemConfidence(b.summary, item.Count, 1, true)
+		if long {
+			limits = append(limits, "Порог 10 с требует сопоставления с ожидаемой длительностью задачи; сам по себе не доказывает дефект или нагрузку на CPU.")
+		}
+		if repeated {
+			limits = append(limits, "Общие числа для этой границы не доказывают повторное выполнение одного UUID или лишнюю работу.")
+		}
 		if item.Outcome == "unknown" {
 			limits = append(limits, "Результат Worker не определён. Синхронный Worker распознаётся автоматически; для CoroutineWorker оберните полное выполнение в traceSuspendingWorker.")
 		}
@@ -273,12 +307,12 @@ func (b *problemBuilder) detectWorkerWork(work []SemanticWorkStats) {
 			DetectorID: "cpu.worker_execution", DetectorVersion: b.cfg.Version, Category: ProblemCategoryCPU, Subcategory: "worker_" + item.Outcome,
 			Status: "observed", Confidence: confidence, ConfidenceReasons: reasons, Title: title,
 			WhatHappened: fmt.Sprintf("Зафиксировано %s; самое долгое - %d мс, суммарно - %d мс, итог - %s.", russianCountUint64(item.Count, "выполнение", "выполнения", "выполнений"), item.MaxMS, item.TotalMS, workerOutcomeLabel(item.Outcome)),
-			Where:        where, Why: ProblemWhy{ClaimLevel: "linked", Summary: "Типизированная граница связала имя Worker, длительность, поток и результат выполнения."},
-			Impact:    []string{"Задержка фоновой синхронизации, повторная нагрузка на CPU/сеть/БД и расход батареи"},
-			Evidence:  []ProblemEvidence{{Name: "Число выполнений", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "worker_boundary"}, {Name: "Самое долгое выполнение", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", workerLongExecutionMS), Source: "worker_boundary"}},
+			Where:        where, Why: ProblemWhy{ClaimLevel: "linked", Summary: "Типизированная граница связала имя Worker, длительность и результат; поток события не доказывает поток выполнения всей задачи."},
+			Impact:    []string{"Возможна задержка фоновой задачи; влияние на интерфейс, CPU и батарею по этой границе не установлено"},
+			Evidence:  []ProblemEvidence{{Name: "Число выполнений", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "worker_boundary"}, {Name: "Самое долгое выполнение", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("порог проверки %d ms", workerLongExecutionMS), Source: "worker_boundary"}},
 			Frequency: &ProblemFrequency{Count: item.Count, RatePerSec: ratePerSecond(item.Count, b.summary.DurationMS)}, Cost: &ProblemCost{WallTimeMS: nonZeroU64Ptr(item.TotalMS)},
 			PriorityBreakdown: priority(workerProblemImpact(badOutcome), boundedUint64RatioScore(item.MaxMS, workerLongExecutionMS, 7, 4, 25), min(20, 4+int(math.Log2(float64(item.Count)+1))*3), locationBreadth(where), boolScore(badOutcome && repeated, 5), "срыв фоновой работы", "длительность", "повторы", "контекст", "ошибка и повторы"),
-			Recommendations:   []ProblemRecommendation{{Action: "Проверить ограничения запуска, задержку между повторами, идемпотентность и содержимое doWork; тяжёлые этапы разбить и измерить отдельно", Rationale: "Так можно убрать бесконтрольные повторы и найти дорогой этап.", Verification: "Повторить условия запуска и сравнить число выполнений, итог, максимальную и суммарную длительность."}},
+			Recommendations:   []ProblemRecommendation{{Action: "Сопоставить длительность и частоту запусков с ожидаемым сценарием; измерить отдельно дорогие этапы Worker.", Rationale: "Граница даёт измеренную длительность, но не доказывает причину задержки или необходимость повторов.", Verification: "Повторить условия запуска и сравнить число выполнений, итог, максимальную и суммарную длительность."}},
 			Limitations:       uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "Связанные сигналы", Anchor: "signal-contexts", Filter: item.Owner}},
 		})
 	}
