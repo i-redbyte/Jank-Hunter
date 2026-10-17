@@ -1,6 +1,9 @@
 package analyze
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Format 1 has no pass provenance. Mixing it with versioned records would hide
 // duplicate transforms, so it is accepted only as a single record per class.
@@ -11,8 +14,8 @@ func validateInstrumentationPass(record instrumentationDiagnosticsRecord) error 
 			return fmt.Errorf("format 1 must not contain pass identity")
 		}
 	case InstrumentationDiagnosticsFormat:
-		if record.Pass != "main" && record.Pass != "lifecycle" {
-			return fmt.Errorf("format 2 requires pass main or lifecycle, got %q", record.Pass)
+		if record.Pass != "main" && record.Pass != "lifecycle" && record.Pass != "causal" && record.Pass != "lifecycle_metadata" {
+			return fmt.Errorf("format 2 requires pass main, lifecycle, causal or lifecycle_metadata, got %q", record.Pass)
 		}
 	default:
 		return validateArtifactFormat("", "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat)
@@ -26,12 +29,16 @@ func instrumentationPassBit(pass string) uint8 {
 		return 2
 	case "lifecycle":
 		return 4
+	case "causal":
+		return 8
+	case "lifecycle_metadata":
+		return 16
 	default:
 		return 1
 	}
 }
 
-// There are at most two versioned records per class and the loader bounds both
+// There are at most four versioned records per class and the loader bounds both
 // records and details. Leaf pass records retain all counters and provenance;
 // combined method/annotation/filter totals describe only the main pass.
 func combineInstrumentationPasses(records []InstrumentationClassDiagnostic) []InstrumentationClassDiagnostic {
@@ -58,12 +65,12 @@ func combineInstrumentationPasses(records []InstrumentationClassDiagnostic) []In
 	}
 	for index := range out {
 		passes := out[index].Passes
-		if len(passes) == 2 && passes[0].Pass == "lifecycle" {
-			passes[0], passes[1] = passes[1], passes[0]
-		}
+		sort.SliceStable(passes, func(i, j int) bool {
+			return instrumentationPassBit(passes[i].Pass) < instrumentationPassBit(passes[j].Pass)
+		})
 		combined := InstrumentationClassDiagnostic{ClassName: out[index].ClassName}
 		for _, pass := range passes {
-			if pass.Pass != "lifecycle" {
+			if pass.Pass == "main" || pass.Pass == "" {
 				combined = pass
 				break
 			}

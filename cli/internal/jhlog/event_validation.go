@@ -180,10 +180,10 @@ func validateWorkerEvent(event *WorkerEvent, flags uint64) error {
 	if event.InstanceID == 0 {
 		return fmt.Errorf("worker instance ID must be non-zero")
 	}
-	if event.Stage <= WorkerStageUnknown || event.Stage > WorkerStageRegisteredObserved {
+	if event.Stage <= WorkerStageUnknown || event.Stage > WorkerStageForegroundAttemptBoundary {
 		return fmt.Errorf("unsupported worker stage %d", event.Stage)
 	}
-	if event.Outcome > WorkerOutcomeCancelled {
+	if event.Outcome > WorkerOutcomeStopped {
 		return fmt.Errorf("unsupported worker outcome %d", event.Outcome)
 	}
 	finished := event.Stage == WorkerStageFinished
@@ -204,6 +204,9 @@ func validateWorkerEvent(event *WorkerEvent, flags uint64) error {
 	}
 	if (event.Stage == WorkerStageStarted || event.Stage == WorkerStageFinished) && event.WorkerRef.ID == 0 {
 		return fmt.Errorf("started or finished worker requires a worker reference")
+	}
+	if (event.Stage == WorkerStageForegroundEntered || event.Stage == WorkerStageForegroundAttemptBoundary) && event.WorkerRef.ID == 0 {
+		return fmt.Errorf("attempt worker event requires a worker reference")
 	}
 	return nil
 }

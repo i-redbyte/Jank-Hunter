@@ -111,4 +111,5 @@ internal class StorageSwitchRequest(val storage: JankHunterBinaryStorage?)
 internal data class LogSnapshotResult(
     val capturedAtMs: Long,
     val logPaths: List<String>,
+    val logByteLimits: List<Long> = emptyList(),
 )

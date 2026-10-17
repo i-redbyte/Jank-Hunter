@@ -191,7 +191,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		Decisions:            decisionSummaries(record.Decisions),
 		Annotations:          annotationSummaries(record.Annotations),
 	}
-	if record.Pass != "lifecycle" {
+	if record.Pass == "main" || record.Pass == "" {
 		for _, item := range class.MethodFilterReasons {
 			b.methodFilterReasons[item.Reason] = saturatingUint64Sum(b.methodFilterReasons[item.Reason], item.Count)
 		}
@@ -223,7 +223,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		}
 		b.decisions[key] = saturatingUint64Sum(b.decisions[key], item.Count)
 	}
-	if record.Pass != "lifecycle" {
+	if record.Pass == "main" || record.Pass == "" {
 		for _, item := range class.Annotations {
 			key := instrumentationAnnotationKey{
 				owner:             item.Owner,
@@ -281,6 +281,9 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 }
 
 type instrumentationDiagnosticsRecord struct {
+	MetadataStatus       string                            `json:"metadataStatus,omitempty"`
+	MetadataVersion      string                            `json:"metadataVersion,omitempty"`
+	MetadataReader       string                            `json:"metadataReader,omitempty"`
 	Pass                 string                            `json:"pass"`
 	Format               int                               `json:"format"`
 	ClassName            string                            `json:"class"`

@@ -64,6 +64,8 @@ class JankHunterFeatureContractTest {
             "BINDER_IPC",
             "METHOD_COUNTERS",
             "HEAP_DUMPS",
+            "THREAD_SAMPLING",
+            "CONCURRENCY_DIAGNOSTICS",
         )
     }
 }

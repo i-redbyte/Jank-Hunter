@@ -665,8 +665,8 @@ class JankHunterEventListenerFactory private constructor(
             var newestOnThread: ConnectAttempt? = null
             var newestFallback: ConnectAttempt? = null
             connectAttemptsByRoute?.values?.forEach { attempts ->
-                attempts.forEach { attempt ->
-                    if (attempt.tlsStarted) return@forEach
+                attempts.forEach tlsAttempt@{ attempt ->
+                    if (attempt.tlsStarted) return@tlsAttempt
                     if (newestFallback == null || attempt.sequence > newestFallback!!.sequence) {
                         newestFallback = attempt
                     }
@@ -698,8 +698,8 @@ class JankHunterEventListenerFactory private constructor(
             var newestOnThread: ConnectAttempt? = null
             var newestFallback: ConnectAttempt? = null
             connectAttemptsByRoute?.values?.forEach { attempts ->
-                attempts.forEach { attempt ->
-                    if (!attempt.tlsInProgress) return@forEach
+                attempts.forEach tlsAttempt@{ attempt ->
+                    if (!attempt.tlsInProgress) return@tlsAttempt
                     if (newestFallback == null || attempt.sequence > newestFallback!!.sequence) {
                         newestFallback = attempt
                     }

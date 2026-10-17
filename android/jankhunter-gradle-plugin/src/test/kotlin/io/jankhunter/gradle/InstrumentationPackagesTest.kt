@@ -6,6 +6,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InstrumentationPackagesTest {
+    @Test fun ownImplementationIsRejectedBeforeAnyFeatureOrGeneratedDiSelection() {
+        val parameters = java.lang.reflect.Proxy.newProxyInstance(
+            javaClass.classLoader, arrayOf(JankHunterInstrumentationParameters::class.java),
+        ) { _, _, _ -> error("own implementations must not reach feature selection") } as JankHunterInstrumentationParameters
+        val data = object : com.android.build.api.instrumentation.ClassData {
+            override val className = "io.jankhunter.jankstats.DaggerFrameAdapter"
+            override val classAnnotations = emptyList<String>()
+            override val interfaces = emptyList<String>()
+            override val superClasses = emptyList<String>()
+        }
+        assertFalse(InstrumentationClassSelector.evaluate(parameters, data, CausalCodeOrigin.PROJECT).any())
+    }
+    @Test fun jankStatsAdaptersAreExcludedInNormalAndWholeApplicationModes() {
+        for (name in listOf("io.jankhunter.runtime.integration.AndroidXJankStatsAdapter", "io.jankhunter.jankstats.FrameAdapter")) {
+            assertTrue(InstrumentationPackages.isBuiltinExcluded(name))
+            assertTrue(isJankHunterSupportClass(name.replace('.', '/')))
+            assertFalse(InstrumentationMatcher(listOf("io.jankhunter"), emptyList(), true).matches(name))
+        }
+        assertTrue(InstrumentationMatcher(emptyList(), emptyList(), true).matches("io.jankhunter.jankstatsextra.App"))
+    }
     @Test
     fun alwaysKeepsNamespaceAsSafeProjectBoundary() {
         val includes = InstrumentationPackages.effectiveIncludes(

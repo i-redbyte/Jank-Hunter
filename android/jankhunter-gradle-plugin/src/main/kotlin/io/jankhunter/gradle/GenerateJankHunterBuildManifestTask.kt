@@ -13,6 +13,7 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -29,6 +30,8 @@ abstract class GenerateJankHunterBuildManifestTask : DefaultTask() {
     @get:InputFiles @get:PathSensitive(PathSensitivity.NAME_ONLY) abstract val artifacts: ConfigurableFileCollection
     @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val identityAsset: RegularFileProperty
     @get:InputFile @get:Optional @get:PathSensitive(PathSensitivity.NONE) abstract val mappingFile: RegularFileProperty
+    @get:OutputDirectory @get:Optional abstract val copiedApkDirectory: DirectoryProperty
+    @get:OutputFile @get:Optional abstract val copiedBundleFile: RegularFileProperty
     @get:OutputFile abstract val outputFile: RegularFileProperty
 
     @TaskAction
@@ -72,6 +75,14 @@ abstract class GenerateJankHunterBuildManifestTask : DefaultTask() {
         val output = outputFile.get().asFile
         check(output.parentFile.mkdirs() || output.parentFile.isDirectory) { "Cannot create build manifest directory" }
         output.writeText(text, Charsets.UTF_8)
+        copiedApkDirectory.orNull?.asFile?.let { destination ->
+            check(!destination.exists() || destination.deleteRecursively())
+            check(apkDirectory.get().asFile.copyRecursively(destination, overwrite = true))
+        }
+        copiedBundleFile.orNull?.asFile?.let { destination ->
+            check(destination.parentFile.mkdirs() || destination.parentFile.isDirectory)
+            bundleFile.get().asFile.copyTo(destination, overwrite = true)
+        }
     }
 
     private fun hashes(files: List<File>): String = files.joinToString(",", "[", "]") { file ->

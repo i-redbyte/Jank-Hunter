@@ -23,6 +23,14 @@ import org.objectweb.asm.Opcodes
 /** Class producers and classpath producers are task inputs, never speculative transform side effects. */
 @CacheableTask
 abstract class InstrumentJankHunterLifecycleTask : DefaultTask() {
+    @get:Input @get:org.gradle.api.tasks.Optional abstract val sdkHookAbi: Property<HookAbiIndex>
+    @get:Input abstract val metadataCompatibilityMode: Property<JankHunterMetadataCompatibilityMode>
+    @get:Input abstract val metadataReaderIdentity: Property<String>
+
+    init {
+        metadataCompatibilityMode.convention(JankHunterMetadataCompatibilityMode.COMPATIBILITY)
+        metadataReaderIdentity.convention(MetadataReaderCapabilities.identity)
+    }
     @get:Classpath abstract val inputJars: ListProperty<RegularFile>
     @get:Classpath abstract val inputDirectories: ListProperty<Directory>
     @get:Classpath abstract val supportClasspath: ConfigurableFileCollection
@@ -73,7 +81,8 @@ abstract class InstrumentJankHunterLifecycleTask : DefaultTask() {
         if (diagnostics.exists()) check(diagnostics.deleteRecursively()) { "Cannot clear lifecycle diagnostics $diagnostics" }
         check(diagnostics.mkdirs() || diagnostics.isDirectory) { "Cannot create lifecycle diagnostics $diagnostics" }
         val ancestorPolicy = LifecycleAncestorAccessPolicy(excludePackages.get())
-        val transformer = LifecycleScopedTransformer(index, selected.keys, diagnostics.absolutePath, ancestorPolicy::allows) {
+        val transformer = LifecycleScopedTransformer(index, selected.keys, diagnostics.absolutePath, ancestorPolicy::allows,
+            metadataCompatibilityMode.get(), sdkHookAbi.orNull) {
             logger.warn("Jank Hunter: {}", it)
         }
         val output = outputFile.get().asFile

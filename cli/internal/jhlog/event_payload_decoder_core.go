@@ -74,6 +74,9 @@ func decodeCorePayload(
 			if suffixLength > uint64(reader.Len()) || prefixLength+suffixLength > maxRawChunkSize {
 				return fmt.Errorf("dictionary suffix length %d exceeds remaining or maximum value", suffixLength)
 			}
+			if err := segmentState.checkDictionaryBudget(prefixLength + suffixLength); err != nil {
+				return err
+			}
 			data = make([]byte, int(prefixLength+suffixLength))
 			copy(data, previous[:int(prefixLength)])
 			if err := reader.readFull(data[int(prefixLength):]); err != nil {
@@ -86,6 +89,11 @@ func decodeCorePayload(
 				return fmt.Errorf("dictionary prefix length %d is non-canonical; expected %d", prefixLength, canonical)
 			}
 		}
+		if err := segmentState.checkDictionaryBudget(uint64(len(data))); err != nil {
+			return err
+		}
+		segmentState.dictionaryEntries++
+		segmentState.dictionaryDecodedBytes += uint64(len(data))
 		segmentState.dictionaryPrevious[kind] = data
 		segmentState.origins.define(id, alias, origin)
 		entry := &DictionaryEntry{Origin: origin, Kind: kind, ID: id, Alias: alias, Data: data}
@@ -124,7 +132,10 @@ func decodeCorePayload(
 		if err != nil {
 			return err
 		}
-		if collectorFlags&^uint64(CollectorKnownMask) != 0 || (segmentState.legacyHTTPCollectionState && collectorFlags&uint64(CollectorHTTP) != 0) {
+		if collectorFlags&^uint64(CollectorKnownMask) != 0 ||
+			(segmentState.legacyHTTPCollectionState && collectorFlags&uint64(CollectorHTTP) != 0) ||
+			(segmentState.legacyCausalCollectionState && collectorFlags&uint64(CollectorConcurrencyDiagnostics|CollectorConcurrencyDetailed) != 0) ||
+			(collectorFlags&uint64(CollectorConcurrencyDetailed) != 0 && collectorFlags&uint64(CollectorConcurrencyDiagnostics) == 0) {
 			return fmt.Errorf("unsupported collector flags 0x%x", collectorFlags)
 		}
 		event.Session = &SessionEvent{
@@ -357,6 +368,9 @@ func decodeCorePayload(
 		}
 		if values[2] > math.MaxUint32 {
 			return fmt.Errorf("android process importance exceeds %d", uint64(math.MaxUint32))
+		}
+		if err := validatePayloadByteFields(values, 0, 1, 3); err != nil {
+			return err
 		}
 		processState := &ProcessStateEvent{
 			UIVisibility: ProcessUIVisibility(values[0]), Importance: ProcessImportance(values[1]),

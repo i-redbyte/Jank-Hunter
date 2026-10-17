@@ -1,0 +1,15 @@
+{
+  "schema": "jankhunter.comparison-corpus-manifest/v1",
+  "files": [
+    {"path":"cases.json","sha256":"9e5992cfd26a4cfc83a56bcc3a9a55636a304db031ffc1b69da0223db895f8f6"}
+  ],
+  "coverage": {
+    "five_problem_transitions": "TestComparisonCorpusFiveProblemTransitions",
+    "scenario_mismatch_and_partial_overlap": "TestComparisonCorpusExpectedOutcomes",
+    "cold_warm_conditions": "TestScenarioMatchingRejectsDifferentWorkloadAndStageOrder/workload",
+    "collection_loss": "TestComparisonScopeLossFilterAndDetectorDriftStayUnknown",
+    "censoring": "TestScenarioMatchingUnknownEvidenceNeverLooksComplete/loss",
+    "detector_drift": "TestProblemMatchingRejectsDetectorDriftAndAmbiguousTargets",
+    "simpson_effect": "TestScopedEffectsUseCommonBaselineWeightsAndIgnoreUnmatchedWork"
+  }
+}

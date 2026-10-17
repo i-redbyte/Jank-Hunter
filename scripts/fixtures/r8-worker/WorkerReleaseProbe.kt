@@ -35,6 +35,7 @@ object WorkerReleaseProbe {
                     JankHunterWorkerOutcome.RETRY -> 2
                     JankHunterWorkerOutcome.CANCELLED -> 3
                     JankHunterWorkerOutcome.UNKNOWN -> 4
+                    JankHunterWorkerOutcome.STOPPED -> 5
                 }
                 check(hook == expectedCode && port == expected) {
                     "case=$index hook=$hook port=$port expected=$expected"

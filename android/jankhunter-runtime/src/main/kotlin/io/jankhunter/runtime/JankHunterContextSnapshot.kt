@@ -15,6 +15,7 @@ class JankHunterContextSnapshot {
     val operationId: Long
     internal val collectionEpochId: Long
     internal val httpToken: Long
+    internal val causalContext: JankHunterCausalContext?
 
     internal constructor(
         screen: String?, owner: String?, initiatorPresent: Boolean = false, initiatorId: Long = 0L,
@@ -24,6 +25,7 @@ class JankHunterContextSnapshot {
     internal constructor(
         screen: String?, owner: String?, initiatorPresent: Boolean, initiatorId: Long,
         initiatorName: String?, operationId: Long, collectionEpochId: Long, httpToken: Long,
+        causalContext: JankHunterCausalContext? = null,
     ) {
         this.screen = screen
         this.owner = owner
@@ -33,6 +35,7 @@ class JankHunterContextSnapshot {
         this.operationId = operationId
         this.collectionEpochId = collectionEpochId
         this.httpToken = httpToken
+        this.causalContext = causalContext
     }
 
     private var httpCompleted = false

@@ -1,0 +1,8 @@
+/* Keep the schedule overview readable; identifiers and long histories stay in details. */
+[data-work-schedules] table { min-width: 1120px; table-layout: fixed; width: 100%; }
+[data-work-schedules] td { vertical-align: top; overflow-wrap: anywhere; line-height: 1.5; }
+[data-work-schedules] td p { margin: .5rem 0; }
+[data-work-schedules] td details { margin-top: .75rem; }
+[data-work-schedules] pre { white-space: pre-wrap; max-height: 24rem; overflow: auto; }
+[data-schedule-findings] details { padding: .6rem .8rem; margin: .5rem 0; border: 1px solid var(--line); border-radius: .5rem; }
+[data-schedule-timeline] { margin: .8rem 0 1.2rem; }

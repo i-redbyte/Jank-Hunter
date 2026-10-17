@@ -19,9 +19,9 @@ import kotlin.math.max
 
 internal class SystemContextSampler(
     context: Context,
-    private val intervalMs: Long,
+    intervalMs: Long,
     private val callbacks: RuntimeCollectorCallbacks,
-    private val userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
+    userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
 ) {
     private val trafficUid = Process.myUid()
     private val appContext = context.applicationContext

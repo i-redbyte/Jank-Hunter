@@ -1,20 +1,6 @@
 package io.jankhunter.gradle
 
 import kotlin.Metadata as KotlinMetadata
-import kotlin.metadata.ClassKind
-import kotlin.metadata.KmClass
-import kotlin.metadata.KmDeclarationContainer
-import kotlin.metadata.MemberKind
-import kotlin.metadata.isDelegated
-import kotlin.metadata.isNotDefault
-import kotlin.metadata.kind
-import kotlin.metadata.jvm.KotlinClassMetadata
-import kotlin.metadata.jvm.fieldSignature
-import kotlin.metadata.jvm.getterSignature
-import kotlin.metadata.jvm.setterSignature
-import kotlin.metadata.jvm.signature
-import kotlin.metadata.jvm.syntheticMethodForAnnotations
-import kotlin.metadata.jvm.syntheticMethodForDelegate
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.Opcodes
 
@@ -24,6 +10,9 @@ internal class KotlinGeneratedMethodIndex private constructor(
     private val metadataKnown: Boolean,
     private val syntheticClass: Boolean,
     val delegatedProperties: Map<String, String?> = emptyMap(),
+    val analysisStatus: KotlinMetadataAnalysisStatus = KotlinMetadataAnalysisStatus.READABLE,
+    val readerId: String? = null,
+    val metadataVersion: String = "",
 ) {
     fun origin(methodName: String, descriptor: String): KotlinMethodOrigin {
         if (!metadataKnown) return KotlinMethodOrigin.UNKNOWN
@@ -47,117 +36,60 @@ internal class KotlinGeneratedMethodIndex private constructor(
             declaredMethods = emptySet(),
             metadataKnown = false,
             syntheticClass = false,
+            analysisStatus = KotlinMetadataAnalysisStatus.ABSENT,
         )
         const val METADATA_DESCRIPTOR = "Lkotlin/Metadata;"
 
-        fun from(metadata: KotlinMetadata): KotlinGeneratedMethodIndex {
-            return when (val parsed = runCatching { KotlinClassMetadata.readLenient(metadata) }.getOrNull()) {
-                is KotlinClassMetadata.Class -> fromClass(parsed.kmClass)
-                is KotlinClassMetadata.FileFacade -> fromContainer(parsed.kmPackage)
-                is KotlinClassMetadata.MultiFileClassPart -> fromContainer(parsed.kmPackage)
-                is KotlinClassMetadata.SyntheticClass -> KotlinGeneratedMethodIndex(
-                    emptyMap(),
-                    emptySet(),
-                    metadataKnown = true,
-                    syntheticClass = true,
-                )
-                is KotlinClassMetadata.MultiFileClassFacade -> KotlinGeneratedMethodIndex(
-                    emptyMap(),
-                    emptySet(),
-                    metadataKnown = true,
-                    syntheticClass = false,
-                )
-                else -> EMPTY
+        fun from(
+            metadata: KotlinMetadata,
+            mode: JankHunterMetadataCompatibilityMode = JankHunterMetadataCompatibilityMode.COMPATIBILITY,
+            className: String = "unknown",
+            pathway: MetadataDecodePathway = MetadataDecodePathway.MAIN,
+        ): KotlinGeneratedMethodIndex {
+            val version = metadata.metadataVersion.take(4).joinToString(".")
+            MetadataReaderMetrics.recordDecodeAttempt(pathway)
+            val result = IsolatedMetadataReader.read(metadata)
+            if (mode == JankHunterMetadataCompatibilityMode.STRICT && result.status != KotlinMetadataAnalysisStatus.READABLE) {
+                mode.validate(result.status, className, version)
             }
+            val values = result.values
+            if (values == null) {
+                val index = fallback(result.status, version, result.readerId)
+                return index
+            }
+            return KotlinGeneratedMethodIndex(values.generated, values.declared, values.known,
+                values.synthetic, values.delegates, values.status, result.readerId, version)
         }
+
+        internal fun unreadable(className: String, mode: JankHunterMetadataCompatibilityMode): KotlinGeneratedMethodIndex {
+            val status = KotlinMetadataAnalysisStatus.UNREADABLE
+            if (mode == JankHunterMetadataCompatibilityMode.STRICT) {
+                mode.validate(status, className, "")
+            }
+            return fallback(status)
+        }
+
+        private fun fallback(status: KotlinMetadataAnalysisStatus, version: String = "", readerId: String? = null) = KotlinGeneratedMethodIndex(
+            emptyMap(), emptySet(), metadataKnown = false, syntheticClass = false, analysisStatus = status,
+            readerId = readerId, metadataVersion = version,
+        )
 
         fun collectingVisitor(
             delegate: AnnotationVisitor?,
+            mode: JankHunterMetadataCompatibilityMode = JankHunterMetadataCompatibilityMode.COMPATIBILITY,
+            className: String = "unknown",
+            pathway: MetadataDecodePathway = MetadataDecodePathway.MAIN,
             completed: (KotlinGeneratedMethodIndex) -> Unit,
-        ): AnnotationVisitor = KotlinMetadataAnnotationVisitor(delegate, completed)
-
-        private fun fromContainer(container: KmDeclarationContainer): KotlinGeneratedMethodIndex {
-            val methods = HashMap<String, String>()
-            val declared = HashSet<String>()
-            val delegates = LinkedHashMap<String, String?>()
-            container.functions.forEach { function ->
-                function.signature?.let { signature ->
-                    val key = methodKey(signature.name, signature.descriptor)
-                    if (function.kind == MemberKind.DECLARATION) {
-                        declared += key
-                    } else {
-                        methods[methodKey(signature.name, signature.descriptor)] = KOTLIN_GENERATED_FUNCTION
-                    }
-                }
-            }
-            container.properties.forEach { property ->
-                if (property.isDelegated) delegates[property.name] = property.fieldSignature?.descriptor
-                val generatedProperty = property.kind != MemberKind.DECLARATION
-                if (generatedProperty || !property.getter.isNotDefault) {
-                    property.getterSignature?.let { signature ->
-                        methods[methodKey(signature.name, signature.descriptor)] = KOTLIN_DEFAULT_ACCESSOR
-                    }
-                } else {
-                    property.getterSignature?.let { signature ->
-                        declared += methodKey(signature.name, signature.descriptor)
-                    }
-                }
-                val setter = property.setter
-                if (setter != null && (generatedProperty || !setter.isNotDefault)) {
-                    property.setterSignature?.let { signature ->
-                        methods[methodKey(signature.name, signature.descriptor)] = KOTLIN_DEFAULT_ACCESSOR
-                    }
-                } else if (setter != null) {
-                    property.setterSignature?.let { signature ->
-                        declared += methodKey(signature.name, signature.descriptor)
-                    }
-                }
-                property.syntheticMethodForAnnotations?.let { signature ->
-                    methods[methodKey(signature.name, signature.descriptor)] = KOTLIN_SYNTHETIC_PROPERTY_METHOD
-                }
-                property.syntheticMethodForDelegate?.let { signature ->
-                    methods[methodKey(signature.name, signature.descriptor)] = KOTLIN_SYNTHETIC_PROPERTY_METHOD
-                }
-            }
-            return KotlinGeneratedMethodIndex(
-                delegatedProperties = delegates,
-                generatedMethods = methods,
-                declaredMethods = declared,
-                metadataKnown = true,
-                syntheticClass = false,
-            )
-        }
-
-        private fun fromClass(kmClass: KmClass): KotlinGeneratedMethodIndex {
-            val base = fromContainer(kmClass)
-            if (kmClass.kind != ClassKind.CLASS && kmClass.kind != ClassKind.ENUM_CLASS) return base
-            val generatedMethods = if (kmClass.kind == ClassKind.ENUM_CLASS) {
-                base.generatedMethods + (KOTLIN_ENUM_ENTRIES_METHOD_KEY to KOTLIN_ENUM_ENTRIES_ACCESSOR)
-            } else {
-                base.generatedMethods
-            }
-            val declaredConstructors = kmClass.constructors.mapNotNullTo(HashSet()) { constructor ->
-                constructor.signature?.let { signature -> methodKey(signature.name, signature.descriptor) }
-            }
-            if (declaredConstructors.isEmpty() && generatedMethods === base.generatedMethods) return base
-            return KotlinGeneratedMethodIndex(
-                delegatedProperties = base.delegatedProperties,
-                generatedMethods = generatedMethods,
-                declaredMethods = base.declaredMethods + declaredConstructors,
-                metadataKnown = base.metadataKnown,
-                syntheticClass = base.syntheticClass,
-            )
-        }
+        ): AnnotationVisitor = KotlinMetadataAnnotationVisitor(delegate, mode, className, pathway, completed)
 
         private fun methodKey(name: String, descriptor: String): String = name + descriptor
 
-        private const val KOTLIN_GENERATED_FUNCTION = "kotlin_generated_function"
-        private const val KOTLIN_DEFAULT_ACCESSOR = "kotlin_default_accessor"
-        private const val KOTLIN_SYNTHETIC_PROPERTY_METHOD = "kotlin_synthetic_property_method"
         private const val KOTLIN_SYNTHETIC_CLASS = "kotlin_synthetic_class"
-        private const val KOTLIN_ENUM_ENTRIES_METHOD_KEY = "getEntries()Lkotlin/enums/EnumEntries;"
-        private const val KOTLIN_ENUM_ENTRIES_ACCESSOR = "kotlin_enum_entries_accessor"
     }
+}
+
+internal enum class KotlinMetadataAnalysisStatus {
+    ABSENT, READABLE, UNSUPPORTED_VERSION, UNREADABLE, UNSUPPORTED_KIND, UNSUPPORTED_FLAGS, READER_UNAVAILABLE,
 }
 
 internal data class KotlinMethodOrigin(
@@ -174,6 +106,9 @@ internal data class KotlinMethodOrigin(
 
 private class KotlinMetadataAnnotationVisitor(
     delegate: AnnotationVisitor?,
+    private val mode: JankHunterMetadataCompatibilityMode,
+    private val className: String,
+    private val pathway: MetadataDecodePathway,
     private val completed: (KotlinGeneratedMethodIndex) -> Unit,
 ) : AnnotationVisitor(Opcodes.ASM9, delegate) {
     private var kind: Int? = null
@@ -218,16 +153,22 @@ private class KotlinMetadataAnnotationVisitor(
 
     override fun visitEnd() {
         super.visitEnd()
-        val metadata = kotlin.metadata.jvm.Metadata(
-            kind = kind,
-            metadataVersion = metadataVersion,
-            data1 = data1,
-            data2 = data2,
-            extraString = extraString,
-            packageName = packageName,
-            extraInt = extraInt,
+        val version = metadataVersion
+        val kindValue = kind
+        if (kindValue == null || version == null || version.size !in 2..3 || version.any { it < 0 }) {
+            completed(KotlinGeneratedMethodIndex.unreadable(className, mode))
+            return
+        }
+        val metadata = KotlinMetadata(
+            kind = kindValue,
+            metadataVersion = version,
+            data1 = data1 ?: emptyArray(),
+            data2 = data2 ?: emptyArray(),
+            extraString = extraString ?: "",
+            packageName = packageName ?: "",
+            extraInt = extraInt ?: 0,
         )
-        completed(KotlinGeneratedMethodIndex.from(metadata))
+        completed(KotlinGeneratedMethodIndex.from(metadata, mode, className, pathway))
     }
 
     private fun Any?.asStringArray(): Array<String>? {

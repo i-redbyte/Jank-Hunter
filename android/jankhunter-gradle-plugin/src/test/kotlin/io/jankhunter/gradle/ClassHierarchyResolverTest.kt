@@ -23,15 +23,15 @@ class ClassHierarchyResolverTest {
     }
 
     @Test
-    fun unexpectedMetadataFailureIsDiagnosedAndRemainingHierarchyIsResolved() {
+    fun unexpectedRootMetadataFailureDoesNotPoisonOtherCompleteHierarchies() {
         val context = FakeClassContext { className ->
             when (className) {
                 "example.Root" -> FakeClassData(
                     className,
                     superClasses = listOf("broken.Parent", "example.GoodParent"),
+                    interfaces = listOf("example.Contract"),
                 )
                 "broken.Parent" -> throw IllegalStateException("invalid class metadata")
-                "example.GoodParent" -> FakeClassData(className, interfaces = listOf("example.Contract"))
                 else -> null
             }
         }
@@ -41,6 +41,7 @@ class ClassHierarchyResolverTest {
             setOf("example/Root", "broken/Parent", "example/GoodParent", "example/Contract"),
             resolver.resolve("example/Root"),
         )
+        assertEquals(setOf("broken/Parent"), resolver.resolve("broken.Parent"))
         assertEquals(
             mapOf(
                 ClassHierarchyResolutionFailure(

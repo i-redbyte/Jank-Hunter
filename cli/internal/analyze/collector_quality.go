@@ -213,7 +213,6 @@ func (c *collector) finalizeCollectionQuality() {
 		quality.ChainIssues = append(quality.ChainIssues, issue)
 		addReason("low", issue)
 	}
-
 	counters := c.latestQualityTotals()
 	quality.AsyncLifecycle = asyncLifecycleQuality(counters)
 	if posts := counters[jhlog.QualityHandlerPostContextUnavailable]; posts > 0 {
@@ -250,7 +249,14 @@ func (c *collector) finalizeCollectionQuality() {
 	quality.RuntimeGraphCompletenessRatio = 1
 	if !quality.RuntimeGraphEnabled {
 		quality.RuntimeGraphCompletenessRatio = 0
-		if quality.RuntimeGraphInputEvents > 0 || quality.RuntimeGraphEmittedEvents > 0 || quality.DecodedRuntimeGraphCalls > 0 {
+		if quality.RuntimeGraphInputEvents == c.semanticRuntimeCalls &&
+			quality.RuntimeGraphEmittedEvents == c.semanticRuntimeCalls &&
+			quality.DecodedRuntimeGraphCalls == c.semanticRuntimeCalls && c.semanticRuntimeCalls > 0 {
+			quality.Notices = append(quality.Notices, fmt.Sprintf(
+				"граф вызовов отключён; через общий транспорт записаны семантические интервалы: %d; входов в методы нет",
+				c.semanticRuntimeCalls,
+			))
+		} else if quality.RuntimeGraphInputEvents > 0 || quality.RuntimeGraphEmittedEvents > 0 || quality.DecodedRuntimeGraphCalls > 0 {
 			addReason("low", fmt.Sprintf(
 				"граф вызовов отмечен отключённым, но счётчики полученных, переданных и прочитанных вызовов равны %d/%d/%d; конфигурация противоречит данным",
 				quality.RuntimeGraphInputEvents,
@@ -332,8 +338,13 @@ func (c *collector) finalizeCollectionQuality() {
 			quality.AcceptedEvents,
 		))
 	}
-	if acceptedGap > postAdmissionCounters {
-		postAdmissionCounters = acceptedGap
+	quality.UnobservedAcceptedEvents = c.unobservedAcceptedEvents()
+	terminalGap := terminalAcceptedGap(acceptedGap, quality.UnobservedAcceptedEvents)
+	if terminalGap > postAdmissionCounters {
+		postAdmissionCounters = terminalGap
+	}
+	if quality.UnobservedAcceptedEvents > 0 {
+		addReason("low", fmt.Sprintf("не наблюдены в этом снимке %d принятых событий: они могли остаться в очереди или попасть в следующий сегмент; потеря не доказана", quality.UnobservedAcceptedEvents))
 	}
 	quality.PostAdmissionLostEvents = postAdmissionCounters
 	quality.KnownLostEvents = saturatingUint64Sum(
@@ -516,7 +527,7 @@ func (c *collector) finalizeCollectionQuality() {
 	quality.Reasons = uniqueStrings(quality.Reasons)
 	quality.DiagnosticCompletenessPercent, quality.DiagnosticCompletenessComponents =
 		collectionDiagnosticCompleteness(quality)
-	if upstreamDrainIncomplete {
+	if upstreamDrainIncomplete || quality.UnobservedAcceptedEvents > 0 {
 		quality.DiagnosticCompletenessPercent = UnknownDiagnosticCompleteness
 		quality.DiagnosticCompletenessComponents = nil
 	}
@@ -526,6 +537,9 @@ func (c *collector) finalizeCollectionQuality() {
 			quality.DiagnosticCompletenessPercent,
 			quality.DiagnosticCompletenessComponents,
 		)
+	if quality.UnobservedAcceptedEvents > 0 {
+		quality.DiagnosticCompletenessExplanation = "Полнота неизвестна: часть принятых событий могла остаться за границей снимка; полный итог записи не наблюдался."
+	}
 	c.summary.CollectionQuality = quality
 	for _, reason := range quality.Reasons {
 		c.summary.Warnings = append(c.summary.Warnings, "Качество сбора: "+reason+".")

@@ -147,6 +147,16 @@ internal sealed class HookIntent(
     data object HandlerRemoveCallbacksAndMessages : HookIntent("handler.remove_callbacks_and_messages")
     data object HandlerHasCallbacks : HookIntent("handler.has_callbacks")
     data object HandlerMessageSend : HookIntent("handler.send_message")
+    data object WorkSubmission : HookIntent("worker.submission")
+    data object WorkBuilderBackoff : HookIntent("worker.builder_backoff")
+    data object WorkBuilderBackoffDuration : HookIntent("worker.builder_backoff_duration")
+    data object WorkBuilderExpedited : HookIntent("worker.builder_expedited")
+    data object WorkBuilderBuild : HookIntent("worker.builder_build")
+    data object WorkChainRoot : HookIntent("worker.chain_root")
+    data object WorkChainChild : HookIntent("worker.chain_child")
+    data object WorkChainCombine : HookIntent("worker.chain_combine")
+    data object ThreadStart : HookIntent("thread.start_returned")
+    data object ThreadFactoryReturn : HookIntent("thread.factory_returned")
     data class ExecutorRunnable(val kind: ExecutorRunnableKind) : HookIntent("executor.wrap_runnable.${kind.name.lowercase()}")
     data class ExecutorCallable(val kind: ExecutorCallableKind) : HookIntent("executor.wrap_callable.${kind.name.lowercase()}")
     data class CoroutineBlock(val kind: CoroutineBlockKind) : HookIntent("coroutine.wrap_block.${kind.name.lowercase()}")
@@ -570,7 +580,9 @@ internal object HookIntentResolver {
             OkHttpInstrumentationModule,
             WebSocketInstrumentationModule,
             HandlerInstrumentationModule,
+            ThreadInstrumentationModule,
             ExecutorInstrumentationModule,
+            WorkSubmissionInstrumentationModule,
             CoroutineInstrumentationModule,
             InteractionOperationInstrumentationModule,
             LogSpamInstrumentationModule,
@@ -712,7 +724,7 @@ private object HandlerInstrumentationModule : InstrumentationModule {
     override val priority: Int = 200
     override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.handlers
 
-    override fun enabled(config: HookConfig): Boolean = config.handlers
+    override fun enabled(config: HookConfig): Boolean = config.handlers || config.concurrencyDiagnostics
 }
 
 private object ExecutorInstrumentationModule : InstrumentationModule {
@@ -721,7 +733,17 @@ private object ExecutorInstrumentationModule : InstrumentationModule {
     override val priority: Int = 300
     override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.executors
 
-    override fun enabled(config: HookConfig): Boolean = config.executors
+    override fun enabled(config: HookConfig): Boolean = config.executors || config.concurrencyDiagnostics
+}
+
+private object ThreadInstrumentationModule : InstrumentationModule {
+    override val id: String = "thread"
+    override val family: String = "thread"
+    override val priority: Int = 290
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.threads
+
+    override fun enabled(config: HookConfig): Boolean =
+        config.threadLifecycle || config.executors || config.concurrencyDiagnostics
 }
 
 private object CoroutineInstrumentationModule : InstrumentationModule {
@@ -730,7 +752,7 @@ private object CoroutineInstrumentationModule : InstrumentationModule {
     override val priority: Int = 400
     override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.coroutines
 
-    override fun enabled(config: HookConfig): Boolean = config.coroutines
+    override fun enabled(config: HookConfig): Boolean = config.coroutines || config.concurrencyDiagnostics
 }
 
 private object InteractionOperationInstrumentationModule : InstrumentationModule {
@@ -954,3 +976,11 @@ private val DATABASE_TRANSACTION_OWNERS = setOf(
     "androidx/sqlite/db/SupportSQLiteDatabase",
     "androidx/room/RoomDatabase",
 )
+
+private object WorkSubmissionInstrumentationModule : InstrumentationModule {
+    override val id = "work-submission"
+    override val family = "work-submission"
+    override val priority = 850
+    override val bridges = VersionedBridgeCatalog.workSubmissions
+    override fun enabled(config: HookConfig): Boolean = config.workerTracing || config.concurrencyDiagnostics
+}

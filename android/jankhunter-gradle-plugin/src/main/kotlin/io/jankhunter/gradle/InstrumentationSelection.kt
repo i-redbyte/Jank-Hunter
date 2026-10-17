@@ -66,23 +66,18 @@ internal class ClassHierarchyResolver(
         val root = className.toInternalClassName()
         return cache.getOrPut(root) {
             val resolved = linkedSetOf(root)
-            val pending = ArrayDeque<String>()
-            pending.add(root)
-            while (pending.isNotEmpty()) {
-                val candidate = pending.removeFirst()
-                val data = try {
-                    classContext.loadClassData(candidate.replace('/', '.'))
-                } catch (exception: Exception) {
-                    if (exception is InterruptedException || exception is java.util.concurrent.CancellationException) {
-                        throw exception
-                    }
-                    recordFailure(candidate, exception)
-                    continue
-                } ?: continue
-                (data.superClasses + data.interfaces).forEach { parent ->
-                    val normalized = parent.toInternalClassName()
-                    if (resolved.add(normalized)) pending.add(normalized)
+            try {
+                // AGP ClassData already contains the transitive closure. Recursing into every
+                // ancestor repeats AGP's own hierarchy traversal, especially costly for DI DAGs.
+                classContext.loadClassData(root.replace('/', '.'))?.let { data ->
+                    data.superClasses.forEach { resolved.add(it.toInternalClassName()) }
+                    data.interfaces.forEach { resolved.add(it.toInternalClassName()) }
                 }
+            } catch (exception: Exception) {
+                if (exception is InterruptedException || exception is java.util.concurrent.CancellationException) {
+                    throw exception
+                }
+                recordFailure(root, exception)
             }
             resolved
         }
@@ -143,6 +138,8 @@ internal data class HookConfig(
     val okHttpHelperAvailable: Boolean = true,
     val handlers: Boolean,
     val executors: Boolean,
+    val threadLifecycle: Boolean = false,
+    val concurrencyDiagnostics: Boolean = false,
     val coroutines: Boolean,
     val interactionOperations: Boolean,
     val logSpam: Boolean,
@@ -160,6 +157,8 @@ internal data class HookConfig(
     val databaseTracing: Boolean = true,
     val workerTracing: Boolean = true,
     val ioTracing: Boolean = false,
+    val metadataCompatibilityMode: JankHunterMetadataCompatibilityMode = JankHunterMetadataCompatibilityMode.COMPATIBILITY,
+    val metadataDecodePathway: MetadataDecodePathway = MetadataDecodePathway.MAIN,
 ) {
     fun autoInitOnly(): HookConfig = copy(
         methodCounters = false,
@@ -167,6 +166,8 @@ internal data class HookConfig(
         webSockets = false,
         handlers = false,
         executors = false,
+        threadLifecycle = false,
+        concurrencyDiagnostics = false,
         coroutines = false,
         interactionOperations = false,
         logSpam = false,
@@ -189,6 +190,8 @@ internal data class HookConfig(
         webSockets = webSockets && network,
         handlers = false,
         executors = false,
+        threadLifecycle = false,
+        concurrencyDiagnostics = false,
         coroutines = false,
         interactionOperations = false,
         logSpam = false,

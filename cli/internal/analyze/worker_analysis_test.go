@@ -278,6 +278,19 @@ func TestWorkerCostIndexMatchesIntervalScan(t *testing.T) {
 	}
 }
 
+func TestWorkerCostIndexDoesNotLoseLaterCostsAfterPrefixOverflow(t *testing.T) {
+	var index workerCostIndex
+	index.add(workerCostInterval{startMS: 1, endMS: 2, duration: ^uint64(0), bytes: ^uint64(0)})
+	index.add(workerCostInterval{startMS: 3, endMS: 4, duration: 7, bytes: 11})
+	index.build()
+	if got := index.query(3, 5); got.count != 1 || got.duration != 7 || got.bytes != 11 {
+		t.Fatalf("later costs lost after unrelated prefix overflow: %+v", got)
+	}
+	if got := index.query(0, 5); got.duration != ^uint64(0) || got.bytes != ^uint64(0) {
+		t.Fatalf("overflowing result must saturate: %+v", got)
+	}
+}
+
 func TestWorkerPointIndexMatchesRangeScan(t *testing.T) {
 	random := rand.New(rand.NewSource(1_032_621))
 	var index workerPointIndex

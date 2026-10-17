@@ -9,6 +9,26 @@ import org.junit.Test
 
 class JankHunterLogDiscoveryTest {
     @Test
+    fun cancellationIsObservedBetweenUnsupportedFiles() = withTempDirectory { directory ->
+        val unrelated = File(directory, "notes.txt").apply { writeText("ignore") }
+        val log = File(directory, "late.jhlog").apply { writeText("log") }
+        var visited = 0
+        val files = sequence {
+            repeat(20) {
+                visited++
+                if (visited == 2) Thread.currentThread().interrupt()
+                yield(unrelated)
+            }
+            yield(log)
+        }
+        try {
+            assertTrue(JankHunterLogDiscovery.supportedFiles(files).isEmpty())
+            assertEquals(2, visited)
+            assertTrue(Thread.currentThread().isInterrupted)
+        } finally { Thread.interrupted() }
+    }
+
+    @Test
     fun sortsCanonicalLogsByDateAndNumericIndex() = withTempDirectory { directory ->
         File(directory, sessionName("2026-08-07", 9)).writeText("nine")
         File(directory, sessionName("2026-08-07", 10)).writeText("ten")

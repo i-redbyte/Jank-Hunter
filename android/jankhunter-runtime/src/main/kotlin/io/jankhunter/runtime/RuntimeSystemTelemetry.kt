@@ -150,13 +150,14 @@ internal class RuntimeSystemTelemetry(
         rssKb: Long,
         processName: String?,
     ) {
+        val config = access.config
         access.writer?.processExit(
             reason,
             timestampUnixMs,
             importance,
             pssKb,
             rssKb,
-            access.config?.redactProcessName(processName) ?: processName,
+            if (config == null) processName else config.redactProcessName(processName),
         )
     }
 

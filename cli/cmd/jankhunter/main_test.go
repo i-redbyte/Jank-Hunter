@@ -346,7 +346,7 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	printVersion(&buffer)
 
 	text := buffer.String()
-	if !strings.Contains(text, "Jank Hunter CLI 1.0.11") {
+	if !strings.Contains(text, "Jank Hunter CLI 1.0.13") {
 		t.Fatalf("version output missing CLI version: %q", text)
 	}
 	if !strings.Contains(text, ".jhlog format") {
@@ -652,7 +652,7 @@ func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	if err := registry.run([]string{"version"}); err != nil {
 		t.Fatalf("registry version error = %v", err)
 	}
-	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.11") {
+	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.13") {
 		t.Fatalf("version command output = %q", buffer.String())
 	}
 	if err := registry.run([]string{"missing"}); err == nil {
@@ -1300,5 +1300,42 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 	}
 	if includeDI {
 		writeDependencyInjectionFixture(t, filepath.Join(directory, "di-catalog.jsonl"))
+	}
+}
+
+func TestVersionReportsBuildRevisionAvailability(t *testing.T) {
+	var buffer bytes.Buffer
+	printVersion(&buffer)
+	if !strings.Contains(buffer.String(), "build: revision=") || !strings.Contains(buffer.String(), " modified=") {
+		t.Fatalf("version cannot distinguish builds with the same release label: %q", buffer.String())
+	}
+}
+
+func TestPrintBuildIdentityPreservesUnavailableAndDirtyStates(t *testing.T) {
+	cases := []struct {
+		name string
+		info *debug.BuildInfo
+		want string
+	}{
+		{name: "unavailable", want: "build: revision=unknown modified=unknown\n"},
+		{name: "missing settings", info: &debug.BuildInfo{}, want: "build: revision=unknown modified=unknown\n"},
+		{name: "clean", info: &debug.BuildInfo{Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "false"},
+		}}, want: "build: revision=abc123 modified=false\n"},
+		{name: "dirty", info: &debug.BuildInfo{Settings: []debug.BuildSetting{
+			{Key: "vcs.modified", Value: "true"}, {Key: "vcs.revision", Value: "def456"},
+		}}, want: "build: revision=def456 modified=true\n"},
+		{name: "invalid availability", info: &debug.BuildInfo{Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: ""}, {Key: "vcs.modified", Value: "unexpected"},
+		}}, want: "build: revision=unknown modified=unknown\n"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			printBuildIdentity(&buffer, test.info)
+			if got := buffer.String(); got != test.want {
+				t.Fatalf("identity=%q, want %q", got, test.want)
+			}
+		})
 	}
 }

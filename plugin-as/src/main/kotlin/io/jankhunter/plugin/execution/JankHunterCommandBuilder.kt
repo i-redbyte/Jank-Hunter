@@ -111,7 +111,7 @@ object JankHunterCommandBuilder {
 
         fun ensureOutput(extension: String): String {
             if (outputPath == null) {
-                outputPath = defaultOutputPath(project, request.mode, extension, request.format)
+                outputPath = defaultOutputPath(request.mode, extension, request.format)
             }
             return outputPath.orEmpty()
         }
@@ -200,7 +200,6 @@ object JankHunterCommandBuilder {
     }
 
     private fun defaultOutputPath(
-        project: Project,
         mode: JankHunterMode,
         extension: String,
         format: String,

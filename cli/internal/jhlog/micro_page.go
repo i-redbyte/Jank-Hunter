@@ -98,8 +98,8 @@ func encodeMicroPageRecord(
 	hasContext := false
 	for index := range rows {
 		row := rows[index]
-		if !row.eventType.IsSemanticData() {
-			return nil, fmt.Errorf("micro-page row %d has non-semantic type %d", index, row.eventType)
+		if !row.eventType.IsSemanticData() || uint64(row.eventType) > 1<<microPageTypeBits {
+			return nil, fmt.Errorf("micro-page row %d has unsupported micro-page type %d", index, row.eventType)
 		}
 		typeBuffer |= (uint64(row.eventType) - 1) << typeBits
 		typeBits += microPageTypeBits
@@ -520,7 +520,10 @@ func decodeMicroPage(
 	}
 	segmentState.workspace.microPage.events = pageEvents
 	segmentState.workspace.microPage.weights = pageWeights
-	return &segmentState.workspace.microPage, nextState, nil
+	// Both writers keep direct-record delta/context state independent from a
+	// micro-page, whose first timestamp and context are self-contained. Carrying
+	// the last inner row outward corrupts the next direct record's delta/reuse.
+	return &segmentState.workspace.microPage, state, nil
 }
 
 func microPageSectionLimit(section, rows int) int {

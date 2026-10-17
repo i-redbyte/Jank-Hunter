@@ -21,9 +21,6 @@ cli/coverage.out
 # Android / Gradle
 android/.kotlin/
 android/.gradle/
-android/**/.gradle/
-android/build-logic/.kotlin/
-android/jankhunter-gradle-plugin/.kotlin/
 android/build/
 android/**/build/
 android/**/.cxx/
@@ -31,13 +28,17 @@ android/**/.externalNativeBuild/
 android/**/captures/
 android/local.properties
 
-# Local Maven publish output (scripts/publish-to-local-maven.sh default)
-/jankhunter/
-
 # Jank Hunter artifacts
 *.jhlog
+!wire/testdata/work-schedule-art-5.3.0.jhlog
+!wire/testdata/work-schedule-active-art-5.3.0.jhlog
 *.jhlog.jsonl
 *-report.html
 reports/
 tmp/
 benchmarks/results/
+
+# Python validation tools
+__pycache__/
+*.py[cod]
+.venv/

@@ -3,11 +3,18 @@
     "prefix_hex": "4a484c4f470d0a",
     "marker": 129,
     "major": 5,
-    "minor": 1,
+    "minor": 3,
     "patch": 0,
     "header_schema": 3,
     "chunk_magic_hex": "4a484331",
     "commit_magic_hex": "4a48434d"
+  },
+  "process_recording": {
+    "magic_hex": "4a484c4f470d0a82010000",
+    "layout": "One process-lifetime file: magic followed by append-only complete JHLOG segments. Every segment has its own header, dictionaries, quality and SHA-256. FINAL chunk commits delimit segments; the last segment may be open or torn.",
+    "identity": "All segments carry the same RunID and ProcessInstanceID. SDK reconfiguration changes SessionID, not the physical file or application run. Snapshot rotation preserves the collector epoch and digest chain.",
+    "snapshot": "A captured process file is a bounded byte frontier. A sealed rotation at this frontier does not prove that a separate file is missing. Torn bytes remain explicit; coverage still requires collection-window evidence.",
+    "compatibility": "Raw JHLOG 5.x files remain readable. Readers that do not support the process marker reject it before reading any events. No manifest or per-epoch extraction is required."
   },
   "readable_legacy_header_schemas": [2],
   "build_identity_contract": {
@@ -19,7 +26,32 @@
     "legacy": "Schema2 remains readable as unverified. Older readers reject schema3 explicitly. Header schema is independent of unchanged data-record format5.1.0.",
     "policy": "Matching SHA permits mapping; mismatch rejects mapping. Legacy or unknown identity requires explicit trust override and unverified labeling. No mapping is needed for unminified identity."
   },
-  "readable_legacy_versions": [{"major": 5, "minor": 0, "patch": 0}],
+  "readable_legacy_versions": [{"major": 5, "minor": 0, "patch": 0}, {"major": 5, "minor": 1, "patch": 0}, {"major": 5, "minor": 2, "patch": 0}],
+  "causal_concurrency_contract": {
+    "introduced": "5.2.0",
+    "record_type": 39,
+    "required_feature_bit": 32,
+    "collector_bits": [13, 14],
+    "schema": "See specs/009-concurrency-diagnostics/contracts/causal-event-v1.md. Direct semantic record; never a five-bit micro-page row. Presence bits 0..21 distinguish measured zero from unavailable data. RESOURCE phase7 USE_ENTERED begins observation of an existing resource passed to use; acquisition and open/closed state are unknown. COROUTINE phase6 STATE_MACHINE_OBSERVED records first observed execution state without claiming creation.",
+    "compatibility": "Readers of 5.2 also read 5.0 and 5.1. Earlier readers reject required bit32. Old records remain unchanged; absence of causal records in old logs is unknown coverage, not observed zero."
+  },
+  "collector_flags": [
+    {"kotlin": "COLLECTOR_FPS", "go": "CollectorFPS", "bit": 0},
+    {"kotlin": "COLLECTOR_JANKSTATS", "go": "CollectorJankStats", "bit": 1},
+    {"kotlin": "COLLECTOR_PROCESS_EXIT", "go": "CollectorProcessExit", "bit": 2},
+    {"kotlin": "COLLECTOR_IO_TRACING", "go": "CollectorIOTracing", "bit": 3},
+    {"kotlin": "COLLECTOR_SYSTEM_SAMPLER", "go": "CollectorSystemSampler", "bit": 4},
+    {"kotlin": "COLLECTOR_MAIN_THREAD_STALLS", "go": "CollectorMainThreadStalls", "bit": 5},
+    {"kotlin": "COLLECTOR_RETAINED_OBJECTS", "go": "CollectorRetainedObjects", "bit": 6},
+    {"kotlin": "COLLECTOR_COMPOSE", "go": "CollectorCompose", "bit": 7},
+    {"kotlin": "COLLECTOR_ROOM", "go": "CollectorRoom", "bit": 8},
+    {"kotlin": "COLLECTOR_WORKER", "go": "CollectorWorker", "bit": 9},
+    {"kotlin": "COLLECTOR_DATABASE", "go": "CollectorDatabase", "bit": 10},
+    {"kotlin": "COLLECTOR_HTTP", "go": "CollectorHTTP", "bit": 11},
+    {"kotlin": "COLLECTOR_THREAD", "go": "CollectorThread", "bit": 12},
+    {"kotlin": "COLLECTOR_CONCURRENCY_DIAGNOSTICS", "go": "CollectorConcurrencyDiagnostics", "bit": 13},
+    {"kotlin": "COLLECTOR_CONCURRENCY_DETAILED", "go": "CollectorConcurrencyDetailed", "bit": 14}
+  ],
   "symbol_origin_contract": {
     "version": 1,
     "required_feature_bit": 31,
@@ -58,7 +90,9 @@
     {"kotlin": "WORKER_STAGE_ENQUEUED", "go": "WorkerStageEnqueued", "value": 1},
     {"kotlin": "WORKER_STAGE_STARTED", "go": "WorkerStageStarted", "value": 2},
     {"kotlin": "WORKER_STAGE_FINISHED", "go": "WorkerStageFinished", "value": 3},
-    {"kotlin": "WORKER_STAGE_REGISTERED_OBSERVED", "go": "WorkerStageRegisteredObserved", "value": 4}
+    {"kotlin": "WORKER_STAGE_REGISTERED_OBSERVED", "go": "WorkerStageRegisteredObserved", "value": 4},
+    {"kotlin": "WORKER_STAGE_FOREGROUND_ENTERED", "go": "WorkerStageForegroundEntered", "value": 5},
+    {"kotlin": "WORKER_STAGE_FOREGROUND_ATTEMPT_BOUNDARY", "go": "WorkerStageForegroundAttemptBoundary", "value": 6}
   ],
   "worker_registration_contract": {
     "introduced": "5.1.0",
@@ -133,7 +167,8 @@
     {"kotlin": "FEATURE_HTTP_FIRST_BYTE", "go": "FeatureHTTPFirstByte", "bit": 28},
     {"kotlin": "FEATURE_UID_TRAFFIC", "go": "FeatureUIDTraffic", "bit": 29},
     {"kotlin": "FEATURE_HTTP_COLLECTION_STATE", "go": "FeatureHTTPCollectionState", "bit": 30},
-    {"kotlin": "FEATURE_SYMBOL_ORIGIN", "go": "FeatureSymbolOrigin", "bit": 31}
+    {"kotlin": "FEATURE_SYMBOL_ORIGIN", "go": "FeatureSymbolOrigin", "bit": 31},
+    {"kotlin": "FEATURE_CAUSAL_CONCURRENCY", "go": "FeatureCausalConcurrency", "bit": 32}
   ],
   "optional_features": [
     {"kotlin": "OPTIONAL_FEATURE_GZIP_CHUNKS", "go": "FeatureGZIPChunks", "bit": 0, "profiles": ["gzip"]},
@@ -191,8 +226,53 @@
     {"kotlin": "TYPE_PROCESS_STATE", "go": "EventProcessState", "value": 24},
     {"kotlin": "TYPE_ANDROID_COMPONENT", "go": "EventAndroidComponent", "value": 25},
     {"kotlin": "TYPE_BINDER_TRANSACTION", "go": "EventBinderTransaction", "value": 26},
-    {"kotlin": "TYPE_MICRO_PAGE", "go": "eventMicroPage", "value": 27}
+    {"kotlin": "TYPE_MICRO_PAGE", "go": "eventMicroPage", "value": 27},
+    {"kotlin": "TYPE_THREAD_SNAPSHOT", "go": "EventThreadSnapshot", "value": 28},
+    {"kotlin": "TYPE_WORKER_CATALOG", "go": "EventWorkerCatalog", "value": 29},
+    {"kotlin": "TYPE_WORK_REGISTRY", "go": "EventWorkRegistry", "value": 30},
+    {"kotlin": "TYPE_WORKER_IDENTITY", "go": "EventWorkerIdentity", "value": 31},
+    {"kotlin": "TYPE_THREAD_LIFECYCLE", "go": "EventThreadLifecycle", "value": 32},
+    {"kotlin": "TYPE_WORK_SUBMISSION", "go": "EventWorkSubmission", "value": 33},
+    {"kotlin": "TYPE_WORK_CHAIN_EDGE", "go": "EventWorkChainEdge", "value": 34},
+    {"kotlin": "TYPE_WORK_CHAIN_ROOT", "go": "EventWorkChainRoot", "value": 35},
+    {"kotlin": "TYPE_WORKER_FAILURE", "go": "EventWorkerFailure", "value": 36},
+    {"kotlin": "TYPE_COROUTINE_SEGMENT", "go": "EventCoroutineSegment", "value": 37},
+    {"kotlin": "TYPE_WORKER_PROGRESS", "go": "EventWorkerProgress", "value": 38},
+    {"kotlin": "TYPE_CAUSAL_EVENT", "go": "EventCausalEvent", "value": 39}
   ],
+  "worker_progress_contract": {
+    "record_type": 38,
+    "schema": "version=1, stage=1(request)|2(omission summary), instance_id:u64, run_attempt:u32, generation:u32, observed_elapsed_nanos:u64, omitted_updates:u32, omitted_keys:u32, truncated_fields:u32, metadata_count<=8, then key:string<=512 UTF-8 bytes, type:string<=32 UTF-8 bytes, known_size:0|1, optional payload_bytes:u64 for each field. Stage2 has no fields, omitted_keys or truncated_fields.",
+    "semantics": "Records only direct setProgressAsync calls through the optional JankHunterWorker/JankHunterCoroutineWorker base implementations; a call does not prove persistence. Actual persisted progress is observed separately through WorkInfo. At most32 request records per attempt and one per second; omitted calls have a bounded summary at finish. No Data values are retained. CLI attributes only to one unambiguous active attempt in the same process session and otherwise reports unattributed evidence. Old logs remain readable; old readers may reject record38."
+  },
+  "work_registry_contract": {
+    "record_type": 30,
+    "packet_header": "version=1, snapshot_id, query_started_elapsed_ms, observed_elapsed_ms, interval_ms, packet_index, packet_count, total_observed, retained_jobs, unavailable_reason, row_count: unsigned varints. Up to128 retained jobs,8 rows per packet,16 packets; unavailable reasons0=available,1=no_source,2=query_failed,3=query_timeout,4=invalid_source. Unavailable packets contain zero jobs and counts.",
+    "row": "uuid:string36, instance_id:u64, state:uvarint(0=enqueued,1=running,2=succeeded,3=failed,4=blocked,5=cancelled), attempt:u32, generation:u32, initial_delay_ms:u64, presence:u64. bit0=period+flex unsigned durations, bit1=earliest_eligible_unix_ms signed zigzag, bit2=stop_reason signed zigzag. Other presence bits rejected. Then tags:string_list8, omitted_tags:u32, network_type:string64, constraints:u64, URI strings:list4, omitted_triggers:u32, progress and output metadata lists8, omitted_progress:u32, omitted_output:u32, truncated_fields:u32. Texts max512 UTF-8 bytes; UUID canonical lower-case. Metadata: key:string512,type:string32,known_size:0|1,optional payload_bytes:u64.",
+    "constraints": "Unsigned mask: bit0 charging,bit1 battery-not-low,bit2 storage-not-low,bit3 device-idle,bit4 content-URI,bit5 custom-network-request. Reserved bits rejected. These are declarations, not observations of device conditions.",
+    "bounds": "Each packet <=128KiB; one pending batch in writer. CLI12500 packets/100000 rows/conservative32MiB retained packet budget. Loss and partial snapshots remain explicit; packet assembly scoped by run/process/session plus snapshot_id, never UUID alone.",
+    "semantics": "Supported WorkInfo observations only; class, unique name, dependency UUIDs, enqueue policies and backoff/expedited/quota are unknown in this source. Absence is not completion. RUNNING has unknown actual start. Periodic attempt counters can reset. Latest configuration generation need not be the generation currently executing. Earliest eligibility is not an appointment. CPU/resource attribution is not inferred.",
+    "compatibility": "Old readers reject unknown record30. Existing layouts unchanged. Header anchors provide monotonic-to-calendar mapping; missing anchors and snapshot age remain unknown."
+  },
+  "worker_catalog_contract": {
+    "record_type": 29,
+    "payload": "UTF-8 JSON document preceded by unsigned varint byte length, max 131072 bytes. schema=1, status=available|missing|unreadable|oversized. Available documents carry original pre-R8 class names (max4096, unique, each max1024 UTF-8 bytes), namespace (32 hex), scope=application-and-packaged-dependencies-pre-r8, dynamic_modules=outside-base-scope, unresolved_classes and omitted_workers counters. Unavailable documents contain no inventory or coverage counts.",
+    "scope": "Per collector epoch and process, loaded on maintenance. Pre-R8 candidates do not prove retention by R8 or runtime usage. Classes are never instantiated or kept alive by the inventory. Missing event is unknown, never an empty catalog.",
+    "bounds": "Android reads at most 128 KiB plus one bounded read buffer; CLI retains at most32 documents and reports omitted documents. HTML displays at most100 class rows per page.",
+    "compatibility": "Old readers reject unknown record29. Existing record layouts are unchanged."
+  },
+  "worker_stop_contract": {
+    "outcome": "WORKER outcome5 is STOPPED, distinct from CANCELLED4. Stop caused by constraints, timeout or quota must not imply application cancellation. Unknown stop reason remains absent. Legacy readers reject unsupported outcome5; existing outcome values remain unchanged.",
+    "concurrency": "Unmatched starts contribute an observed point to concurrency, never an invented lifetime through the end of the log. Durations and resource correlation require a captured finish."
+  },
+  "thread_snapshot_contract": {
+    "type": "28; payload schema 1, 2 or 3; unsigned varints: schema, elapsedRealtime ms, scan duration ms, configured interval ms, clock ticks/sec (0 unknown), complete boolean, failed reads; bounded UTF-8 reason; row count <=2048.",
+    "row": "Unsigned TID, start ticks since boot; bounded UTF-8 name <=1024 bytes; unsigned OS state ASCII, user ticks, system ticks; zigzag signed 64-bit priority and nice. No flags or packed states. Unknown schema rejected explicitly. Counters are preserved, never wrapped or inferred from wall time.",
+    "fidelity": "Process/run/session from envelope header. Complete means successful enumeration/read, not atomicity or coverage between scans. Schema1 has no Java identity/state. Schema2 links only weakly registered live Java Threads on actual executing Linux TID, registered before scan start and still alive after state capture; native/uninstrumented threads remain unknown. First run hook is not creation/start and does not cover short-lived threads absent from snapshots. A full self-contained snapshot survives rotation or earlier losses; loss accounting uses existing event-reason counters.",
+    "bounds": "At most one pending snapshot per async writer, 2048 reads per scan, 4096 characters per stat read. File.list directory enumeration allocation depends on actual kernel task count. Default disabled pending complete overhead validation; explicit threadSamplerEnabled enables 5000ms interval, minimum500ms.",
+    "java_schema_2": "Schema2 appends unsigned presence(0|1) after EACH kernel row. Present: unsigned positive Java ID, daemon boolean, first observed elapsedRealtime nanoseconds; UTF-8 Java name <=1024 bytes, Java state name <=32 bytes, first run-hook source <=1024 bytes. States NEW/RUNNABLE/BLOCKED/WAITING/TIMED_WAITING/TERMINATED are separate from OS states. After ALL rows: unsigned dropped Java registrations. Schema1 unchanged; old readers reject schema2 explicitly. JSON emits Java ID and nanoseconds as decimal strings to preserve 64-bit precision.",
+    "java_schema_3": "Schema3 preserves schema2 and appends unsigned owned-by-Jank-Hunter flag (0|1) after each present Java source. The flag is true only for a thread explicitly registered while executing with its own Linux TID; missing Java identity or schema1/2 leaves ownership unknown. After all rows: unsigned dropped Java registrations. No name or package heuristic proves ownership."
+  },
   "uid_traffic_contract": {
     "feature": "Required bit29 FEATURE_UID_TRAFFIC appends traffic_uid_plus_one and traffic_known_flags as unsigned varints after the ten existing DEVICE_CONTEXT values. Without the bit, historical payloads have no provenance.",
     "uid": "Zero means unknown. Android UID0 is encoded as1; maximum encoded UID is2^31. Flags use bit0 for RX-known and bit1 for TX-known; other bits and known-without-UID are invalid. A known counter may be zero. Unsupported counters have a clear known bit, independently per direction.",
@@ -234,13 +314,86 @@
       "runtime_graph_storage_skipped_entry_total": 8266
     }
   },
+  "work_chain_edge_contract": {
+    "record_type": 34,
+    "schema": "1: unsigned varints version, parent UUID most/least raw 64-bit words, child UUID most/least raw 64-bit words, observed elapsedRealtime nanos, flags (bit0 caller source truncated; other bits rejected); required nonempty UTF-8 caller source (max512 bytes).",
+    "meaning": "An observed public WorkContinuation.then call declared a direct prerequisite between two request UUIDs in one collection epoch. It does not prove enqueue, acceptance, registration, or execution. Missing beginWith/then observations leave lineage unknown; combine and uninstrumented code are outside this source.",
+    "bounds": "Epoch-owned weak continuation identities, at most64 continuations and8 tail UUIDs per continuation by default. quality id0x2053 counts rejected/truncated declarations. Existing BULK admission records transport loss. Older readers reject record34 explicitly; older records remain unchanged."
+  },
+  "work_chain_root_contract": {
+    "record_type": 35,
+    "schema": "Same versioned payload as record33 WorkSubmission: UUID words, observed elapsedRealtime nanos, unique name/policy, caller source and truncation flags.",
+    "meaning": "Public WorkManager.beginWith or beginUniqueWork returned WorkContinuation. The request UUIDs and optional unique name/policy describe graph construction, not enqueue, acceptance or execution. A later then event may declare dependencies. No direct acceptance is inferred from this record.",
+    "bounds": "Only first8 request UUIDs per call. Extra requests and tracker rejections use quality id0x2053. Older readers reject record35; earlier records remain unchanged."
+  },
+  "worker_failure_contract": {
+    "record_type": 36,
+    "schema": "1: unsigned varints version, salted instance ID, run attempt, generation, observed elapsedRealtime nanos, flags (bit0 stack truncated; other bits rejected); required exception class UTF-8 max128 bytes; optional frame-only stack UTF-8 max1024 bytes.",
+    "meaning": "An exception observed during a worker attempt, not its final WorkManager result. The record carries no exception message or field values. Match only to the same process/session instance ID, attempt, and generation.",
+    "bounds": "At most8 frames and1024 UTF-8 stack bytes at capture. Existing BULK admission records transport loss. Earlier readers reject record36; earlier records remain unchanged."
+  },
+  "coroutine_segment_contract": {
+    "record_type": 37,
+    "schema": "1: unsigned varints version, monotonic process-local coroutine token, collection generation, entry Java Thread ID, exit Java Thread ID, segment start elapsedRealtime milliseconds, segment end elapsedRealtime milliseconds, state (0=suspended,1=completed,2=failed,3=cancelled); required source/owner UTF-8 max512 bytes. Version2 inserts positive entry and exit Linux TID varints before the source string. Version3 is a running-at-capture observation: state=4, end timestamp means observed-through time, entry Linux TID is positive, exit Java ID and exit Linux TID are zero/unknown.",
+    "meaning": "An observed synchronous resume segment of a Kotlin coroutine state machine, not ownership of the thread while suspended. Version3 does not terminate the segment; a later version2 exit record with the same token may follow. Token joins segments only within the same process/session and generation. Schema2 directly records both Linux TIDs; schema1 needs a separate observed Java-to-kernel mapping. Missing records or uninstrumented coroutines mean incomplete coverage.",
+    "bounds": "Only emitted with COROUTINES and opt-in thread sampling. Runtime state uses bounded weak identities; emission uses BULK admission and explicit loss. CLI history max50000 segments/16MiB. Older readers reject record37; earlier records remain unchanged."
+  },
+  "thread_resource_analysis_contract": {
+    "collector_bit": 12,
+    "meaning": "SESSION bit12 declares opt-in thread sampling for the collector epoch. CLI may retain bounded HTTP, database, file and ContentResolver operation completion events with producer Linux TID, code source, HTTP route target, outcome and operation context. A route never substitutes for a missing code source. Producer TID is the thread that recorded the completion, not proof of ownership across an asynchronous operation. Start is derived from end minus recorded duration only when duration does not exceed the available clock value; otherwise it is unknown. It is never a separate observed start. Old logs without bit12 do not gain inferred thread-resource history.",
+    "bounds": "CLI retains at most50000 resource completions or16MiB; dropped count is explicit. Existing event payloads are unchanged."
+  },
+  "work_submission_contract": {
+    "schedule_hints_introduced": "5.3.0",
+    "record_type": 33,
+    "schema": "1: unsigned varints version, UUID most/least raw 64-bit words, observed elapsedRealtime nanos, flags, omitted request count, policy. Optional UTF-8 unique name (max512 bytes) when unique flag is set. Schema2 appends a required nonempty UTF-8 caller source (max512 bytes) captured before R8; schema1 means caller source unknown. Schema3 follows the source with three unsigned varints: explicit backoff policy (0 unknown, 1 LINEAR, 2 EXPONENTIAL), requested backoff milliseconds (0 when policy unknown), and explicit expedited out-of-quota policy (0 unknown, 1 RUN_AS_NON_EXPEDITED_WORK_REQUEST, 2 DROP_WORK_REQUEST). Schema4 appends schedule presence mask (bits0 period,1 explicit flex,2 initial delay), then present unsigned millisecond values in bit order, limited to signed Long.MAX_VALUE. Nonzero mask only; flex requires period; period/flex require periodic. Absent fields remain unknown; observed period with absent flex identifies the no-flex constructor (full-period default). Values are requested before WorkManager clamping, not effective schedule.",
+    "flags": "64-bit unsigned independent bits: 0 unique name present (empty allowed), 1 periodic request, 2 name truncated; schemas2/3/4 additionally allow bit3 caller source truncated. Other bits rejected. Name truncation requires unique name present; caller source truncation requires schema2,3 or4.",
+    "policy": "0 none (non-unique only), 1 KEEP, 2 REPLACE, 3 APPEND, 4 APPEND_OR_REPLACE, 5 UPDATE, 6 CANCEL_AND_REENQUEUE. Periodic unique allows1,2,5,6; one-time unique allows1..4. Validate before narrowing.",
+    "meaning": "Observed after an adapter enqueue call returns Operation, before acceptance is known. KEEP can ignore a new UUID. Schema3 builder hints are observed from public setter calls and joined to a successfully built request UUID; they are requested values, not proof of effective/clamped delay, quota handling, acceptance, registration, replacement, update success, start or dependencies. Existing producer attribution captures caller context.",
+    "bounds": "Adapter captures first128 requests as primitive IDs only; omitted count is carried on the first record of that call. Epoch builder tracker retains at most128 weak builder identities and128 built UUID observations, including builds without explicit setters. A UUID reused by builds with differing observed hints becomes unknown. Quality id0x2054 counts rejected builder captures and newly detected UUID conflicts. Names capped at128 UTF-16 code units without splitting surrogate pairs, explicit truncation bit. Existing BULK admission records transport loss. CLI50000 observations/16MiB estimated bytes, explicit losses; compact comparison removes detailed history.",
+    "compatibility": "Record33 uses the existing direct record envelope and never enters the five-bit micro-page type column (types1..32). Existing records unchanged; earlier readers reject record33 explicitly. UUID words remain full width. One flags byte replaces three independent bool bytes in ordinary small-varint encoding."
+  },
+  "thread_lifecycle_contract": {
+    "record_type": 32,
+    "schema": "1; unsigned varints: version, stage, Java ID (0 unknown), target Linux TID, observed elapsedRealtime nanos, daemon boolean. Three length-prefixed UTF-8 strings (each <=1024 bytes): observed Java name, source method, factory class (empty unavailable).",
+    "stages": "1 first run-body observation in this collection epoch (target TID positive); 2 Thread.start call returned normally; 3 ThreadFactory.newThread returned a non-null Thread object. Stages2/3 have target TID0 (unknown). No stage proves kernel creation, first instruction or termination. Java ID and nanos are decimal JSON strings.",
+    "context": "Existing producer envelope supplies actual recording/caller Linux TID, producer time and captured attribution. Caller context is not transferred to the new thread. Short-lived run observations remain independent of periodic snapshots.",
+    "compatibility": "Existing events unchanged; readers before record32 reject it explicitly. Unknown versions/stages/daemon flags rejected without narrowing."
+  },
+  "worker_identity_contract": {
+    "schema_version": 1,
+    "record_type": 31,
+    "payload": ["version:uvarint", "instance_id:uvarint", "uuid_most_bits:uvarint", "uuid_least_bits:uvarint"],
+    "identity": "Nonzero process-private instance ID maps to raw 128-bit WorkManager UUID. All word bits preserved. Binding is explicit, not inferred from names or tags. Scope by run/process/session; conflicting UUIDs for one private ID remain ambiguous.",
+    "collection": "Recorded when active runtime computes a WorkManager instance ID. Repeated records do not mean enqueue or execution; loss leaves correspondence unknown. No Data values are included.",
+    "compatibility": "Existing records unchanged; readers predating record31 reject it explicitly."
+  },
   "layouts": {
     "dictionary_stable": ["kind", "stable_id_le64", "front_or_token_value"],
     "runtime_edge_block": ["row_count_and_columnar_flag", "definition_bit_plane", "edge_id_column", "tuple_columns", "count_column", "total_column", "max_column"]
   },
   "goldens": {
-    "file-magic.bin": "4a484c4f470d0a81050100",
+    "file-magic.bin": "4a484c4f470d0a81050300",
     "dictionary-stable.bin": "0c0807060504030201000179",
     "runtime-edge-columnar.bin": "09050101010c050001040a14040203050505"
+  },
+  "work_registration_observation_contract": {
+    "lifetime": "At most 64 registration observations per collection epoch, at most 128 request identities each. Timeout 60000 elapsed milliseconds; maintenance expires every 5000 ms and callbacks check the deadline. Completion releases retention immediately. Stop clears observation leases and cancels only diagnostic WorkInfo queries, never the application Operation or job. Already publishing callbacks use only their original writer.",
+    "quality_counter_ids": {
+      "work_registration_capacity_rejected_total": 8272,
+      "work_registration_timeout_total": 8273,
+      "work_registration_unfinished_at_stop_total": 8274
+    },
+    "coverage": "Capacity and timeout make diagnostic completeness unknown; no invented lost-event count. Stop is an observation boundary, not proof of a failed enqueue. Counters are presented in collection-quality analysis. Readers without these IDs reject them explicitly."
+  },
+  "runtime_stability_contract": {
+    "quality_counter_ids": {
+      "hook_reentrancy_total": "0x2058",
+      "collector_breaker_total": "0x2059",
+      "registry_contention_total": "0x205a",
+      "hook_counter_contention_total": "0x205b"
+    },
+    "causal_loss_distribution": "0x2200+(kind-1)*32+mainThread*16+phase; kinds1..10/phases1..15. Fixed primitive storage; main/background category, no Thread ID/message data. Distribution is a projection of global loss, never added twice. Older readers reject unknown counters.",
+    "policy": "Producer graph/event publication never waits for diagnostic capacity. Reentrant graph capture is omitted; after8 nonfatal graph hook failures new expensive entries stop until a new epoch, while prior exits still release frames. Loss remains partial, never absence-of-problem proof. Older readers reject unknown counters explicitly."
   }
 }

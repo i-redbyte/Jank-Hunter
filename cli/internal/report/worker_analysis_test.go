@@ -55,7 +55,7 @@ func TestInspectRendersTypedWorkerLifecycleAsSeparateProblemFirstDetail(t *testi
 	}
 	html := string(data)
 	for _, expected := range []string{
-		`href="#workers">Фоновые задачи`, `id="workers"`, "Жизненный цикл фоновых задач",
+		`href="#workers">WorkManager`, `id="workers"`, "Жизненный цикл фоновых задач",
 		"com.app.SyncWorker", "Ожидание запуска", "Параллельно работало",
 		"Временная связь, а не доказанная причина", "Сетевые запросы", "Файловые операции",
 		"Средняя загрузка процессора", "Изменение памяти процесса",
@@ -92,5 +92,42 @@ func TestWorkerRegistrationReportExplainsUnknownEnqueueTime(t *testing.T) {
 	}
 	for _, want := range []string{"Регистрация подтверждена запросом", "Время постановки по этому наблюдению неизвестно"} {
 		assertHTMLContains(t, path, want)
+	}
+}
+
+func TestWorkerRetryAndCancellationAloneDoNotProveAProblem(t *testing.T) {
+	for _, worker := range []analyze.WorkerStats{{Retries: 1}, {Cancelled: 1}, {Stopped: 1}} {
+		_, severity := workerReportStatus(worker)
+		if severity != "ok" {
+			t.Fatalf("normal lifecycle treated as problem: %+v severity=%s", worker, severity)
+		}
+	}
+}
+
+func TestWorkerStatusSeparatesStartSignalDurationAndIncompleteCollection(t *testing.T) {
+	tests := []struct {
+		name, status, severity string
+		worker                 analyze.WorkerStats
+	}{
+		{name: "main-thread start", worker: analyze.WorkerStats{MainThreadStarts: 1},
+			status: "событие начала на главном потоке; проверить", severity: "medium"},
+		{name: "threshold duration", worker: analyze.WorkerStats{RunSamples: 1, RunMaxMS: 10_000},
+			status: "завершённая попытка достигла порога 10 с", severity: "medium"},
+		{name: "duration without samples", worker: analyze.WorkerStats{RunMaxMS: 10_000},
+			status: "наблюдение", severity: "ok"},
+		{name: "missing start", worker: analyze.WorkerStats{MissingStart: 1},
+			status: "неполные данные жизненного цикла", severity: "ok"},
+		{name: "missing finish", worker: analyze.WorkerStats{MissingFinish: 1},
+			status: "неполные данные жизненного цикла", severity: "ok"},
+		{name: "failure still outranks observation", worker: analyze.WorkerStats{Failures: 1, MainThreadStarts: 1},
+			status: "есть неуспешные завершения", severity: "high"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, severity := workerReportStatus(test.worker)
+			if status != test.status || severity != test.severity {
+				t.Fatalf("workerReportStatus(%+v) = %q, %q; want %q, %q", test.worker, status, severity, test.status, test.severity)
+			}
+		})
 	}
 }

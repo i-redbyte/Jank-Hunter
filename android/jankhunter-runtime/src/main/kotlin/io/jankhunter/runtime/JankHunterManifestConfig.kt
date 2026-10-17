@@ -41,6 +41,10 @@ class JankHunterManifestConfig private constructor() {
         internal const val META_OWNER_BLOCK_THRESHOLD_MS = "io.jankhunter.owner_block_threshold_ms"
         internal const val META_HTTP_SLOW_THRESHOLD_MS = "io.jankhunter.http_slow_threshold_ms"
         internal const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
+        internal const val META_THREAD_SAMPLER_ENABLED = "io.jankhunter.thread_sampler_enabled"
+        internal const val META_THREAD_SAMPLE_INTERVAL_MS = "io.jankhunter.thread_sample_interval_ms"
+        internal const val META_CONCURRENCY_DETAILED_ENABLED = "io.jankhunter.concurrency_detailed_enabled"
+        internal const val META_CONCURRENCY_MAX_TRACKED_ENTITIES = "io.jankhunter.concurrency_max_tracked_entities"
         internal const val META_SYSTEM_SAMPLER_ENABLED = "io.jankhunter.system_sampler_enabled"
         internal const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
         internal const val META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED =
@@ -111,6 +115,10 @@ class JankHunterManifestConfig private constructor() {
                 .ownerBlockThresholdMs(metadata.long(META_OWNER_BLOCK_THRESHOLD_MS, 250L))
                 .httpSlowThresholdMs(metadata.long(META_HTTP_SLOW_THRESHOLD_MS, 1_000L))
                 .memorySampleIntervalMs(metadata.long(META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L))
+                .threadSamplerEnabled(metadata.boolean(META_THREAD_SAMPLER_ENABLED, false))
+                .threadSampleIntervalMs(metadata.long(META_THREAD_SAMPLE_INTERVAL_MS, 5_000L))
+                .concurrencyDetailedEnabled(metadata.boolean(META_CONCURRENCY_DETAILED_ENABLED, false))
+                .concurrencyMaxTrackedEntities(metadata.int(META_CONCURRENCY_MAX_TRACKED_ENTITIES, 4096))
                 .systemSamplerEnabled(metadata.boolean(META_SYSTEM_SAMPLER_ENABLED, true))
                 .systemSampleIntervalMs(metadata.long(META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L))
                 .mainLooperDispatchMonitorEnabled(metadata.boolean(META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false))

@@ -1,11 +1,14 @@
 package io.jankhunter.runtime
 
 import java.lang.ref.WeakReference
+import java.lang.ref.ReferenceQueue
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertNotNull
@@ -40,14 +43,20 @@ class ScheduledFutureRetentionArtTest {
     @Test
     fun completedRunnableReleasesTaskWhileFutureIsRetained() = withExecutor { executor ->
         val retained = completePayload(executor)
-        assertNoTaskState(retained.first)
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
-        while (retained.second.get() != null && System.nanoTime() < deadline) {
-            System.gc()
-            Thread.yield()
+        assertNoTaskState(retained.future)
+        assertPayloadReleased(retained)
+        assertTrue(retained.future.isDone)
+    }
+
+    @Test
+    fun unwrappedDelegateIsTheRetentionProbeControl() {
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        try {
+            assertPayloadReleased(completePayload(executor))
+        } finally {
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(2L, TimeUnit.SECONDS))
         }
-        assertNull("completed future retained runnable payload", retained.second.get())
-        assertTrue(retained.first.isDone)
     }
 
     @Test
@@ -126,14 +135,49 @@ class ScheduledFutureRetentionArtTest {
         assertNoTaskState(future)
     }
 
-    private fun completePayload(
-        executor: JankHunterScheduledExecutorService,
-    ): Pair<ScheduledFuture<*>, WeakReference<ByteArray>> {
-        val payload = ByteArray(1024 * 1024)
-        val reference = WeakReference(payload)
-        val future = executor.schedule(Runnable { check(payload.size == 1024 * 1024) }, 0L, TimeUnit.MILLISECONDS)
-        future.get(2L, TimeUnit.SECONDS)
-        return Pair(future, reference)
+    private data class PayloadProbe(
+        val future: ScheduledFuture<*>,
+        val reference: WeakReference<ByteArray>,
+        val collected: ReferenceQueue<ByteArray>,
+    )
+
+    private fun completePayload(executor: ScheduledExecutorService): PayloadProbe {
+        val result = AtomicReference<PayloadProbe>()
+        val failure = AtomicReference<Throwable>()
+        // End the allocation frame before requesting GC: ART may retain interpreter/JIT locals.
+        val producer = Thread {
+            try {
+                val payload = ByteArray(1024 * 1024)
+                val queue = ReferenceQueue<ByteArray>()
+                val reference = WeakReference(payload, queue)
+                val future = executor.schedule(Runnable { check(payload.size == 1024 * 1024) }, 0L, TimeUnit.MILLISECONDS)
+                future.get(2L, TimeUnit.SECONDS)
+                result.set(PayloadProbe(future, reference, queue))
+            } catch (throwable: Throwable) {
+                failure.set(throwable)
+            }
+        }
+        producer.start()
+        producer.join(3_000L)
+        assertTrue("payload producer did not finish", !producer.isAlive)
+        failure.get()?.let { throw AssertionError("payload producer failed", it) }
+        return checkNotNull(result.get())
+    }
+
+    private fun assertPayloadReleased(probe: PayloadProbe) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+        var collected = false
+        // Never call WeakReference.get before GC: the probe must not make its referent a live local.
+        while (System.nanoTime() < deadline) {
+            Runtime.getRuntime().gc()
+            if (probe.collected.remove(50L) != null) {
+                collected = true
+                break
+            }
+        }
+        assertTrue("completed future retained runnable payload", collected)
+        assertNull(probe.reference.get())
+        assertTrue(probe.future.isDone)
     }
 
     private fun assertNoTaskState(future: ScheduledFuture<*>) {

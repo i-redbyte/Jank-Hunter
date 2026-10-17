@@ -10,9 +10,10 @@ import (
 )
 
 type heapInputFlags struct {
-	outputPath  string
-	dumpRaw     string
-	evidenceRaw string
+	outputPath    string
+	dumpRaw       string
+	evidenceRaw   string
+	resolvedDumps []string
 }
 
 func takeHeapInputFlags(args []string, dumpFlag, evidenceFlag string) (heapInputFlags, []string, error) {
@@ -28,14 +29,30 @@ func takeHeapInputFlags(args []string, dumpFlag, evidenceFlag string) (heapInput
 }
 
 func (h heapInputFlags) apply(title string, paths []string, options analyze.Options) (analyze.Options, error) {
-	return optionsWithHeapEvidenceForOutput(title, paths, options, h.evidenceRaw, h.dumpRaw, h.outputPath)
+	return optionsWithHeapEvidenceForOutput(
+		title,
+		paths,
+		options,
+		h.evidenceRaw,
+		h.dumpRaw,
+		h.outputPath,
+		h.resolvedDumps,
+	)
 }
 
 func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
-	return optionsWithHeapEvidenceForOutput(title, paths, options, heapEvidenceRaw, heapDumpRaw, "")
+	return optionsWithHeapEvidenceForOutput(title, paths, options, heapEvidenceRaw, heapDumpRaw, "", nil)
 }
 
-func optionsWithHeapEvidenceForOutput(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw, output string) (analyze.Options, error) {
+func optionsWithHeapEvidenceForOutput(
+	title string,
+	paths []string,
+	options analyze.Options,
+	heapEvidenceRaw string,
+	heapDumpRaw string,
+	output string,
+	resolvedDumps []string,
+) (analyze.Options, error) {
 	heapEvidencePaths, err := canonicalizeFileInputs(expandComma(heapEvidenceRaw), "heap evidence")
 	if err != nil {
 		return options, err
@@ -46,11 +63,15 @@ func optionsWithHeapEvidenceForOutput(title string, paths []string, options anal
 	}
 	autoDiscoveredHeapDumps := false
 	if len(heapEvidencePaths) == 0 && len(heapDumpPaths) == 0 {
-		heapDumpPaths, err = canonicalizeFileInputs(discoverHeapDumpsNearLogs(paths), "auto-discovered heap dump")
+		candidates := resolvedDumps
+		if len(candidates) == 0 {
+			candidates = discoverHeapDumpsNearLogs(paths)
+		}
+		heapDumpPaths, err = canonicalizeFileInputs(candidates, "auto-discovered heap dump")
 		if err != nil {
 			return options, err
 		}
-		if len(heapDumpPaths) > 1 {
+		if len(resolvedDumps) == 0 && len(heapDumpPaths) > 1 {
 			return options, fmt.Errorf(
 				"%s: найдено несколько HPROF рядом с логами (%s); укажите однозначный --heap-dump явно",
 				title,
@@ -88,7 +109,7 @@ func optionsWithHeapEvidenceForOutput(title string, paths []string, options anal
 		return options, err
 	}
 	if autoDiscoveredHeapDumps {
-		evidence.AddDiagnostic(analyze.HeapDiagnostic{Code: "auto_discovery", Severity: analyze.HeapDiagnosticInfo, Impact: analyze.HeapImpactNone, Source: heapDumpPaths[0], Message: fmt.Sprintf("CLI автоматически подключил HPROF рядом с Jank Hunter логами: %s. Чтобы использовать другой дамп памяти, передайте --heap-dump явно.", strings.Join(heapDumpPaths, ", "))})
+		evidence.AddDiagnostic(analyze.HeapDiagnostic{Code: "auto_discovery", Severity: analyze.HeapDiagnosticInfo, Impact: analyze.HeapImpactNone, Source: heapDumpPaths[0], Message: fmt.Sprintf("CLI автоматически подключил HPROF этой Jank Hunter сессии: %s. Чтобы использовать другой дамп памяти, передайте --heap-dump явно.", strings.Join(heapDumpPaths, ", "))})
 	}
 	options.HeapEvidence = evidence
 	return options, nil
@@ -132,6 +153,10 @@ func comparisonHeapDumpPaths(
 	if strings.TrimSpace(flags.dumpRaw) != "" {
 		paths, err := canonicalizeFileInputs(expandComma(flags.dumpRaw), title+" heap dump")
 		return paths, false, err
+	}
+	if len(flags.resolvedDumps) > 0 {
+		paths, err := canonicalizeFileInputs(flags.resolvedDumps, title+" session heap dump")
+		return paths, true, err
 	}
 	paths, err := canonicalizeFileInputs(discoverHeapDumpsNearLogs(logs), title+" auto-discovered heap dump")
 	if err != nil {

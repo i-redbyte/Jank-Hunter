@@ -73,7 +73,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 			collector.operationAnalysis.startLog(input.Header)
 		}
 		lastDictSize := 0
-		result, err := jhlog.StreamFileWithResult(input.Path, func(event jhlog.Event, dict map[uint64]string) error {
+		result, err := jhlog.StreamFileSegment(input.Path, input.Segment, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
 				collector.summary.Dictionary += len(dict) - lastDictSize
 				lastDictSize = len(dict)
@@ -117,8 +117,9 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 }
 
 type SessionInput struct {
-	Path   string
-	Header jhlog.SegmentHeader
+	Path    string
+	Header  jhlog.SegmentHeader
+	Segment jhlog.FileSegment
 }
 
 // OrderedSessionInputs keeps independent sessions in the caller's first-seen order while
@@ -129,22 +130,25 @@ func OrderedSessionInputs(paths []string) ([]SessionInput, error) {
 	groups := make([][]SessionInput, 0, len(paths))
 	groupBySession := make(map[jhlog.ID128]int, len(paths))
 	for _, path := range paths {
-		header, err := jhlog.ReadSessionHeader(path)
+		segments, err := jhlog.ReadFileSegments(path)
 		if err != nil {
 			return nil, err
 		}
-		input := SessionInput{Path: path, Header: header}
-		if header.SessionID.IsZero() {
-			groups = append(groups, []SessionInput{input})
-			continue
+		for _, segment := range segments {
+			header := segment.Header
+			input := SessionInput{Path: path, Header: header, Segment: segment}
+			if header.SessionID.IsZero() {
+				groups = append(groups, []SessionInput{input})
+				continue
+			}
+			groupIndex, exists := groupBySession[header.SessionID]
+			if !exists {
+				groupIndex = len(groups)
+				groupBySession[header.SessionID] = groupIndex
+				groups = append(groups, nil)
+			}
+			groups[groupIndex] = append(groups[groupIndex], input)
 		}
-		groupIndex, exists := groupBySession[header.SessionID]
-		if !exists {
-			groupIndex = len(groups)
-			groupBySession[header.SessionID] = groupIndex
-			groups = append(groups, nil)
-		}
-		groups[groupIndex] = append(groups[groupIndex], input)
 	}
 
 	ordered := make([]SessionInput, 0, len(paths))
@@ -159,46 +163,6 @@ func OrderedSessionInputs(paths []string) ([]SessionInput, error) {
 
 func sameSession(left, right jhlog.SegmentHeader) bool {
 	return !left.SessionID.IsZero() && left.SessionID == right.SessionID
-}
-
-// ReadArtifactMetadataNamespace validates symbol compatibility, not build identity.
-// Exact build binding additionally requires the post-packaging manifest and mapping digest.
-func ReadArtifactMetadataNamespace(path string) ([]byte, error) {
-	data, err := readBoundedFile(path, "artifact metadata", maxArtifactMetadataBytes)
-	if err != nil {
-		return nil, err
-	}
-	var metadata artifactMetadataRecord
-	if err := decodeStrictJSON(data, &metadata); err != nil {
-		return nil, fmt.Errorf("%s: parse artifact metadata: %w", path, err)
-	}
-	if err := validateArtifactFormat(path, "artifact metadata", metadata.Format, ArtifactMetadataFormat); err != nil {
-		return nil, err
-	}
-	if metadata.Kind != "artifact-metadata" {
-		return nil, fmt.Errorf("%s: artifact metadata kind must be %q", path, "artifact-metadata")
-	}
-	namespace, err := decodeSymbolNamespace(metadata.SymbolNamespace)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse artifact metadata: %w", path, err)
-	}
-	return namespace, nil
-}
-
-type artifactMetadataRecord struct {
-	Format                   int             `json:"format"`
-	Kind                     string          `json:"kind"`
-	Variant                  string          `json:"variant"`
-	IDAlgorithm              string          `json:"idAlgorithm"`
-	IDEncoding               string          `json:"idEncoding"`
-	SymbolNamespace          string          `json:"symbolNamespace"`
-	IncludeWholeApplication  bool            `json:"includeWholeApplication"`
-	NetworkWholeApplication  bool            `json:"networkWholeApplication"`
-	DatabaseWholeApplication bool            `json:"databaseWholeApplication"`
-	Hooks                    map[string]bool `json:"hooks"`
-	AndroidNamespace         string          `json:"androidNamespace"`
-	IncludePackages          []string        `json:"includePackages"`
-	ExcludePackages          []string        `json:"excludePackages"`
 }
 
 func decodeStrictJSON(data []byte, target any) error {
@@ -544,11 +508,12 @@ type collectorTimelineState struct {
 }
 
 type collectorQualityState struct {
-	acquisition        *acquisitionGroups
-	dictionaryOverflow int
-	qualitySnapshots   map[string]segmentQualityState
-	streamResults      []jhlog.StreamResult
-	chainIssues        []string
+	acquisition          *acquisitionGroups
+	dictionaryOverflow   int
+	semanticRuntimeCalls uint64
+	qualitySnapshots     map[string]segmentQualityState
+	streamResults        []jhlog.StreamResult
+	chainIssues          []string
 }
 
 type collectorDomainState struct {
@@ -572,6 +537,8 @@ type collectorDomainState struct {
 	databaseScenarios    databaseScenarioAccumulator
 	databaseCorrelation  databaseCorrelationAccumulator
 	workerCollectorState
+	threadAnalysis    threadCollectorState
+	causalAnalysis    causalCollectorState
 	runtimeAnalysis   runtimeAnalysisAccumulator
 	operationAnalysis operationAnalysisAccumulator
 	androidAnalysis   *androidComponentAnalysisAccumulator
@@ -724,6 +691,7 @@ func (c *collector) startLog(header jhlog.SegmentHeader) {
 
 func (c *collector) startSegment(header jhlog.SegmentHeader, continuation bool) {
 	c.trafficTracker.StartSegment(header)
+	c.causalAnalysis.startSegment(header)
 	if !continuation {
 		c.stallTracker.Reset()
 		clear(c.pendingStalls)
@@ -731,12 +699,14 @@ func (c *collector) startSegment(header jhlog.SegmentHeader, continuation bool) 
 		c.resetSessionContext()
 		c.databaseCorrelation.startLog(header, c.currentLogIndex)
 		c.workerCollectorState.startLog()
+		c.threadAnalysis.resourceOn = false
 		c.androidAnalysis.startLog(header)
 		c.logSeen = false
 		c.logFirst = 0
 		c.logLast = 0
 
 	}
+	c.startDiagnosticSegment(header)
 	c.currentAcquisition = -int(c.currentLogIndex)
 	if c.acquisition != nil {
 		if node, ok := c.acquisition.runs[header.RunID]; ok {
@@ -784,20 +754,18 @@ func (c *collector) finishLog() {
 	}
 }
 
-func (c *collector) resetAttribution() {
-	c.currentAttrScreen = "unknown"
-	c.currentAttrOwner = "unknown"
-	c.currentOperationID = 0
-}
-
 type segmentQualityState struct {
+	terminal     bool
 	segmentIndex uint64
 	snapshot     jhlog.QualitySnapshot
 }
 
 func (c *collector) addSegmentStreamResult(result jhlog.StreamResult, completesSession bool) {
+	c.workRegistry.finishSegment(result)
+	c.causalAnalysis.segmentResult(result)
 	if completesSession {
 		c.workerCollectorState.finishLog(c.currentLogIndex, result)
+		c.threadAnalysis.finishLog(c.currentLogIndex, result)
 	}
 	segment := CollectionSegment{
 		HTTPCollectionStateKnown:         result.Header.RequiredFeatures&jhlog.FeatureHTTPCollectionState != 0,
@@ -852,6 +820,7 @@ func (c *collector) addSegmentStreamResult(result jhlog.StreamResult, completesS
 			(candidate.Sequence == current.snapshot.Sequence && candidate.CapturedElapsedUS > current.snapshot.CapturedElapsedUS) ||
 			(candidate.Sequence == current.snapshot.Sequence && candidate.CapturedElapsedUS == current.snapshot.CapturedElapsedUS && result.Header.SegmentIndex >= current.segmentIndex) {
 			c.qualitySnapshots[key] = segmentQualityState{
+				terminal:     isTerminalQualityBoundary(result),
 				segmentIndex: result.Header.SegmentIndex,
 				snapshot:     *candidate,
 			}
@@ -1006,7 +975,9 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 			}
 		}
 		last := chain.segments[len(chain.segments)-1]
-		if last.SegmentEnd != nil && last.SegmentEnd.Reason == jhlog.SegmentEndRotation {
+		// A process file is one captured byte frontier, not a set of separately supplied
+		// segment files. A sealed rotation at its frontier does not imply a missing file.
+		if !last.ProcessFile && last.SegmentEnd != nil && last.SegmentEnd.Reason == jhlog.SegmentEndRotation {
 			issues = append(issues, fmt.Sprintf(
 				"session %x обрывается после rotation segment %d; ожидаемый следующий сегмент не передан",
 				sessionID,
@@ -1084,9 +1055,4 @@ func (c *collector) applyAttribution(dict map[uint64]string, context jhlog.Attri
 	c.currentAttrScreen = attrValue(c.resolveOwnerRef(dict, context.Screen))
 	c.currentAttrOwner = attrValue(c.resolveOwnerRef(dict, context.Owner))
 	c.currentOperationID = context.OperationID
-}
-
-type embeddedSymbolKey struct {
-	ID     uint64
-	Origin jhlog.SymbolOrigin
 }

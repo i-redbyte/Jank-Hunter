@@ -12,6 +12,22 @@ import org.objectweb.asm.tree.ClassNode
 import org.objectweb.asm.tree.MethodInsnNode
 
 class LifecycleScopedTransformerTest {
+    @Test fun strictPolicyAlsoAppliesToNonFragmentLifecycleCallbacks() {
+        val node = ClassNode().also { ClassReader(model("app/Model", "androidx/lifecycle/ViewModel")).accept(it, 0) }
+        node.visitAnnotation(KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR, true).apply {
+            visit("k", 1); visit("mv", intArrayOf(99, 0)); visitEnd()
+        }
+        val source = ClassWriter(0).also { node.accept(it) }.toByteArray()
+        LifecycleClassIndex().use { index ->
+            index.add(model("androidx/lifecycle/ViewModel", "java/lang/Object"), false)
+            index.add(source, true)
+            assertThrows(IllegalStateException::class.java) {
+                LifecycleScopedTransformer(index, setOf("app/Model"), "",
+                    metadataCompatibilityMode = JankHunterMetadataCompatibilityMode.STRICT) {}.transform(source)
+            }
+        }
+    }
+
     @Test
     fun optimizedCustomDelegateIsDiagnosedWithoutCallingItsGetter() {
         val fixture = OptimizedDelegateFixture::class.java

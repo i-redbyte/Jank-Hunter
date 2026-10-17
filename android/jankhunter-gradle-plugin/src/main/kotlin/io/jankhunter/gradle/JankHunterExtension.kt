@@ -48,6 +48,7 @@ open class JankHunterExtension @Inject constructor(private val objects: ObjectFa
     val collection: Property<JankHunterCollection> = conciseDefaults.collection
     val processes: Property<JankHunterProcesses> = conciseDefaults.processes
     val scope: Property<JankHunterInstrumentationScope> = conciseDefaults.scope
+    val metadataCompatibilityMode: Property<JankHunterMetadataCompatibilityMode> = conciseDefaults.metadataCompatibilityMode
     val tuning: JankHunterTuning = conciseDefaults.tuning
     val growthAnalytics: Property<Boolean> = conciseDefaults.growthAnalytics
     val autoInit: Property<Boolean> = conciseDefaults.autoInit

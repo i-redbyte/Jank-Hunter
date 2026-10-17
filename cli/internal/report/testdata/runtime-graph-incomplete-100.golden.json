@@ -123,6 +123,7 @@
   ],
   "CollectionSegments": [
     {
+      "HTTPCollectionStateKnown": true,
       "Source": "testdata/runtime-graph-incomplete-100.jhlog",
       "Status": "closed_clean",
       "Sealed": true,

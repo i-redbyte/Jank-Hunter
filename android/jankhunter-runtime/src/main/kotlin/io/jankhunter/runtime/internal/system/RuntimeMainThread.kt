@@ -9,7 +9,7 @@ internal fun isRuntimeMainThread(
 ): Boolean = mainThread != null && currentThread === mainThread
 
 internal class RuntimeMainThreadDispatcher(
-    private val isMainThread: () -> Boolean = ::isRuntimeMainThread,
+    private val isMainThread: () -> Boolean = { isRuntimeMainThread() },
     private val postToMain: (() -> Unit) -> Boolean = { task ->
         val mainLooper = Looper.getMainLooper()
         if (mainLooper == null) false else Handler(mainLooper).post(task)

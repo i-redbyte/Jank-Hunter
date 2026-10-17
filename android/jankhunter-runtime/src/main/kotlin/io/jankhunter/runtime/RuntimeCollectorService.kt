@@ -27,7 +27,22 @@ internal class RuntimeCollectorService(
             exactShutdown = config.exactEventCollectionEnabled(),
         )
         state.maintenanceScheduler = maintenanceScheduler
+        if (config.workerTracingEnabled()) {
+            maintenanceScheduler.schedule(delayMs = RuntimeLongSource { 5_000L }) {
+                state.collectionEpochs.current?.registrations?.expire()
+            }
+        }
         if (!config.autoStartCollectors()) return
+        if (config.workerTracingEnabled()) {
+            val writer = state.writer
+            maintenanceScheduler.execute {
+                val catalog = io.jankhunter.runtime.internal.io.readWorkerCatalogAsset {
+                    appContext.assets.open(io.jankhunter.runtime.internal.io.WORKER_CATALOG_ASSET)
+                }
+                writer?.workerCatalog(catalog)
+            }
+            RuntimeHookGuard.run { startWorkRegistryCollection(state, config, maintenanceScheduler) }
+        }
         if (config.fpsMonitorEnabled() || config.jankStatsEnabled()) {
             RuntimeHookGuard.run {
                 state.fpsMonitor = FpsMonitor(
@@ -83,6 +98,36 @@ internal class RuntimeCollectorService(
                 callbacks::isUserRelevantForSampling,
             ).also { it.start(maintenanceScheduler) }
         }
+        if (config.threadSamplerEnabled()) {
+            RuntimeHookGuard.run {
+                val writer = state.writer
+                val ticks = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).coerceAtLeast(0)
+                state.threadSnapshotCollector = io.jankhunter.runtime.internal.system.ThreadSnapshotCollector(
+                    config.threadSampleIntervalMs(),
+                    beforeScan = {
+                        RuntimeHookGuard.run {
+                            val identities = state.collectionEpochs.current?.takeIf { it.writer === writer }?.threadIdentities
+                            identities?.register(
+                                android.os.Process.myTid().toLong(), Thread.currentThread(),
+                                android.os.SystemClock.elapsedRealtimeNanos(), "Jank Hunter maintenance", ownedByJankHunter = true,
+                            )
+                        }
+                    },
+                    enrich = { snapshot, _, scanStartedNanos ->
+                        val identities = state.collectionEpochs.current?.takeIf { it.writer === writer }?.threadIdentities
+                        identities?.prune()
+                        if (identities == null) null else snapshot.copy(
+                            threads = snapshot.threads.map { it.copy(java = identities.observe(it.tid, scanStartedNanos)) },
+                            javaIdentityCollection = true,
+                            droppedJavaIdentities = identities.dropped,
+                        )
+                    },
+                    report = { snapshot, elapsed, duration ->
+                        writer?.threadSnapshot(snapshot, elapsed, duration, config.threadSampleIntervalMs(), ticks)
+                    },
+                ).also { it.start(maintenanceScheduler) }
+            }
+        }
         if (config.systemSamplerEnabled()) {
             RuntimeHookGuard.run {
                 state.systemContextSampler = SystemContextSampler(
@@ -102,12 +147,25 @@ internal class RuntimeCollectorService(
             RuntimeHookGuard.run {
                 val heapDumpEnabled = config.retainedHeapDumpEnabled()
                 if (heapDumpEnabled) {
+                    val explicitHeapDumpDirectory = config.retainedHeapDumpDirectory()
+                        .takeIf { config.storagePolicy() == null }
                     state.retainedHeapDumper = RetainedHeapDumper(
-                        config.retainedHeapDumpDirectory() ?: logDirectory,
+                        explicitHeapDumpDirectory ?: logDirectory,
                         config.binaryStorage(),
                         config.retainedHeapDumpMinIntervalMs(),
                         config.retainedHeapDumpMaxCount(),
                         config.retainedHeapDumpMinRetainedAgeMs(),
+                        managedDirectoryProvider = if (explicitHeapDumpDirectory == null) {
+                            {
+                                checkNotNull(state.writer?.awaitSessionProcessDirectory(HEAP_DUMP_SCOPE_TIMEOUT_MS)) {
+                                    "Jank Hunter session artifact scope is unavailable"
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        storagePolicy = config.storagePolicy(),
+                        storageRoot = logDirectory,
                     )
                 }
                 val retention = bindRetentionWatcher()
@@ -161,6 +219,12 @@ internal class RuntimeCollectorService(
         RuntimeHookGuard.swallow { state.dispatchMonitor?.stop() }
         RuntimeHookGuard.swallow { state.memorySampler?.stop() }
         RuntimeHookGuard.swallow { state.systemContextSampler?.stop() }
+        RuntimeHookGuard.swallow { state.workRegistryCollector?.stop() }
+        state.workRegistryHandle?.cancel()
+        state.workRegistryCollector = null
+        state.workRegistryHandle = null
+        RuntimeHookGuard.swallow { state.threadSnapshotCollector?.stop() }
+        state.threadSnapshotCollector = null
         RuntimeHookGuard.swallow {
             val writer = state.writer
             val result = state.objectRetentionWatcher?.stop(remainingTimeoutMs(deadlineNs))
@@ -238,6 +302,7 @@ internal class RuntimeCollectorService(
 
     private companion object {
         const val DEFAULT_STOP_TIMEOUT_MS = 5_000L
+        const val HEAP_DUMP_SCOPE_TIMEOUT_MS = 5_000L
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 

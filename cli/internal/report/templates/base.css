@@ -69,7 +69,7 @@ body.presentation-page main {
 }
 body.presentation-page .panel,
 body.presentation-page .fold {
-  scroll-margin-top: 82px;
+  scroll-margin-top: var(--report-anchor-offset, 82px);
 }
 body.presentation-page .panel h2,
 body.presentation-page .fold summary {

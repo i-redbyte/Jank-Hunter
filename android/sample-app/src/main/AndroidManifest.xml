@@ -6,6 +6,8 @@
         android:name=".SampleApplication"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <meta-data android:name="io.jankhunter.sample.benchmark_in_place_only"
+            android:value="${jankHunterBenchmarkInPlaceOnly}" />
         <meta-data
             android:name="io.jankhunter.runtime_enabled"
             android:value="true" />
@@ -48,5 +50,6 @@
         <activity android:name=".MemoryScenarioActivity" />
         <activity android:name=".CustomViewJankActivity" />
         <activity android:name=".ComposeJankActivity" />
+        <activity android:name=".concurrency.ConcurrencyFrameProbeActivity" android:exported="false" />
     </application>
 </manifest>

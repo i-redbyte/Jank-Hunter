@@ -1,0 +1,3 @@
+jankhunter_release_performance_budget_v1
+Test fixture only: variant isolation and resource lifetime.
+This marker is not evidence of release performance eligibility.

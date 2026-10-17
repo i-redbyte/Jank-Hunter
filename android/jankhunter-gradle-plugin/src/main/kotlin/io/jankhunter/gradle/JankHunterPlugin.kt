@@ -11,10 +11,15 @@ import com.android.build.gradle.internal.publishing.AndroidArtifacts
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import java.util.Locale
-
 class JankHunterPlugin : Plugin<Project> {
     override fun apply(project: Project) {
+        val readerLifetime = project.gradle.sharedServices.registerIfAbsent("jankHunterMetadataReader", MetadataReaderLifetime::class.java) {}
+        project.tasks.configureEach { it.usesService(readerLifetime) }
+        // usesService declares ownership; resolving a scalar input also instantiates the lazy service.
+        val readerIdentity = readerLifetime.map { MetadataReaderCapabilities.identity }
         val extension = project.extensions.create("jankHunter", JankHunterExtension::class.java)
         val diagnosticTasks = JankHunterDiagnosticTaskRegistry.register(project)
 
@@ -25,6 +30,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension,
                 diagnosticTasks,
                 applicationProject = true,
+                readerIdentity = readerIdentity,
             )
         }
         project.pluginManager.withPlugin("com.android.library") {
@@ -34,6 +40,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension,
                 diagnosticTasks,
                 applicationProject = false,
+                readerIdentity = readerIdentity,
             )
         }
     }
@@ -43,6 +50,7 @@ class JankHunterPlugin : Plugin<Project> {
         extension: JankHunterExtension,
         diagnosticTasks: JankHunterDiagnosticTaskRegistry,
         applicationProject: Boolean,
+        readerIdentity: org.gradle.api.provider.Provider<String>,
     ) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
@@ -70,6 +78,36 @@ class JankHunterPlugin : Plugin<Project> {
                 JankHunterAutomaticDependencies.addRuntime(project, variant.name)
                 configureBuildBanner(project, variant.name)
             }
+            val sdkGroup = JankHunterDependencyCoordinates.load().group
+            val sdkModules = setOf("jankhunter-runtime", "jankhunter-okhttp3", "jankhunter-workmanager")
+            val sdkCompileFiles = variant.compileConfiguration.incoming.artifactView { view ->
+                view.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
+                view.componentFilter { component ->
+                    component is ModuleComponentIdentifier && component.group == sdkGroup && component.module in sdkModules ||
+                        component is ProjectComponentIdentifier && component.projectName in sdkModules
+                }
+            }.files
+            val sdkRuntimeFiles = variant.runtimeConfiguration.incoming.artifactView { view ->
+                view.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
+                view.componentFilter { component ->
+                    component is ModuleComponentIdentifier && component.group == sdkGroup && component.module in sdkModules ||
+                        component is ProjectComponentIdentifier && component.projectName in sdkModules
+                }
+            }.files
+            val requiredHookOwners = HookAbiRequirements.requiredOwners(instrumentation, configuration.autoInit)
+            val sdkAbi = project.tasks.register("validate${variant.name.capitalized()}JankHunterHookAbi", ValidateJankHunterHookAbiTask::class.java) { task ->
+                task.compileSdk.from(sdkCompileFiles)
+                task.runtimeSdk.from(sdkRuntimeFiles)
+                task.requireSdk.set(applicationProject && (instrumentation.hasRuntimeHooks || configuration.autoInit))
+                task.requiredOwners.set(requiredHookOwners)
+                task.outputFile.set(project.layout.buildDirectory.file("intermediates/jankhunter/${variant.name}/sdk-hook-abi.bin"))
+            }
+            val sdkAbiIndex = sdkAbi.flatMap(ValidateJankHunterHookAbiTask::outputFile).map { HookAbiIndex.read(it.asFile) }
+            // AGP may isolate ASM parameters while a different project artifact is transformed.
+            // Materialize project SDK outputs before those consumers inspect the SDK classpath.
+            project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
+                it.dependsOn(sdkAbi)
+            }
             val storage = configuration.storage
             val sessionLogSizeLimitEnabled = storage is JankHunterStorage.Limited
             val maxSessionLogSizeMiB = (storage as? JankHunterStorage.Limited)?.maxSessionMiB ?: 50
@@ -87,6 +125,21 @@ class JankHunterPlugin : Plugin<Project> {
                 variant.sources.assets?.addGeneratedSourceDirectory(task, GenerateJankHunterBuildIdentityTask::assetsDirectory)
                 task
             } else null
+            if (applicationProject && instrumentation.workerTracing) {
+                val catalog = project.tasks.register(
+                    "generate${variant.name.capitalized()}JankHunterWorkerCatalog",
+                    GenerateJankHunterWorkerCatalogTask::class.java,
+                ) { task ->
+                    task.symbolNamespace.set(symbolNamespace)
+                    task.assetsDirectory.set(project.layout.buildDirectory.dir("generated/jankhunter/${variant.name}/worker-assets"))
+                }
+                variant.artifacts.forScope(ScopedArtifacts.Scope.ALL).use(catalog).toGet(
+                    ScopedArtifact.CLASSES,
+                    GenerateJankHunterWorkerCatalogTask::inputJars,
+                    GenerateJankHunterWorkerCatalogTask::inputDirectories,
+                )
+                variant.sources.assets?.addGeneratedSourceDirectory(catalog, GenerateJankHunterWorkerCatalogTask::assetsDirectory)
+            }
             val effectiveInstrumentationScope = instrumentationScope(applicationProject)
             val shouldGenerateRuntimeManifest = applicationProject
             if (shouldGenerateRuntimeManifest) {
@@ -96,6 +149,10 @@ class JankHunterPlugin : Plugin<Project> {
                 ) {
                     it.dependsOn(validationTask)
                     it.autoInit.set(configuration.autoInit)
+                    it.threadSamplerEnabled.set(runtime.threadSamplerEnabled)
+                    it.threadSampleIntervalMs.set(runtime.threadSampleIntervalMs)
+                    it.concurrencyDetailedEnabled.set(runtime.concurrencyDetailedEnabled)
+                    it.concurrencyMaxTrackedEntities.set(runtime.concurrencyMaxTrackedEntities)
                     it.mainThreadStallThresholdMs.set(runtime.mainThreadStallThresholdMs)
                     it.ownerBlockThresholdMs.set(runtime.ownerBlockThresholdMs)
                     it.httpSlowThresholdMs.set(runtime.httpSlowThresholdMs)
@@ -135,10 +192,16 @@ class JankHunterPlugin : Plugin<Project> {
                         ),
                     )
                 }
-                variant.sources.manifests.addGeneratedManifestFile(
-                    runtimeManifest,
-                    GenerateJankHunterRuntimeManifestTask::outputFile,
-                )
+                if (com.android.build.api.variant.Sources::class.java.methods.any { it.name == "getManifests" }) {
+                    variant.sources.manifests.addGeneratedManifestFile(runtimeManifest, GenerateJankHunterRuntimeManifestTask::outputFile)
+                } else {
+                    val legacyManifest = project.tasks.register("merge${variant.name.capitalized()}JankHunterRuntimeManifest", LegacyRuntimeManifestTask::class.java) {
+                        it.runtimeManifest.set(runtimeManifest.flatMap { task -> task.outputFile })
+                        it.applicationId.set((variant as ApplicationVariant).applicationId)
+                    }
+                    variant.artifacts.use(legacyManifest).wiredWithFiles(LegacyRuntimeManifestTask::inputManifest,
+                        LegacyRuntimeManifestTask::outputManifest).toTransform(SingleArtifact.MERGED_MANIFEST)
+                }
             }
 
             val artifactRoot = project.layout.buildDirectory.dir(
@@ -181,6 +244,8 @@ class JankHunterPlugin : Plugin<Project> {
                 it.webSockets.set(instrumentation.webSockets)
                 it.handlers.set(instrumentation.handlers)
                 it.executors.set(instrumentation.executors)
+                it.threadLifecycle.set(instrumentation.threadLifecycle)
+                it.concurrencyDiagnostics.set(instrumentation.concurrencyDiagnostics)
                 it.coroutines.set(instrumentation.coroutines)
                 it.interactionOperations.set(instrumentation.interactionOperations)
                 it.lifecycleLeaks.set(instrumentation.lifecycleLeaks)
@@ -196,6 +261,8 @@ class JankHunterPlugin : Plugin<Project> {
                 it.androidNamespace.set(androidNamespace)
                 it.includePackages.set(effectiveIncludePackages)
                 it.excludePackages.set(effectiveExcludePackages)
+                it.metadataCompatibilityMode.set(instrumentation.metadataCompatibilityMode)
+                it.metadataReaderIdentity.set(readerIdentity)
                 it.outputFile.set(
                     project.layout.buildDirectory.file(
                         "generated/jankhunter/${variant.name}/artifact-metadata.json",
@@ -225,30 +292,15 @@ class JankHunterPlugin : Plugin<Project> {
                 it.classGraphDirectory.set(classGraphDirectory)
                 it.lambdaCaptureDirectory.set(lambdaCaptureDirectory)
                 it.diagnosticsDirectory.set(diagnosticsDirectory)
-                it.classGraphFiles.from(classGraphDirectory.map { directory ->
-                    directory.asFileTree.matching { pattern ->
-                        pattern.include("**/*.jsonl")
-                    }
-                })
-                it.lambdaCaptureFiles.from(lambdaCaptureDirectory.map { directory ->
-                    directory.asFileTree.matching { pattern ->
-                        pattern.include("**/*.jsonl")
-                    }
-                })
-                it.diagnosticsFiles.from(diagnosticsDirectory.map { directory ->
-                    directory.asFileTree.matching { pattern ->
-                        pattern.include("**/*.jsonl")
-                    }
-                })
+                it.metadataCompatibilityOutputFile.set(project.layout.buildDirectory.file(
+                    "generated/jankhunter/${variant.name}/metadata-compatibility.json",
+                ))
                 it.androidComponentCatalogDirectory.set(androidComponentCatalogDirectory)
-                it.androidComponentCatalogFiles.from(androidComponentCatalogDirectory.map { directory ->
-                    directory.asFileTree.matching { pattern ->
-                        pattern.include("**/*.jsonl")
-                    }
-                })
                 it.classGraphOutputFile.set(classGraphOutput)
                 it.lambdaCaptureOutputFile.set(lambdaCaptureOutput)
                 it.diagnosticsOutputFile.set(instrumentationDiagnosticsOutput)
+                it.dependencyInjectionRecordsFile.set(project.layout.buildDirectory.file(
+                    "intermediates/jankhunter/${variant.name}/di-records.jsonl"))
                 it.androidComponentCatalogOutputFile.set(androidComponentCatalogOutput)
             }
             val mergeDependencyInjectionCatalog = project.tasks.register(
@@ -258,11 +310,7 @@ class JankHunterPlugin : Plugin<Project> {
                 it.analysisEnabled.set(dependencyInjectionAnalysisEnabled)
                 it.variantName.set(variant.name)
                 it.shardsDirectory.set(dependencyInjectionCatalogDirectory)
-                it.shardFiles.from(dependencyInjectionCatalogDirectory.map { directory ->
-                    directory.asFileTree.matching { pattern ->
-                        pattern.include("**/*.jsonl")
-                    }
-                })
+                it.shardFiles.from(mergeArtifacts.flatMap { task -> task.dependencyInjectionRecordsFile })
                 it.outputFile.set(dependencyInjectionCatalogOutput)
             }
             if (variant is ApplicationVariant && buildIdentity != null) {
@@ -282,13 +330,22 @@ class JankHunterPlugin : Plugin<Project> {
                             mergeArtifacts.flatMap { it.lambdaCaptureOutputFile },
                             mergeArtifacts.flatMap { it.diagnosticsOutputFile },
                             mergeArtifacts.flatMap { it.androidComponentCatalogOutputFile },
-                            mergeDependencyInjectionCatalog.flatMap { it.outputFile },
                         )
+                        if (dependencyInjectionAnalysisEnabled) {
+                            task.artifacts.from(mergeDependencyInjectionCatalog.flatMap { it.outputFile })
+                        }
                         task.outputFile.set(project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/build-manifest-$kind.json"))
                     }
                     // Follow the actual artifact producer, including direct package tasks and
                     // downstream transforms, without depending on AGP's internal task names.
-                    if (kind == "apk") {
+                    val supportsListener = com.android.build.api.artifact.OutOperationRequest::class.java.methods.any { it.name == "toListenTo" }
+                    if (!supportsListener && kind == "apk") {
+                        variant.artifacts.use(manifest).wiredWithDirectories(GenerateJankHunterBuildManifestTask::apkDirectory,
+                            GenerateJankHunterBuildManifestTask::copiedApkDirectory).toTransform(SingleArtifact.APK)
+                    } else if (!supportsListener) {
+                        variant.artifacts.use(manifest).wiredWithFiles(GenerateJankHunterBuildManifestTask::bundleFile,
+                            GenerateJankHunterBuildManifestTask::copiedBundleFile).toTransform(SingleArtifact.BUNDLE)
+                    } else if (kind == "apk") {
                         variant.artifacts.use(manifest)
                             .wiredWith(GenerateJankHunterBuildManifestTask::apkDirectory).toListenTo(SingleArtifact.APK)
                     } else {
@@ -309,10 +366,12 @@ class JankHunterPlugin : Plugin<Project> {
                 variant.name,
                 hooksEnabled = instrumentation.okhttp || instrumentation.webSockets,
             )
-            project.tasks.matching { it.name == "assemble${variant.name.capitalized()}" }.configureEach {
-                it.finalizedBy(artifactMetadata)
-                it.finalizedBy(mergeArtifacts)
-                it.finalizedBy(mergeDependencyInjectionCatalog)
+            if (!applicationProject || com.android.build.api.artifact.OutOperationRequest::class.java.methods.any { it.name == "toListenTo" }) {
+                project.tasks.matching { it.name == "assemble${variant.name.capitalized()}" }.configureEach {
+                    it.finalizedBy(artifactMetadata)
+                    it.finalizedBy(mergeArtifacts)
+                    it.finalizedBy(mergeDependencyInjectionCatalog)
+                }
             }
             project.tasks.matching { it.name == "transform${variant.name.capitalized()}ClassesWithAsm" }.configureEach {
                 it.finalizedBy(artifactMetadata)
@@ -347,12 +406,78 @@ class JankHunterPlugin : Plugin<Project> {
                     InstrumentJankHunterTransportTask::inputDirectories,
                     InstrumentJankHunterTransportTask::outputFile,
                 )
+                transport.configure { task ->
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/classes/${variant.name}/${if (applicationProject) "ALL" else "PROJECT"}/${task.name}/classes.jar",
+                    ))
+                }
             }
+
+            val codeOriginCatalog = if (applicationProject && instrumentation.threadLifecycle) {
+                val prepass = project.tasks.register(
+                    "capture${variant.name.capitalized()}JankHunterProjectCodeOrigin",
+                    CausalProvenancePrepassTask::class.java,
+                ) { task ->
+                    task.projectClasses.set(project.layout.buildDirectory.file(
+                        "intermediates/jankhunter/${variant.name}/project-classes.txt",
+                    ))
+                }
+                variant.artifacts.forScope(ScopedArtifacts.Scope.PROJECT).use(prepass).toTransform(
+                    ScopedArtifact.CLASSES,
+                    CausalProvenancePrepassTask::inputJars,
+                    CausalProvenancePrepassTask::inputDirectories,
+                    CausalProvenancePrepassTask::outputFile,
+                )
+                prepass.configure { task ->
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/classes/${variant.name}/PROJECT/${task.name}/classes.jar",
+                    ))
+                }
+                project.tasks.register(
+                    "generate${variant.name.capitalized()}JankHunterCodeOriginCatalog",
+                    GenerateCausalCodeOriginCatalogTask::class.java,
+                ) { task ->
+                    task.projectClasses.set(prepass.flatMap(CausalProvenancePrepassTask::projectClasses))
+                    val classes = variant.runtimeConfiguration.incoming.artifactView { view ->
+                        view.attributes.attribute(
+                            AndroidArtifacts.ARTIFACT_TYPE,
+                            AndroidArtifacts.ArtifactType.CLASSES_JAR.type,
+                        )
+                        view.componentFilter { it is ProjectComponentIdentifier }
+                    }
+                    task.localProjectArtifacts.from(classes.files)
+                    task.externalArtifacts.from(variant.runtimeConfiguration.incoming.artifactView { view ->
+                        view.attributes.attribute(
+                            AndroidArtifacts.ARTIFACT_TYPE,
+                            AndroidArtifacts.ArtifactType.CLASSES_JAR.type,
+                        )
+                        view.componentFilter { it is ModuleComponentIdentifier }
+                    }.files)
+                    task.unknownArtifacts.from(variant.runtimeConfiguration.incoming.artifactView { view ->
+                        view.attributes.attribute(
+                            AndroidArtifacts.ARTIFACT_TYPE,
+                            AndroidArtifacts.ArtifactType.CLASSES_JAR.type,
+                        )
+                        view.componentFilter {
+                            it !is ProjectComponentIdentifier && it !is ModuleComponentIdentifier
+                        }
+                    }.files)
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/jankhunter/${variant.name}/code-origin-v1.txt",
+                    ))
+                }
+            } else null
 
             variant.instrumentation.transformClassesWith(
                 JankHunterClassVisitorFactory::class.java,
                 effectiveInstrumentationScope,
             ) { params ->
+                params.sdkCompileFiles.from(sdkCompileFiles)
+                params.sdkRuntimeFiles.from(sdkRuntimeFiles)
+                params.sdkRequiredOwners.set(requiredHookOwners)
+                params.requireSdk.set(applicationProject && (instrumentation.hasRuntimeHooks || configuration.autoInit))
+                params.metadataCompatibilityMode.set(instrumentation.metadataCompatibilityMode)
+                params.metadataReaderIdentity.set(readerIdentity)
                 params.autoInit.set(configuration.autoInit)
                 params.dependencyInjectionAnalysis.set(dependencyInjectionAnalysisEnabled)
                 params.methodCounters.set(instrumentation.methodCounters)
@@ -360,9 +485,11 @@ class JankHunterPlugin : Plugin<Project> {
                 params.okhttp.set(instrumentation.okhttp)
                 params.webSockets.set(instrumentation.webSockets)
                 params.okHttpHelperAvailable.set(okHttpHelperAvailable)
-                params.handlers.set(instrumentation.handlers)
-                params.executors.set(instrumentation.executors)
-                params.coroutines.set(instrumentation.coroutines)
+                params.handlers.set(instrumentation.handlers && codeOriginCatalog == null)
+                params.executors.set(instrumentation.executors && codeOriginCatalog == null)
+                params.threadLifecycle.set(instrumentation.threadLifecycle && codeOriginCatalog == null)
+                params.concurrencyDiagnostics.set(instrumentation.concurrencyDiagnostics && codeOriginCatalog == null)
+                params.coroutines.set(instrumentation.coroutines && codeOriginCatalog == null)
                 params.interactionOperations.set(instrumentation.interactionOperations)
                 params.lifecycleLeaks.set(false)
                 params.logSpam.set(instrumentation.logSpam)
@@ -371,33 +498,73 @@ class JankHunterPlugin : Plugin<Project> {
                 params.composeTracing.set(instrumentation.composeTracing)
                 params.roomTracing.set(instrumentation.roomTracing)
                 params.databaseTracing.set(instrumentation.databaseTracing)
-                params.workerTracing.set(instrumentation.workerTracing)
+                params.workerTracing.set(instrumentation.workerTracing && codeOriginCatalog == null)
                 params.androidComponents.set(instrumentation.androidComponents)
                 params.binderIPC.set(instrumentation.binderIPC)
                 params.ioTracing.set(instrumentation.ioTracing)
-                params.classGraphDirectory.set(classGraphDirectory.map { it.asFile.absolutePath })
-                params.lambdaCaptureDirectory.set(lambdaCaptureDirectory.map { it.asFile.absolutePath })
-                params.instrumentationDiagnosticsDirectory.set(
-                    diagnosticsDirectory.map { it.asFile.absolutePath },
-                )
-                params.androidComponentCatalogDirectory.set(
-                    androidComponentCatalogDirectory.map { it.asFile.absolutePath },
-                )
-                params.dependencyInjectionCatalogDirectory.set(
-                    dependencyInjectionCatalogDirectory.map { it.asFile.absolutePath },
-                )
+                params.classGraphDirectory.set("")
+                params.lambdaCaptureDirectory.set("")
+                params.instrumentationDiagnosticsDirectory.set("")
+                params.androidComponentCatalogDirectory.set("")
+                params.dependencyInjectionCatalogDirectory.set("")
                 params.includeWholeApplication.set(instrumentation.includeWholeApplication)
                 params.networkWholeApplication.set(instrumentation.networkWholeApplication)
                 params.databaseWholeApplication.set(instrumentation.databaseWholeApplication)
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(effectiveExcludePackages)
             }
+            if (codeOriginCatalog != null) {
+                val causal = project.tasks.register(
+                    "instrument${variant.name.capitalized()}JankHunterCausalProvenance",
+                    CausalProvenanceTransformTask::class.java,
+                ) { task ->
+                    task.codeOriginCatalog.set(codeOriginCatalog.flatMap(GenerateCausalCodeOriginCatalogTask::outputFile))
+                    task.sdkHookAbi.set(sdkAbiIndex)
+                    task.sdkHookAbi.finalizeValueOnRead()
+                    task.metadataCompatibilityMode.set(instrumentation.metadataCompatibilityMode)
+                    task.metadataReaderIdentity.set(readerIdentity)
+                    task.supportClasspath.from(androidComponents.sdkComponents.bootClasspath)
+                    task.supportClasspath.from(variant.compileConfiguration.incoming.artifactView {
+                        it.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
+                    }.files)
+                    task.includeWholeApplication.set(instrumentation.includeWholeApplication)
+                    task.includePackages.set(effectiveIncludePackages)
+                    task.excludePackages.set(effectiveExcludePackages)
+                    task.executors.set(instrumentation.executors)
+                    task.handlers.set(instrumentation.handlers)
+                    task.threadLifecycle.set(instrumentation.threadLifecycle)
+                    task.concurrencyDiagnostics.set(instrumentation.concurrencyDiagnostics)
+                    task.coroutines.set(instrumentation.coroutines)
+                    task.workerTracing.set(instrumentation.workerTracing)
+                    task.diagnosticsDirectory.set(project.layout.buildDirectory.dir(
+                        "intermediates/jankhunter/${variant.name}/causal-diagnostics",
+                    ))
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/jankhunter/${variant.name}/causal-provenance-classes.jar",
+                    ))
+                }
+                variant.artifacts.forScope(ScopedArtifacts.Scope.ALL).use(causal).toTransform(
+                    ScopedArtifact.CLASSES,
+                    CausalProvenanceTransformTask::inputJars,
+                    CausalProvenanceTransformTask::inputDirectories,
+                    CausalProvenanceTransformTask::outputFile,
+                )
+                causal.configure { task ->
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/classes/${variant.name}/ALL/${task.name}/classes.jar",
+                    ))
+                }
+            }
             if (instrumentation.lifecycleLeaks) {
                 val lifecycle = project.tasks.register(
                     "instrument${variant.name.capitalized()}JankHunterLifecycle",
                     InstrumentJankHunterLifecycleTask::class.java,
                 ) { task ->
+                    task.sdkHookAbi.set(sdkAbiIndex)
+                    task.sdkHookAbi.finalizeValueOnRead()
                     task.supportClasspath.from(androidComponents.sdkComponents.bootClasspath)
+                    task.metadataCompatibilityMode.set(instrumentation.metadataCompatibilityMode)
+                    task.metadataReaderIdentity.set(readerIdentity)
                     task.supportClasspath.from(variant.compileConfiguration.incoming.artifactView {
                         it.attributes.attribute(AndroidArtifacts.ARTIFACT_TYPE, AndroidArtifacts.ArtifactType.CLASSES_JAR.type)
                     }.files)
@@ -417,12 +584,16 @@ class JankHunterPlugin : Plugin<Project> {
                     InstrumentJankHunterLifecycleTask::inputDirectories,
                     InstrumentJankHunterLifecycleTask::outputFile,
                 )
-                mergeArtifacts.configure {
-                    it.diagnosticsFiles.from(lifecycle.flatMap { task -> task.diagnosticsDirectory }.map { directory ->
-                        directory.asFileTree.matching { pattern -> pattern.include("**/*.jsonl") }
-                    })
+                lifecycle.configure { task ->
+                    task.outputFile.set(project.layout.buildDirectory.file(
+                        "intermediates/classes/${variant.name}/${if (applicationProject) "ALL" else "PROJECT"}/${task.name}/classes.jar",
+                    ))
                 }
             }
+            variant.artifacts.forScope(if (applicationProject) ScopedArtifacts.Scope.ALL else ScopedArtifacts.Scope.PROJECT)
+                .use(mergeArtifacts).toGet(ScopedArtifact.CLASSES,
+                    MergeJankHunterInstrumentationArtifactsTask::inputJars,
+                    MergeJankHunterInstrumentationArtifactsTask::inputDirectories)
             variant.instrumentation.setAsmFramesComputationMode(
                 FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,
             )

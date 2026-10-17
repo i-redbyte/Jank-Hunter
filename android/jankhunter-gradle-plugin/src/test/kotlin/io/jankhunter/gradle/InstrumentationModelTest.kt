@@ -494,11 +494,13 @@ class InstrumentationModelTest {
                 "websocket",
                 "handler",
                 "executor",
+                "thread",
                 "coroutine",
                 "interaction-operation",
                 "logspam",
                 "critical_io",
                 "database",
+                "work-submission",
             ),
             moduleIds,
         )

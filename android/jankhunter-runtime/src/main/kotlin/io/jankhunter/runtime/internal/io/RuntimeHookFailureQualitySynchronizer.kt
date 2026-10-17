@@ -38,5 +38,9 @@ internal class RuntimeHookFailureQualitySynchronizer(
         RuntimeHookFailureReason.JANKSTATS_FRAME -> QualityCounterId.JANKSTATS_FRAME_FAILURE
         RuntimeHookFailureReason.JANKSTATS_CONTROL -> QualityCounterId.JANKSTATS_CONTROL_FAILURE
         RuntimeHookFailureReason.UNCLASSIFIED -> QualityCounterId.RUNTIME_HOOK_UNCLASSIFIED_FAILURE
+        RuntimeHookFailureReason.REENTRANCY -> QualityCounterId.HOOK_REENTRANCY
+        RuntimeHookFailureReason.COLLECTOR_BREAKER -> QualityCounterId.COLLECTOR_BREAKER
+        RuntimeHookFailureReason.REGISTRY_CONTENTION -> QualityCounterId.REGISTRY_CONTENTION
+        RuntimeHookFailureReason.COUNTER_CONTENTION -> QualityCounterId.HOOK_COUNTER_CONTENTION
     }
 }

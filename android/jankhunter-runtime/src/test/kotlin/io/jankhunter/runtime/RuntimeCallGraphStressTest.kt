@@ -33,7 +33,6 @@ class RuntimeCallGraphStressTest {
             captureScreen = { "screen" },
             captureOperationId = { 41L },
             maxKeys = { 4_096 },
-            admissionWaitNanos = { TimeUnit.SECONDS.toNanos(30L) },
             consumerDelayNanos = 50_000L,
         )
         graph.resetFlushState(writer)

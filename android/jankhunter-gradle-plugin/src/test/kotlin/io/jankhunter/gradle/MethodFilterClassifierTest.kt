@@ -41,6 +41,35 @@ class MethodFilterClassifierTest {
     }
 
     @Test
+    fun unreadableMetadataDoesNotCreateNewGeneratedExclusions() {
+        val decision = MethodFilterClassifier.classify(
+            JankHunterMethodFilterMode.FILTER,
+            0,
+            0,
+            "example/Foo",
+            "component1",
+            "()I",
+            KotlinMethodOrigin.UNKNOWN,
+        )
+        assertTrue(decision.categories.isEmpty())
+        assertNull(decision.exclusionReason)
+    }
+
+    @Test
+    fun provenGeneratedMetadataStillExcludesSyntheticAccessors() {
+        val decision = MethodFilterClassifier.classify(
+            JankHunterMethodFilterMode.FILTER,
+            0,
+            0,
+            "example/Foo",
+            "getValue",
+            "()I",
+            KotlinMethodOrigin.generated("kotlin_default_accessor"),
+        )
+        assertEquals("kotlin_default_accessor", decision.exclusionReason)
+    }
+
+    @Test
     fun disabledModeDoesNotClassifyOrExclude() {
         val decision = MethodFilterClassifier.classify(
             JankHunterMethodFilterMode.NONE,

@@ -2,8 +2,7 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
-import io.jankhunter.runtime.internal.system.isRuntimeMainThread
-import java.util.concurrent.TimeUnit
+import io.jankhunter.runtime.internal.io.ProcessRecordingSession
 
 /**
  * Process-local composition root. It owns construction and wiring only; behavior remains in the
@@ -44,27 +43,24 @@ internal class RuntimeComponentGraph(
     val runtimeHookEvents = RuntimeHookEventTransport(
         maxCounterKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
         maxLogSpamKeys = { config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS },
-        exactAdmission = { config?.exactEventCollectionEnabled() != false },
-        admissionWaitNanos = ::admissionWaitNanos,
     )
     val runtimeCallGraph = RuntimeCallGraph(
         nowMs = nowMs,
         captureScreen = contextTracker::currentScreenOrNull,
         captureOperationId = contextTracker::currentOperationId,
         maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
-        exactAdmission = { config?.exactEventCollectionEnabled() != false },
-        admissionWaitNanos = ::admissionWaitNanos,
     )
     val semanticTelemetry = RuntimeSemanticTelemetry(telemetryAccess, runtimeCallGraph)
+    val concurrencyTelemetry = RuntimeConcurrencyTelemetry(telemetryAccess)
     val workerTelemetry = RuntimeWorkerTelemetry(telemetryAccess, semanticTelemetry)
-    val httpTelemetry = RuntimeHttpTelemetry(telemetryAccess)
+    val httpTelemetry = RuntimeHttpTelemetry(telemetryAccess, concurrencyTelemetry)
     val webSocketTelemetry = RuntimeWebSocketTelemetry(telemetryAccess)
-    val databaseTelemetry = RuntimeDatabaseTelemetry(telemetryAccess)
+    val databaseTelemetry = RuntimeDatabaseTelemetry(telemetryAccess, concurrencyTelemetry)
     val androidComponentTelemetry = RuntimeAndroidComponentTelemetry(telemetryAccess, nowUs)
     val binderTelemetry = RuntimeBinderTelemetry(telemetryAccess, nowUs)
     val manualDatabaseTracing = RuntimeManualDatabaseTracing(databaseTelemetry)
-    val ioTelemetry = RuntimeIOTelemetry(telemetryAccess)
-    val asyncTelemetry = RuntimeAsyncTelemetry(telemetryAccess, metrics, operationTelemetry, nowMs)
+    val ioTelemetry = RuntimeIOTelemetry(telemetryAccess, concurrencyTelemetry)
+    val asyncTelemetry = RuntimeAsyncTelemetry(telemetryAccess, metrics, operationTelemetry, nowMs, concurrencyTelemetry)
     val handlerHooks = RuntimeHandlerHooks(telemetryAccess)
     val retentionTelemetry = RuntimeRetentionTelemetry(state, telemetryAccess, metrics, nowMs)
     val contextTelemetry = RuntimeContextTelemetry(
@@ -73,6 +69,7 @@ internal class RuntimeComponentGraph(
         telemetryAccess,
         runtimeCallGraph,
         nowMs,
+        concurrencyTelemetry,
     )
     val systemTelemetry = RuntimeSystemTelemetry(
         contextTracker,
@@ -97,7 +94,7 @@ internal class RuntimeComponentGraph(
         retentionTelemetry::bindWatcher,
     )
     val storageValve = RuntimeStorageValve(state)
-    private val writerFactory = AsyncLogWriterFactory()
+    private val writerFactory = AsyncLogWriterFactory(recording = ProcessRecordingSession())
     val session: RuntimeSessionController = RuntimeSessionController(
         state,
         coordinator,
@@ -110,6 +107,7 @@ internal class RuntimeComponentGraph(
         collectors,
         writerFactory,
         nowMs,
+        writerFactory::releaseProcessRecording,
     )
     val lifecycle = RuntimeLifecycleController(state, coordinator, session, metrics, nowMs)
     val networkAdapterTelemetry = RuntimeNetworkAdapterTelemetry(
@@ -139,6 +137,7 @@ internal class RuntimeComponentGraph(
         binderTelemetry,
         systemTelemetry,
         asyncTelemetry,
+        concurrencyTelemetry,
         handlerHooks,
         contextTelemetry,
         operationTelemetry,
@@ -150,16 +149,6 @@ internal class RuntimeComponentGraph(
 
     val config: JankHunterConfig?
         get() = telemetryAccess.config
-
-    private fun admissionWaitNanos(): Long {
-        val activeConfig = config
-        val waitMs = if (isRuntimeMainThread()) {
-            activeConfig?.mainThreadAdmissionWaitMs() ?: 0L
-        } else {
-            activeConfig?.backgroundAdmissionWaitMs() ?: 5L
-        }
-        return TimeUnit.MILLISECONDS.toNanos(waitMs)
-    }
 
     private companion object {
         const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048

@@ -12,6 +12,42 @@ import org.junit.Test
 
 class AsyncWriterAdmissionDeadlineTest {
     @Test
+    fun diagnosticCounterNeverWaitsForWriterAdmission() = withBlockedAdmission { writer ->
+        val done = CountDownLatch(1)
+        val publisher = Thread { try { writer.counter("diagnostic", 1L) } finally { done.countDown() } }
+        publisher.start()
+        try { assertTrue("counter producer waited for admission", done.await(100L, TimeUnit.MILLISECONDS)) }
+        finally { publisher.interrupt() }
+    }
+
+    @Test
+    fun saturatedBulkLanePreservesAReservedCausalStartEndPair() {
+        val directory = Files.createTempDirectory("jankhunter-causal-critical-reserve").toFile()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writer = AsyncLogWriter(
+            directory, JankHunterConfig.builder().maxQueueSize(16).build(), "priority", setOf("priority"), true,
+            1L, "2026-10-14", 1L, { 1L }, LogQualityCounters(), { null }, AsyncWriterTerminalObserver { _, _, _ -> },
+            workerThreadFactory = { task, name -> Thread({ entered.countDown(); release.await(); task.run() }, name) },
+        )
+        try {
+            val bulk = CausalEventObservation(CausalKind.OPERATION, 1, 1L, observedNanos = 1L)
+            assertTrue(writer.causalEvent(bulk))
+            assertTrue(entered.await(5L, TimeUnit.SECONDS))
+            repeat(15) { assertTrue(writer.causalEvent(bulk.copy(id = it.toLong() + 2L))) }
+            assertFalse(writer.causalEvent(bulk.copy(id = 100L)))
+            assertTrue(writer.causalEvent(CausalEventObservation(
+                CausalKind.EXECUTOR_TASK, CausalPhase.ExecutorTask.RUN_STARTED, 1L, observedNanos = 2L)))
+            assertTrue(writer.causalEvent(CausalEventObservation(
+                CausalKind.EXECUTOR_TASK, CausalPhase.ExecutorTask.RUN_ENDED, 1L, observedNanos = 3L)))
+        } finally {
+            release.countDown()
+            writer.close(5_000L)
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun blockingFlushIncludesContendedAdmissionInItsDeadline() = withBlockedAdmission { writer ->
         assertFalse(writer.flushBlocking(25L))
     }

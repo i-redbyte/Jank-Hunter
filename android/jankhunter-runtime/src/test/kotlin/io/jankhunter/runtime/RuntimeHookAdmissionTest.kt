@@ -5,7 +5,6 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,18 +12,9 @@ import org.junit.Test
 
 class RuntimeHookAdmissionTest {
     @Test
-    fun zeroBudgetNeverEntersBackpressureWait() = withBlockedConsumer(waitNanos = { 0L }) { transport ->
-        repeat(256) { assertTrue(transport.recordMethod(1L, "method")) }
-        assertFalse(transport.recordMethod(2L, "rejected"))
-        assertEquals(0L, transport.backpressureCountForTest())
-        assertEquals(257L, transport.attemptedForTest())
-    }
-
-    @Test
-    fun shutdownReleasesSaturatedPublisherBeforeConsumerCanDrain() = withBlockedConsumer(
-        waitNanos = { TimeUnit.SECONDS.toNanos(5L) },
+    fun saturatedPublisherReturnsBeforeShutdownOrConsumerDrain() = withBlockedConsumer(
         beforeAwait = {
-            awaitBackpressure(it)
+            awaitRejectedAdmission(it)
             assertFalse(it.stopAndFlush(1L))
         },
     ) { transport ->
@@ -35,28 +25,12 @@ class RuntimeHookAdmissionTest {
     }
 
     @Test
-    fun disablingExactAdmissionReleasesSaturatedPublisher() {
-        val exact = AtomicBoolean(true)
-        withBlockedConsumer(
-            waitNanos = { TimeUnit.SECONDS.toNanos(5L) },
-            exact = { exact.get() },
-            beforeAwait = {
-                awaitBackpressure(it)
-                exact.set(false)
-            },
-        ) { transport ->
-            repeat(256) { assertTrue(transport.recordMethod(1L, "method")) }
-            assertFalse(transport.recordMethod(2L, "rejected"))
-            assertEquals(257L, transport.attemptedForTest())
-        }
-    }
-
-    @Test
-    fun saturatedExactAdmissionReturnsWithinBound() = withBlockedConsumer { transport ->
+    fun saturatedAdmissionReturnsWithinBoundWithoutBackpressure() = withBlockedConsumer { transport ->
         repeat(256) { assertTrue(transport.recordMethod(1L, "method")) }
         assertFalse(transport.recordMethod(2L, "rejected"))
         assertEquals(256L, transport.acceptedForTest())
         assertEquals(257L, transport.attemptedForTest())
+        assertEquals(0L, transport.backpressureCountForTest())
     }
 
     @Test
@@ -73,8 +47,6 @@ class RuntimeHookAdmissionTest {
     }
 
     private fun withBlockedConsumer(
-        waitNanos: RuntimeLongSource = RuntimeLongSource { 5_000_000L },
-        exact: RuntimeBooleanSource = RuntimeBooleanSource { true },
         beforeAwait: (RuntimeHookEventTransport) -> Unit = {},
         block: (RuntimeHookEventTransport) -> Unit,
     ) {
@@ -86,8 +58,6 @@ class RuntimeHookAdmissionTest {
         )
         val transport = RuntimeHookEventTransport(
             { 16 }, { 16 },
-            exactAdmission = exact,
-            admissionWaitNanos = waitNanos,
             consumerLoopObserver = {
                 entered.countDown()
                 check(release.await(5L, TimeUnit.SECONDS))
@@ -113,10 +83,10 @@ class RuntimeHookAdmissionTest {
         }
     }
 
-    private fun awaitBackpressure(transport: RuntimeHookEventTransport) {
+    private fun awaitRejectedAdmission(transport: RuntimeHookEventTransport) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
-        while (transport.backpressureCountForTest() == 0L) {
-            assertTrue("producer did not reach backpressure", System.nanoTime() < deadline)
+        while (transport.attemptedForTest() < 257L) {
+            assertTrue("producer did not finish saturated admission", System.nanoTime() < deadline)
             Thread.yield()
         }
     }

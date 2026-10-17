@@ -1,5 +1,8 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.ThreadLifecycleObservation
+import io.jankhunter.runtime.internal.io.ThreadLifecycleStage
+import io.jankhunter.runtime.internal.system.ThreadIdentityRegistry
 import android.os.Handler
 import android.view.View
 import java.util.concurrent.Callable
@@ -10,6 +13,12 @@ import java.util.concurrent.Callable
  * It deliberately exposes no lifecycle or storage controls. The static fail-open ABI lives in
  * [JankHunterHooks], while this class owns only dispatch to the process-scoped runtime services.
  */
+internal interface InstrumentationCompatibilityHints {
+    fun observeThreadFactoryReturned(thread: Thread?, factory: Any?, siteId: Long, source: String, line: Int, origin: Int)
+    fun beginExecutorShutdown(executor: Any?, now: Boolean, siteId: Long, source: String, line: Int, origin: Int): Long
+    fun beginFutureCancel(future: Any?, mayInterrupt: Boolean, siteId: Long, source: String, line: Int, origin: Int): Long
+}
+
 internal class RuntimeInstrumentationHooks(
     private val telemetryAccess: RuntimeTelemetryAccess,
     private val runtimeCallGraph: RuntimeCallGraph,
@@ -21,11 +30,169 @@ internal class RuntimeInstrumentationHooks(
     private val binderTelemetry: RuntimeBinderTelemetry,
     private val systemTelemetry: RuntimeSystemTelemetry,
     private val asyncTelemetry: RuntimeAsyncTelemetry,
+    private val concurrencyTelemetry: RuntimeConcurrencyTelemetry,
     private val handlerHooks: RuntimeHandlerHooks,
     private val contextTelemetry: RuntimeContextTelemetry,
     private val operationTelemetry: RuntimeOperationTelemetry,
     private val retentionTelemetry: RuntimeRetentionTelemetry,
-) {
+) : InstrumentationCompatibilityHints {
+    private val executingThreadIdentity = ThreadIdentityRegistration(ownedByJankHunter = false)
+    private val threadLifecycleEpoch = ThreadLocal<Long>()
+    private val ownedThreadIdentity = ThreadIdentityRegistration(ownedByJankHunter = true)
+
+    fun observeThreadConstructed(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int) =
+        concurrencyTelemetry.observeThreadConstructed(thread, siteId, source, line, origin)
+
+    fun prepareThreadTarget(target: Runnable?, siteId: Long, source: String, line: Int, origin: Int): Runnable? =
+        concurrencyTelemetry.prepareThreadTarget(target, siteId, source, line, origin)
+
+    fun bindThreadTarget(thread: Thread?, prepared: Runnable?) =
+        concurrencyTelemetry.bindThreadTarget(thread, prepared)
+
+    override fun observeThreadFactoryReturned(thread: Thread?, factory: Any?, siteId: Long, source: String, line: Int, origin: Int) {
+        concurrencyTelemetry.observeThreadFactoryReturned(thread, siteId, source, line, origin)
+    }
+
+    fun beginThreadStart(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        concurrencyTelemetry.beginThreadStart(thread, siteId, source, line, origin)
+
+    fun threadStartReturned(thread: Thread?, token: Long) = concurrencyTelemetry.threadStartReturned(thread, token)
+
+    fun threadStartThrew(thread: Thread?, token: Long) = concurrencyTelemetry.threadStartThrew(thread, token)
+
+    fun beginThreadInterrupt(thread: Thread?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        concurrencyTelemetry.beginThreadInterrupt(thread, siteId, source, line, origin)
+
+    fun threadInterruptReturned(thread: Thread?, token: Long) = concurrencyTelemetry.threadInterruptReturned(thread, token)
+
+    fun threadInterruptThrew(thread: Thread?, token: Long) = concurrencyTelemetry.threadInterruptThrew(thread, token)
+
+    fun observeThreadEnd(thread: Thread?) = concurrencyTelemetry.observeThreadEnd(thread)
+
+    fun enterRunnableRun(receiver: Any?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        if (receiver is Class<*> && telemetryAccess.usesTaskWrappers) 0L
+        else concurrencyTelemetry.enterRunnableRun(receiver, siteId, source, line, origin)
+
+    fun exitRunnableRun(token: Long, outcome: Int) = concurrencyTelemetry.exitRunnableRun(token, outcome)
+
+    fun wrapExecutorRunnable(executor: Any?, command: Runnable?, ownerName: String?): Runnable? =
+        if (!isEnabled(JankHunterRuntimeFeature.EXECUTORS) || !telemetryAccess.usesTaskWrappers ||
+            executor == null || executor is JankHunterTrackedExecutor || preservesNativeExecutorTasks(executor)) command
+        else asyncTelemetry.wrapRunnable(command, ownerName)
+
+    fun <T> wrapExecutorCallable(executor: Any?, command: Callable<T>?, ownerName: String?): Callable<T>? =
+        if (!isEnabled(JankHunterRuntimeFeature.EXECUTORS) || !telemetryAccess.usesTaskWrappers ||
+            executor == null || preservesNativeExecutorTasks(executor)) command
+        else asyncTelemetry.wrapCallable(command, ownerName)
+
+    fun prepareExecutorRunnable(
+        executor: Any?, command: Runnable?, siteId: Long, source: String, legacyOwnerLabel: String,
+        line: Int, origin: Int, delay: Long, period: Long, unit: Any?, cadence: Int,
+    ): Runnable? {
+        val legacy = if (isEnabled(JankHunterRuntimeFeature.EXECUTORS))
+            wrapExecutorRunnable(executor, command, legacyOwnerLabel) else command
+        return if (isEnabled(JankHunterRuntimeFeature.CONCURRENCY_DIAGNOSTICS))
+            RuntimeHookGuard.value(legacy) {
+                concurrencyTelemetry.prepareExecutorRunnable(executor, command, legacy, siteId, source, line, origin,
+                    delay, period, unit, cadence)
+            } else legacy
+    }
+
+    fun <T> prepareExecutorCallable(
+        executor: Any?, command: Callable<T>?, siteId: Long, source: String, legacyOwnerLabel: String,
+        line: Int, origin: Int, delay: Long, period: Long, unit: Any?, cadence: Int,
+    ): Callable<T>? {
+        val legacy = if (isEnabled(JankHunterRuntimeFeature.EXECUTORS))
+            wrapExecutorCallable(executor, command, legacyOwnerLabel) else command
+        return if (isEnabled(JankHunterRuntimeFeature.CONCURRENCY_DIAGNOSTICS))
+            RuntimeHookGuard.value(legacy) {
+                concurrencyTelemetry.prepareExecutorCallable(executor, command, legacy, siteId, source, line, origin,
+                    delay, period, unit, cadence)
+            } else legacy
+    }
+
+    fun executorHandoffReturned(prepared: Any?, result: Any?) = concurrencyTelemetry.executorHandoffReturned(prepared, result)
+    fun executorHandoffThrew(prepared: Any?) = concurrencyTelemetry.executorHandoffThrew(prepared)
+    fun observeExecutorConstructed(executor: Any?, siteId: Long, source: String, line: Int, origin: Int) =
+        concurrencyTelemetry.observeExecutorConstructed(executor, siteId, source, line, origin)
+    fun observeExecutorFactoryReturned(executor: Any?, siteId: Long, source: String, line: Int, origin: Int) =
+        concurrencyTelemetry.observeExecutorFactoryReturned(executor, siteId, source, line, origin)
+    override fun beginExecutorShutdown(executor: Any?, now: Boolean, siteId: Long, source: String, line: Int, origin: Int): Long =
+        concurrencyTelemetry.beginExecutorShutdown(executor, siteId, source, line, origin)
+    fun executorShutdownReturned(executor: Any?, token: Long) = concurrencyTelemetry.executorShutdownReturned(executor, token)
+    fun executorShutdownThrew(executor: Any?, token: Long) = concurrencyTelemetry.executorShutdownThrew(executor, token)
+    fun observeExecutorTerminated(executor: Any?, terminated: Boolean) =
+        concurrencyTelemetry.observeExecutorTerminated(executor, terminated)
+    override fun beginFutureCancel(future: Any?, mayInterrupt: Boolean, siteId: Long, source: String,
+                          line: Int, origin: Int): Long =
+        concurrencyTelemetry.beginFutureCancel(future, siteId, source, line, origin)
+    fun futureCancelReturned(future: Any?, token: Long, cancelled: Boolean) =
+        concurrencyTelemetry.futureCancelReturned(future, token, cancelled)
+    fun futureCancelThrew(future: Any?, token: Long) = concurrencyTelemetry.futureCancelThrew(future, token)
+
+    fun observeCausalWorkSubmissionRequests(requests: Any?, siteId: Long, source: String, line: Int, origin: Int) =
+        concurrencyTelemetry.observeCausalWorkSubmissionRequests(requests, siteId, source, line, origin)
+
+    fun observeWorkerImplementationSite(worker: Any?, siteId: Long, source: String, line: Int, origin: Int) =
+        concurrencyTelemetry.observeWorkerImplementationSite(worker, siteId, source, line, origin)
+
+    fun enterCallableCall(receiver: Any?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        if (receiver is Class<*> && telemetryAccess.usesTaskWrappers) 0L
+        else concurrencyTelemetry.enterCallableCall(receiver, siteId, source, line, origin)
+
+    fun exitCallableCall(token: Long, outcome: Int) = concurrencyTelemetry.exitCallableCall(token, outcome)
+
+    fun observeExecutingThread(source: String) {
+        val epoch = telemetryAccess.collectionEpoch ?: return
+        if (!epoch.config.threadSamplerEnabled() || !epoch.writer.isAcceptingEvents()) return
+        if (executingThreadIdentity.isRegistered(epoch.id)) return
+        val tid = android.os.Process.myTid().toLong()
+        val thread = Thread.currentThread()
+        val now = android.os.SystemClock.elapsedRealtimeNanos()
+        executingThreadIdentity.register(epoch.id, epoch.threadIdentities, tid, thread, now, source)
+        // Keep one direct run event even if the bounded identity registry is full; registration can retry later.
+        if (threadLifecycleEpoch.get() != epoch.id) {
+            threadLifecycleEpoch.set(epoch.id)
+            recordThreadPoint(epoch, ThreadLifecycleStage.RUN_OBSERVED, thread, tid, now, source, "")
+        }
+    }
+
+    /** Retries registration after capacity rejection until this thread is recorded for the epoch. */
+    fun observeOwnedThread(source: String): Boolean {
+        val epoch = telemetryAccess.collectionEpoch ?: return false
+        if (!epoch.config.threadSamplerEnabled() || !epoch.writer.isAcceptingEvents()) return false
+        if (ownedThreadIdentity.isRegistered(epoch.id)) return true
+        return ownedThreadIdentity.register(
+            epoch.id, epoch.threadIdentities, android.os.Process.myTid().toLong(), Thread.currentThread(),
+            android.os.SystemClock.elapsedRealtimeNanos(), source,
+        )
+    }
+
+    fun observeThreadStart(thread: Thread, source: String) {
+        val epoch = telemetryAccess.collectionEpoch ?: return
+        if (!epoch.config.threadSamplerEnabled() || !epoch.writer.isAcceptingEvents()) return
+        recordThreadPoint(epoch, ThreadLifecycleStage.START_RETURNED, thread, 0, android.os.SystemClock.elapsedRealtimeNanos(), source, "")
+    }
+
+    fun observeThreadFactory(thread: Thread?, factory: Any?, source: String) {
+        if (thread == null) return
+        val epoch = telemetryAccess.collectionEpoch ?: return
+        if (!epoch.config.threadSamplerEnabled() || !epoch.writer.isAcceptingEvents()) return
+        recordThreadPoint(epoch, ThreadLifecycleStage.FACTORY_RETURNED, thread, 0,
+            android.os.SystemClock.elapsedRealtimeNanos(), source, factory?.javaClass?.name.orEmpty())
+    }
+
+    private fun recordThreadPoint(
+        epoch: RuntimeCollectionEpoch, stage: ThreadLifecycleStage, thread: Thread, tid: Long,
+        now: Long, source: String, factory: String,
+    ) {
+        val id = RuntimeHookGuard.value(0L) { observedThreadId(thread) }
+        telemetryAccess.ensureContextRecorded(activeWriter = epoch.writer)
+        epoch.writer.threadLifecycle(ThreadLifecycleObservation(
+            stage, id, tid, now.coerceAtLeast(0), thread.isDaemon, thread.name.take(256), source.take(256), factory.take(256),
+        ))
+    }
+
     fun enterMethod(methodId: Long, methodName: String): Long {
         return runtimeCallGraph.enter(
             methodId,
@@ -230,6 +397,37 @@ internal class RuntimeInstrumentationHooks(
         binderTelemetry.exitServer(token, descriptor, method, code, flags, handled, throwable)
     }
 
+    fun workSubmissionEpoch(): Long = workerTelemetry.registrationEpoch()
+
+    fun observeWorkBuilderPeriodic(builder: Any, periodMS: Long, flexMS: Long?) =
+        workerTelemetry.builderPeriodic(builder, periodMS, flexMS)
+
+    fun observeWorkBuilderInitialDelay(builder: Any, delayMS: Long) =
+        workerTelemetry.builderInitialDelay(builder, delayMS)
+
+    fun observeWorkBuilderBackoff(builder: Any, policy: Int, delayMS: Long) =
+        workerTelemetry.builderBackoff(builder, policy, delayMS)
+
+    fun observeWorkBuilderExpedited(builder: Any, quotaPolicy: Int) =
+        workerTelemetry.builderExpedited(builder, quotaPolicy)
+
+    fun observeWorkBuilderBuilt(builder: Any, most: Long, least: Long) =
+        workerTelemetry.builderBuilt(builder, most, least)
+
+    fun workChainOmitted(epoch: Long, count: Int) = workerTelemetry.chainOmitted(epoch, count)
+
+    fun observeWorkChainRoot(epoch: Long, continuation: Any, most: Long, least: Long, uniqueName: String?, policy: String?, source: String) =
+        workerTelemetry.chainRoot(epoch, continuation, most, least, uniqueName, policy, source)
+
+    fun observeWorkChainChild(epoch: Long, parent: Any, continuation: Any, most: Long, least: Long, source: String) =
+        workerTelemetry.chainChild(epoch, parent, continuation, most, least, source)
+
+    fun observeWorkChainCombine(epoch: Long, parents: List<*>, continuation: Any) =
+        workerTelemetry.chainCombine(epoch, parents, continuation)
+
+    fun observeWorkSubmission(epoch: Long, most: Long, least: Long, periodic: Boolean, uniqueName: String?, policy: String?, omitted: Int, source: String) =
+        workerTelemetry.submitted(most, least, periodic, uniqueName, policy, omitted, epoch, source)
+
     fun isWorkerTracingActive(): Boolean = workerTelemetry.isEnabled()
 
     fun workerInstanceId(mostSignificantBits: Long, leastSignificantBits: Long): Long {
@@ -259,6 +457,10 @@ internal class RuntimeInstrumentationHooks(
             stopReason = 0,
             stopReasonKnown = false,
         )
+    }
+
+    fun workerFailure(token: Long, instanceId: Long, runAttempt: Int, throwable: Throwable) {
+        workerTelemetry.failed(token, instanceId, runAttempt, generation = 0, throwable)
     }
 
     fun classifyWorkerOutcome(result: Any?): Int = workerTelemetry.classifyOutcome(result)
@@ -294,6 +496,20 @@ internal class RuntimeInstrumentationHooks(
         return asyncTelemetry.wrapCoroutineBlock(block, ownerName)
     }
 
+    fun wrapCausalCoroutineBlock(block: Function2<*, *, *>?, siteId: Long, source: String, line: Int, origin: Int): Function2<*, *, *>? =
+        asyncTelemetry.wrapCausalCoroutineBlock(block, siteId, source, line, origin)
+
+    fun enterCausalCoroutineSegment(continuation: Any?, owner: String, siteId: Long, source: String, line: Int, origin: Int): Long =
+        asyncTelemetry.enterCoroutineSegment(continuation, owner,
+            isEnabled(JankHunterRuntimeFeature.COROUTINES) || concurrencyTelemetry.isEnabled(), siteId, source, line, origin)
+
+    fun coroutineBuilderReturned(prepared: Function2<*, *, *>?, job: Any?) = asyncTelemetry.coroutineBuilderReturned(prepared, job)
+    fun coroutineBuilderThrew(prepared: Function2<*, *, *>?) = asyncTelemetry.coroutineBuilderThrew(prepared)
+    fun beginCoroutineJobCancel(job: Any?, siteId: Long, source: String, line: Int, origin: Int): Long =
+        asyncTelemetry.beginCoroutineJobCancel(job, siteId, source, line, origin)
+    fun coroutineJobCancelReturned(job: Any?, token: Long) = asyncTelemetry.coroutineJobCancelResult(job, token, false)
+    fun coroutineJobCancelThrew(job: Any?, token: Long) = asyncTelemetry.coroutineJobCancelResult(job, token, true)
+
     fun enterCoroutineSegment(continuation: Any?, ownerName: String?): Long {
         return asyncTelemetry.enterCoroutineSegment(
             continuation,
@@ -325,6 +541,17 @@ internal class RuntimeInstrumentationHooks(
     fun onHandlerPostResult(original: Runnable, wrapped: Runnable, posted: Boolean) {
         handlerHooks.onPostResult(original, wrapped, posted)
     }
+
+    fun beginHandlerPost(handler: Any?, callback: Runnable?, siteId: Long, source: String,
+                         line: Int, origin: Int, requestedDelayMillis: Long): Long =
+        concurrencyTelemetry.beginHandlerPost(handler, callback, siteId, source, line, origin,
+            requestedDelayMillis)
+
+    fun handlerPostReturned(handler: Any?, callback: Runnable?, token: Long, posted: Boolean) =
+        concurrencyTelemetry.handlerPostReturned(handler, callback, token, posted)
+
+    fun handlerPostThrew(handler: Any?, callback: Runnable?, token: Long) =
+        concurrencyTelemetry.handlerPostThrew(handler, callback, token)
 
     fun handlerWrappers(handler: Handler, runnable: Runnable, token: Any?): Array<Runnable> {
         return handlerHooks.wrappers(handler, runnable, token)
@@ -366,5 +593,26 @@ internal class RuntimeInstrumentationHooks(
 
     private fun isEnabled(feature: JankHunterRuntimeFeature): Boolean {
         return telemetryAccess.isFeatureActive(feature)
+    }
+}
+
+/** A rejected registration remains retryable after maintenance frees registry capacity. */
+internal class ThreadIdentityRegistration(private val ownedByJankHunter: Boolean) {
+    private val registeredEpoch = ThreadLocal<Long>()
+
+    fun isRegistered(epochId: Long): Boolean = registeredEpoch.get() == epochId
+
+    fun register(
+        epochId: Long,
+        identities: ThreadIdentityRegistry,
+        tid: Long,
+        thread: Thread,
+        observedNanos: Long,
+        source: String,
+    ): Boolean {
+        if (isRegistered(epochId)) return true
+        if (!identities.register(tid, thread, observedNanos, source, ownedByJankHunter)) return false
+        registeredEpoch.set(epochId)
+        return true
     }
 }

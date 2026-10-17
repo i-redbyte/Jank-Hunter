@@ -11,6 +11,7 @@ internal class SessionLogRetentionCoordinator(
     private val quality: LogQualityCounters,
 ) {
     fun enforce(activeWriter: BinaryLogWriter?, storage: JankHunterBinaryStorage?, runId: ByteArray) {
+        if (config.storagePolicy() != null) return
         val writer = activeWriter ?: return
         try {
             val leasePaths = SessionLogAllocator.activeLeases(directory).protectedPaths

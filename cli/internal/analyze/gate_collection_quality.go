@@ -19,6 +19,9 @@ func evaluateCompletenessGate(comparison Comparison, config ThresholdConfig) []s
 	if before.DiagnosticCompletenessModel == "" || after.DiagnosticCompletenessModel == "" {
 		return []string{completenessMetric + " cannot be evaluated: completeness model is unavailable"}
 	}
+	if before.DiagnosticCompletenessModel != after.DiagnosticCompletenessModel {
+		return []string{completenessMetric + " cannot be evaluated: completeness models differ"}
+	}
 	change := deltaFloat(completenessMetric, before.DiagnosticCompletenessPercent, after.DiagnosticCompletenessPercent, "%", false, 1)
 	return evaluateMetricConstraint(change, threshold, config.MaxSeverity)
 }

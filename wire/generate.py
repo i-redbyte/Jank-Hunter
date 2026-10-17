@@ -66,6 +66,9 @@ def render_kotlin(spec):
         lines.append(f"    const val {entry['kotlin']} = {entry['value']}")
     for entry in spec["stall_states"] + spec["worker_stages"]:
         lines.append(f"    const val {entry['kotlin']} = {entry['value']}L")
+    for entry in spec["collector_flags"]:
+        lines.append(f"    const val {entry['kotlin']} = 1L shl {entry['bit']}")
+    lines.append(f"    const val COLLECTOR_KNOWN_MASK = 0x{bit_mask(spec['collector_flags']):x}L")
     file_magic = bytes.fromhex(fmt["prefix_hex"]) + bytes((fmt["marker"], fmt["major"], fmt["minor"], fmt["patch"]))
     lines += kotlin_byte_array("FILE_MAGIC", file_magic)
     lines += ["    fun isReadableLegacyVersion(major: Int, minor: Int, patch: Int): Boolean {"]
@@ -143,6 +146,10 @@ def render_go(spec):
     for entry in spec["worker_stages"]:
         lines.append(f"\t{entry['go']} WorkerStage = {entry['value']}")
     lines += [")", "", "const ("]
+    for entry in spec["collector_flags"]:
+        lines.append(f"\t{entry['go']} CollectorFlag = 1 << {entry['bit']}")
+    lines.append(f"\tCollectorKnownMask CollectorFlag = 0x{bit_mask(spec['collector_flags']):x}")
+    lines += [")", "", "const ("]
     for entry in spec["envelope_flags"]:
         lines.append(f"\t{entry['go']} EnvelopeFlag = 1 << {entry['bit']}")
     lines += [")", ""]
@@ -150,14 +157,23 @@ def render_go(spec):
         suffix = f"{version['major']}{version['minor']}{version['patch']}"
         values = prefix + [fmt["marker"], version["major"], version["minor"], version["patch"]]
         lines.append(f"var legacyMagicV{suffix} = []byte{{" + ", ".join(f"0x{value:02x}" for value in values) + "}")
+    return "\n".join(lines)
+
+
+def format_go(source):
     formatted = subprocess.run(
         ["gofmt"],
-        input="\n".join(lines),
+        input=source,
         text=True,
         capture_output=True,
         check=True,
     )
     return formatted.stdout
+
+
+def canonical_go(source):
+    """Ignore gofmt-only horizontal spacing while preserving generated tokens and lines."""
+    return "\n".join(" ".join(line.split()) for line in source.splitlines())
 
 
 def replace_generated_region(source, generated):
@@ -181,6 +197,16 @@ def update(path, expected, check):
     return True
 
 
+def update_go(path, source, check):
+    if check:
+        actual = path.read_text() if path.exists() else ""
+        if canonical_go(actual) == canonical_go(source):
+            return True
+        print(f"stale generated file: {path.relative_to(ROOT)}", file=sys.stderr)
+        return False
+    return update(path, format_go(source), check=False)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -189,7 +215,7 @@ def main():
     kotlin_source = KOTLIN_PATH.read_text()
     kotlin_expected = replace_generated_region(kotlin_source, render_kotlin(spec))
     valid = update(KOTLIN_PATH, kotlin_expected, args.check)
-    valid = update(GO_PATH, render_go(spec), args.check) and valid
+    valid = update_go(GO_PATH, render_go(spec), args.check) and valid
     for name, payload in spec["goldens"].items():
         path = FIXTURE_DIR / name
         expected = bytes.fromhex(payload)

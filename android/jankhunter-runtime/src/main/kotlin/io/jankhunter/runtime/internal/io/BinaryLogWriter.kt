@@ -38,8 +38,9 @@ internal class BinaryLogWriter private constructor(
         maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
         maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = defaultFileHeader(),
@@ -56,8 +57,9 @@ internal class BinaryLogWriter private constructor(
         maxPhysicalBytes: Long = DEFAULT_LOCAL_FILE_LIMIT_BYTES,
         logGrowth: LogGrowthSessionBinding? = null,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(file, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,
@@ -88,8 +90,9 @@ internal class BinaryLogWriter private constructor(
         maxPhysicalBytes: Long = 0L,
         logGrowth: LogGrowthSessionBinding? = null,
         archiveBudget: RunArchiveBudget? = null,
+        bufferSize: Int = 32 * 1024,
     ) : this(
-        container = SequentialJhlogContainer(writer, maxPhysicalBytes, archiveBudget),
+        container = SequentialJhlogContainer(writer, maxPhysicalBytes, archiveBudget, bufferSize),
         maxDictionaryEntries = maxDictionaryEntries,
         maxDictionaryValueBytes = maxDictionaryValueBytes,
         fileHeader = fileHeader,
@@ -112,7 +115,7 @@ internal class BinaryLogWriter private constructor(
     private val recordContext = BinaryRecordContext()
     private val microPage = ColumnarMicroPage()
     private val microPagePayload = BinaryPayload(Jhlog.TARGET_RAW_CHUNK_BYTES)
-    private val chunkTypeCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
+    private val chunkTypeCounts = LongArray(Jhlog.TYPE_CAUSAL_EVENT + 1)
     private var chunkRecordCount = 0
     private var chunkSequence = 0L
     private val producerOverride = ProducerMetadataBuffer()
@@ -198,7 +201,7 @@ internal class BinaryLogWriter private constructor(
         producerOverride.set(elapsedUs, threadId, context)
         producerOverrideActive = true
         try {
-            block()
+            block.invoke(this)
         } finally {
             producerOverride.set(previousElapsedUs, previousThreadId, previousContext)
             producerOverrideActive = hadPrevious
@@ -642,14 +645,6 @@ internal class BinaryLogWriter private constructor(
         return context
     }
 
-    private fun BinaryRecordContext?.withStableOwner(ownerAlias: Long): BinaryRecordContext {
-        val context = this ?: recordContext.clear()
-        context.ownerId = 0L
-        context.stableOwnerAlias = ownerAlias
-        context.hasStableOwner = true
-        return context
-    }
-
     private fun BinaryRecordContext?.withScreen(screen: String?): BinaryRecordContext? {
         val screenId = optionalSymbolId(DICT_SCREEN, screen)
         if (screenId == 0L) return this
@@ -696,7 +691,7 @@ internal class BinaryLogWriter private constructor(
         ensureWritable()
         val safeAttributes = attributes and FLAG_KNOWN_MASK
         val producer = currentProducer()
-        if (isSemanticRecord(recordType) && payload.size <= Jhlog.MAX_MICRO_PAGE_PAYLOAD_BYTES) {
+        if (microPage.supportsType(recordType) && payload.size <= Jhlog.MAX_MICRO_PAGE_PAYLOAD_BYTES) {
             prepareMicroPage(payload.size)
             if (microPage.canAppend(payload.size)) {
                 microPage.append(recordType, safeAttributes, payload, context, producer, semanticEventCount)
@@ -1225,13 +1220,26 @@ internal class BinaryLogWriter private constructor(
             Jhlog.TYPE_PROCESS_STATE,
             Jhlog.TYPE_ANDROID_COMPONENT,
             Jhlog.TYPE_BINDER_TRANSACTION,
+            Jhlog.TYPE_THREAD_SNAPSHOT,
+            Jhlog.TYPE_WORKER_CATALOG,
+            Jhlog.TYPE_WORK_REGISTRY,
+            Jhlog.TYPE_WORKER_IDENTITY,
+            Jhlog.TYPE_THREAD_LIFECYCLE,
+            Jhlog.TYPE_WORK_SUBMISSION,
+            Jhlog.TYPE_WORK_CHAIN_EDGE,
+            Jhlog.TYPE_WORK_CHAIN_ROOT,
+            Jhlog.TYPE_WORKER_FAILURE,
+            Jhlog.TYPE_COROUTINE_SEGMENT,
+            Jhlog.TYPE_WORKER_PROGRESS,
+            Jhlog.TYPE_CAUSAL_EVENT,
         )
 
         private fun isSemanticRecord(recordType: Int): Boolean {
             return recordType in Jhlog.TYPE_SESSION..Jhlog.TYPE_GAUGE ||
                 recordType == Jhlog.TYPE_OPERATION ||
                 recordType in Jhlog.TYPE_LOG_SPAM..Jhlog.TYPE_RUNTIME_CALL ||
-                recordType in Jhlog.TYPE_PROCESS_EXIT..Jhlog.TYPE_BINDER_TRANSACTION
+                recordType in Jhlog.TYPE_PROCESS_EXIT..Jhlog.TYPE_BINDER_TRANSACTION ||
+                recordType in Jhlog.TYPE_THREAD_SNAPSHOT..Jhlog.TYPE_CAUSAL_EVENT
         }
 
         private fun isControlRecord(recordType: Int): Boolean {

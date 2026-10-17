@@ -92,6 +92,7 @@ internal class RuntimeMetricsService(
         activeCount: Int,
         poolSize: Int,
         completedTaskCount: Long,
+        snapshotAgeMs: Long = -1L,
     ) {
         recordMetricBatch { asyncWriter, aggregate ->
             recordBatchGauge(asyncWriter, aggregate, keys.queueDepth, queueDepth.toLong())
@@ -102,6 +103,7 @@ internal class RuntimeMetricsService(
                 activeCount,
                 poolSize,
                 completedTaskCount,
+                snapshotAgeMs,
             )
         }
     }
@@ -114,6 +116,7 @@ internal class RuntimeMetricsService(
         poolSize: Int,
         completedTaskCount: Long,
         scheduled: Boolean = false,
+        snapshotAgeMs: Long = -1L,
     ) {
         recordMetricBatch { asyncWriter, aggregate ->
             if (scheduled) {
@@ -129,6 +132,7 @@ internal class RuntimeMetricsService(
                 activeCount,
                 poolSize,
                 completedTaskCount,
+                snapshotAgeMs,
             )
         }
     }
@@ -300,11 +304,13 @@ internal class RuntimeMetricsService(
         activeCount: Int,
         poolSize: Int,
         completedTaskCount: Long,
+        snapshotAgeMs: Long,
     ) {
         if (activeCount < 0) return
         recordBatchGauge(asyncWriter, aggregate, keys.activeCount, activeCount.toLong())
         recordBatchGauge(asyncWriter, aggregate, keys.poolSize, poolSize.toLong())
         recordBatchGauge(asyncWriter, aggregate, keys.completedTaskCount, completedTaskCount)
+        if (snapshotAgeMs >= 0L) recordBatchGauge(asyncWriter, aggregate, keys.poolSnapshotAge, snapshotAgeMs)
     }
 
     private fun recordBatchCounter(

@@ -8,6 +8,14 @@ import org.junit.Test
 
 class RuntimeProcessStateTest {
     @Test
+    fun hookReadsUnknownWithoutCallingTheAndroidImportanceSource() {
+        val calls = AtomicInteger()
+        val access = access(RuntimeState()) { calls.incrementAndGet(); 125 }
+        assertEquals(RuntimeProcessImportance.UNKNOWN, access.processImportance())
+        assertEquals(0, calls.get())
+    }
+
+    @Test
     fun androidImportancePreservesForegroundServiceAsDistinctState() {
         assertEquals(RuntimeProcessImportance.FOREGROUND, RuntimeProcessImportance.fromAndroid(100))
         assertEquals(RuntimeProcessImportance.FOREGROUND_SERVICE, RuntimeProcessImportance.fromAndroid(125))
@@ -26,7 +34,7 @@ class RuntimeProcessStateTest {
 
         assertFalse(access.isUiVisible())
         assertEquals(RuntimeUiVisibility.UNKNOWN, access.uiVisibility())
-        assertEquals(RuntimeProcessImportance.FOREGROUND_SERVICE, access.processImportance())
+        assertEquals(RuntimeProcessImportance.FOREGROUND_SERVICE, access.refreshProcessImportance())
         assertTrue(access.isUserRelevantForSampling())
     }
 
@@ -38,7 +46,7 @@ class RuntimeProcessStateTest {
         val access = access(state) { 300 }
 
         assertTrue(access.isUiVisible())
-        assertEquals(RuntimeProcessImportance.SERVICE, access.processImportance())
+        assertEquals(RuntimeProcessImportance.SERVICE, access.refreshProcessImportance())
         assertTrue(access.isUserRelevantForSampling())
     }
 

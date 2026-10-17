@@ -1,0 +1,3 @@
+jankhunter_release_performance_budget_v1
+
+This fixture checks build compatibility only; performance is measured separately in the sample app.

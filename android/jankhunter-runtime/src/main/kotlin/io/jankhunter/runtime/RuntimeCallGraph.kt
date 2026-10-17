@@ -11,8 +11,6 @@ internal class RuntimeCallGraph(
     private val captureScreen: () -> String?,
     private val captureOperationId: RuntimeLongSource,
     private val maxKeys: RuntimeIntSource,
-    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
-    private val admissionWaitNanos: RuntimeLongSource = RuntimeLongSource { 5_000_000L },
     private val periodicFlushIntervalMs: Long = 30_000L,
     private val consumerDelayNanos: Long = 0L,
     private val batchObserver: ((RuntimeCallBatch) -> Unit)? = null,
@@ -51,7 +49,7 @@ internal class RuntimeCallGraph(
         advanceRuntimeEpoch(epoch)
         lateinit var session: RuntimeCallGraphSession
         session = RuntimeCallGraphSession(
-            nowMs, captureScreen, captureOperationId, maxKeys, exactAdmission, admissionWaitNanos,
+            nowMs, captureScreen, captureOperationId, maxKeys,
             periodicFlushIntervalMs, consumerDelayNanos, batchObserver, publisherAdmissionObserver,
             consumerLoopObserver, consumerThreadFactory, producerRegistrationObserver, uptimeNanos,
             generation = epoch.get(),

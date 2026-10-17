@@ -86,6 +86,8 @@ const (
 )
 
 type StreamResult struct {
+	ProcessFile              bool                 `json:"process_file,omitempty"`
+	Segments                 []StreamResult       `json:"segments,omitempty"`
 	FormatVersion            string               `json:"format_version,omitempty"`
 	Source                   string               `json:"source"`
 	Header                   SegmentHeader        `json:"header"`
@@ -161,7 +163,7 @@ func (eventType EventType) IsSemanticData() bool {
 	case EventSession, EventContext, EventHTTP, EventUIWindow, EventStall, EventMemory,
 		EventRetained, EventCounter, EventGauge, EventOperation, EventLogSpam, EventProblem, EventRuntimeCall,
 		EventProcessExit, EventIO, EventWorker, EventWebSocket, EventDatabase, EventDatabaseTransaction,
-		EventProcessState, EventAndroidComponent, EventBinderTransaction:
+		EventProcessState, EventAndroidComponent, EventBinderTransaction, EventThreadSnapshot, EventWorkerCatalog, EventWorkRegistry, EventWorkerIdentity, EventThreadLifecycle, EventWorkSubmission, EventWorkChainEdge, EventWorkChainRoot, EventWorkerFailure, EventCoroutineSegment, EventWorkerProgress, EventCausalEvent:
 		return true
 	default:
 		return false
@@ -363,25 +365,6 @@ func (e RetentionEvidence) Effective() RetentionEvidence {
 
 type CollectorFlag uint64
 
-const (
-	CollectorFPS CollectorFlag = 1 << iota
-	CollectorJankStats
-	CollectorProcessExit
-	CollectorIOTracing
-	CollectorSystemSampler
-	CollectorMainThreadStalls
-	CollectorRetainedObjects
-	CollectorCompose
-	CollectorRoom
-	CollectorWorker
-	CollectorDatabase
-	CollectorHTTP
-)
-
-const CollectorKnownMask = CollectorFPS | CollectorJankStats | CollectorProcessExit | CollectorIOTracing |
-	CollectorSystemSampler | CollectorMainThreadStalls | CollectorRetainedObjects | CollectorCompose |
-	CollectorRoom | CollectorWorker | CollectorDatabase | CollectorHTTP
-
 type UIFrameSource uint64
 
 const (
@@ -459,32 +442,49 @@ type DictionaryEntry struct {
 	tokenReady  bool
 }
 
+// Rare diagnostic records share one optional extension; ordinary events keep their memory budget.
+type DiagnosticEvent struct {
+	CausalEvent      *CausalEvent           `json:"causal_event,omitempty"`
+	CoroutineSegment *CoroutineSegmentEvent `json:"coroutine_segment,omitempty"`
+	WorkerFailure    *WorkerFailureEvent    `json:"worker_failure,omitempty"`
+	WorkerProgress   *WorkerProgressEvent   `json:"worker_progress,omitempty"`
+	WorkChainEdge    *WorkChainEdgeEvent    `json:"work_chain_edge,omitempty"`
+	WorkChainRoot    *WorkSubmissionEvent   `json:"work_chain_root,omitempty"`
+	WorkSubmission   *WorkSubmissionEvent   `json:"work_submission,omitempty"`
+	ThreadLifecycle  *ThreadLifecycleEvent  `json:"thread_lifecycle,omitempty"`
+	WorkerIdentity   *WorkerIdentityEvent   `json:"worker_identity,omitempty"`
+	WorkRegistry     *WorkRegistryEvent     `json:"work_registry,omitempty"`
+	WorkerCatalog    *WorkerCatalogEvent    `json:"worker_catalog,omitempty"`
+	ThreadSnapshot   *ThreadSnapshotEvent   `json:"thread_snapshot,omitempty"`
+}
+
 type Event struct {
-	Type                EventType                 `json:"type"`
-	TimeUS              uint64                    `json:"time_us,omitempty"`
-	DeltaUS             int64                     `json:"delta_us,omitempty"`
-	TimeMS              uint64                    `json:"time_ms"`
-	DeltaMS             uint64                    `json:"delta_ms,omitempty"`
-	Flags               uint64                    `json:"flags,omitempty"`
-	Producer            ProducerMetadata          `json:"producer,omitempty"`
-	Attribution         AttributionContext        `json:"attribution,omitempty"`
-	Position            RecordPosition            `json:"position,omitempty"`
-	Source              string                    `json:"source,omitempty"`
-	Dictionary          *DictionaryEntry          `json:"dictionary,omitempty"`
-	Session             *SessionEvent             `json:"session,omitempty"`
-	Context             *ContextEvent             `json:"context,omitempty"`
-	HTTP                *HTTPEvent                `json:"http,omitempty"`
-	UIWindow            *UIWindowEvent            `json:"ui_window,omitempty"`
-	Stall               *StallEvent               `json:"stall,omitempty"`
-	Memory              *MemoryEvent              `json:"memory,omitempty"`
-	Retained            *RetainedEvent            `json:"retained,omitempty"`
-	Metric              *MetricEvent              `json:"metric,omitempty"`
-	Operation           *OperationEvent           `json:"operation,omitempty"`
-	LogSpam             *LogSpamEvent             `json:"log_spam,omitempty"`
-	Problem             *ProblemEvent             `json:"problem,omitempty"`
-	RuntimeCall         *RuntimeCallEvent         `json:"runtime_call,omitempty"`
-	ProcessExit         *ProcessExitEvent         `json:"process_exit,omitempty"`
-	IO                  *IOEvent                  `json:"io,omitempty"`
+	Type        EventType          `json:"type"`
+	TimeUS      uint64             `json:"time_us,omitempty"`
+	DeltaUS     int64              `json:"delta_us,omitempty"`
+	TimeMS      uint64             `json:"time_ms"`
+	DeltaMS     uint64             `json:"delta_ms,omitempty"`
+	Flags       uint64             `json:"flags,omitempty"`
+	Producer    ProducerMetadata   `json:"producer,omitempty"`
+	Attribution AttributionContext `json:"attribution,omitempty"`
+	Position    RecordPosition     `json:"position,omitempty"`
+	Source      string             `json:"source,omitempty"`
+	Dictionary  *DictionaryEntry   `json:"dictionary,omitempty"`
+	Session     *SessionEvent      `json:"session,omitempty"`
+	Context     *ContextEvent      `json:"context,omitempty"`
+	HTTP        *HTTPEvent         `json:"http,omitempty"`
+	UIWindow    *UIWindowEvent     `json:"ui_window,omitempty"`
+	Stall       *StallEvent        `json:"stall,omitempty"`
+	Memory      *MemoryEvent       `json:"memory,omitempty"`
+	Retained    *RetainedEvent     `json:"retained,omitempty"`
+	Metric      *MetricEvent       `json:"metric,omitempty"`
+	Operation   *OperationEvent    `json:"operation,omitempty"`
+	LogSpam     *LogSpamEvent      `json:"log_spam,omitempty"`
+	Problem     *ProblemEvent      `json:"problem,omitempty"`
+	RuntimeCall *RuntimeCallEvent  `json:"runtime_call,omitempty"`
+	ProcessExit *ProcessExitEvent  `json:"process_exit,omitempty"`
+	IO          *IOEvent           `json:"io,omitempty"`
+	*DiagnosticEvent
 	Worker              *WorkerEvent              `json:"worker,omitempty"`
 	WebSocket           *WebSocketEvent           `json:"websocket,omitempty"`
 	Database            *DatabaseEvent            `json:"database,omitempty"`
@@ -740,6 +740,7 @@ const (
 	WorkerOutcomeFailure
 	WorkerOutcomeRetry
 	WorkerOutcomeCancelled
+	WorkerOutcomeStopped
 )
 
 type WorkerEvent struct {
@@ -1227,6 +1228,21 @@ const (
 	QualityRuntimeGraphStorageSkippedEntryTotal    uint64 = 0x204a
 	QualityCollectionWindowStartElapsedMS          uint64 = 0x204b
 	QualityCollectionWindowEndElapsedMS            uint64 = 0x204c
+	QualitySessionArchivedTotal                    uint64 = 0x204d
+	QualitySessionRecoveredTotal                   uint64 = 0x204e
+	QualitySessionIncompleteTotal                  uint64 = 0x204f
+	QualityWorkRegistrationCapacity                uint64 = 0x2050
+	QualityWorkRegistrationTimeout                 uint64 = 0x2051
+	QualityWorkRegistrationClosed                  uint64 = 0x2052
+	QualityWorkChainDeclarationOmitted             uint64 = 0x2053
+	QualityWorkRequestBuilderOmitted               uint64 = 0x2054
+	QualityCausalRegistryCapacity                  uint64 = 0x2055
+	QualityCausalStaleEpoch                        uint64 = 0x2056
+	QualityCausalBindingMiss                       uint64 = 0x2057
+	QualityHookReentrancy                          uint64 = 0x2058
+	QualityCollectorBreaker                        uint64 = 0x2059
+	QualityRegistryContention                      uint64 = 0x205a
+	QualityHookCounterContention                   uint64 = 0x205b
 )
 
 type QualityLossReason uint64
@@ -1321,6 +1337,12 @@ func QualityCounterName(id uint64) string {
 		return "collection_window_start_elapsed_ms"
 	case QualityCollectionWindowEndElapsedMS:
 		return "collection_window_end_elapsed_ms"
+	case QualitySessionArchivedTotal:
+		return "session_archived_total"
+	case QualitySessionRecoveredTotal:
+		return "session_archive_recovered_total"
+	case QualitySessionIncompleteTotal:
+		return "session_archive_incomplete_total"
 	case QualityRuntimeGraphStorageSkippedEntryTotal:
 		return "runtime_graph_storage_skipped_entry_total"
 	case QualityHandlerPostContextUnavailable:
@@ -1331,6 +1353,30 @@ func QualityCounterName(id uint64) string {
 		return "async_completion_duplicate_total"
 	case QualityAsyncCompletionInvalid:
 		return "async_completion_invalid_total"
+	case QualityWorkRegistrationCapacity:
+		return "work_registration_capacity_rejected_total"
+	case QualityWorkRegistrationTimeout:
+		return "work_registration_timeout_total"
+	case QualityWorkRegistrationClosed:
+		return "work_registration_unfinished_at_stop_total"
+	case QualityWorkChainDeclarationOmitted:
+		return "work_chain_declaration_omitted_total"
+	case QualityWorkRequestBuilderOmitted:
+		return "work_request_builder_omitted_total"
+	case QualityCausalRegistryCapacity:
+		return "causal_registry_capacity_total"
+	case QualityCausalStaleEpoch:
+		return "causal_stale_epoch_total"
+	case QualityCausalBindingMiss:
+		return "causal_binding_miss_total"
+	case QualityHookReentrancy:
+		return "hook_reentrancy_total"
+	case QualityCollectorBreaker:
+		return "collector_breaker_total"
+	case QualityRegistryContention:
+		return "registry_contention_total"
+	case QualityHookCounterContention:
+		return "hook_counter_contention_total"
 	case QualityAsyncTokenCapacityRejected:
 		return "async_token_capacity_rejected_total"
 	case QualityAsyncTokenIdExhausted:
@@ -1416,6 +1462,10 @@ func QualityCounterName(id uint64) string {
 	case QualityRuntimeGraphProducerCapacityLoss:
 		return "runtime_graph_producer_capacity_loss_total"
 	}
+	if id >= 0x2200 && id < 0x2340 {
+		offset := id - 0x2200
+		return fmt.Sprintf("causal_kind_%d_thread_%d_phase_%d_pre_admission_loss_total", offset/32+1, (offset%32)/16, offset%16)
+	}
 	if id >= 0x1000 && id < 0x2000 {
 		return fmt.Sprintf("event_%d_reason_%d_total", (id-0x1000)/16, (id-0x1000)%16)
 	}
@@ -1423,6 +1473,13 @@ func QualityCounterName(id uint64) string {
 }
 
 func IsKnownQualityCounter(id uint64) bool {
+	if id >= 0x2200 && id < 0x2340 {
+		phase := (id - 0x2200) % 16
+		return phase >= 1 && phase <= 15
+	}
+	if id >= QualityHookReentrancy && id <= QualityHookCounterContention {
+		return true
+	}
 	if id >= QualityAcceptedEventTotal && id <= QualityEventLostAfterStorageBudget {
 		return true
 	}
@@ -1445,10 +1502,14 @@ func IsKnownQualityCounter(id uint64) bool {
 		QualityRuntimeGraphGenerationSkippedEntryTotal,
 		QualityRuntimeGraphStorageSkippedEntryTotal,
 		QualityCollectionWindowStartElapsedMS, QualityCollectionWindowEndElapsedMS,
+		QualitySessionArchivedTotal, QualitySessionRecoveredTotal, QualitySessionIncompleteTotal,
 		QualityHandlerPostContextUnavailable,
 		QualityAsyncCompletionStale,
 		QualityAsyncCompletionDuplicate,
 		QualityAsyncCompletionInvalid,
+		QualityWorkRegistrationCapacity, QualityWorkRegistrationTimeout, QualityWorkRegistrationClosed,
+		QualityWorkChainDeclarationOmitted, QualityWorkRequestBuilderOmitted,
+		QualityCausalRegistryCapacity, QualityCausalStaleEpoch, QualityCausalBindingMiss,
 		QualityAsyncTokenCapacityRejected,
 		QualityAsyncTokenIdExhausted,
 		QualityAsyncCompletionFeatureDisabled,
@@ -1498,7 +1559,7 @@ func IsKnownQualityCounter(id uint64) bool {
 	}
 	eventType := EventType((id - 0x1000) / 16)
 	reason := QualityLossReason((id - 0x1000) % 16)
-	return eventType >= EventDictionary && eventType <= EventBinderTransaction &&
+	return eventType >= EventDictionary && eventType <= EventCausalEvent && eventType != eventMicroPage &&
 		reason >= QualityLossQueueFull && reason <= QualityLossStorageBudget
 }
 

@@ -12,6 +12,26 @@ import org.junit.Test
 
 class MetricAggregatorTest {
     @Test
+    fun counterNeverWaitsForTheFlushLifecycleOwner() {
+        val aggregator = MetricAggregator(maxKeys = 16, exactAdmission = true)
+        val field = aggregator.javaClass.getDeclaredField("lifecycleLocks").apply { isAccessible = true }
+        val locks = field.get(aggregator) as Array<*>
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val holder = Thread {
+            val writes = locks.map { (it as java.util.concurrent.locks.ReentrantReadWriteLock).writeLock() }
+            writes.forEach { it.lock() }
+            try { entered.countDown(); release.await() } finally { writes.reversed().forEach { it.unlock() } }
+        }
+        val producer = Thread { try { aggregator.counter("fixture", 1L) } finally { done.countDown() } }
+        try {
+            holder.start(); assertTrue(entered.await(5L, TimeUnit.SECONDS)); producer.start()
+            assertTrue("metric hook waited for a flush owner", done.await(100L, TimeUnit.MILLISECONDS))
+        } finally { release.countDown(); holder.join(5_000L); producer.join(5_000L) }
+    }
+
+    @Test
     fun oversizedMetricNameIsRejectedWithExplicitLoss() {
         val aggregator = MetricAggregator(maxKeys = 2, exactAdmission = true)
         val counters = linkedMapOf<String, Long>()
@@ -264,11 +284,11 @@ class MetricAggregatorTest {
 
         val accepted = sink.counters.keys.count { it.startsWith("metric.") }
         assertTrue("accepted=$accepted counters=${sink.counters}", accepted <= 8)
-        assertEquals(24L, sink.counters["jankhunter.metric_aggregation.dropped.count"])
+        assertEquals(32L, accepted.toLong() + (sink.counters[MetricAggregator.DROPPED_METRIC_NAME] ?: 0L))
     }
 
     @Test
-    fun concurrentUpdatesRemainLosslessWhileFlushSwapsBatches() {
+    fun concurrentUpdatesAccountForRejectedSamplesWhileFlushSwapsBatches() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val workerCount = 8
         val running = AtomicBoolean(true)
@@ -281,8 +301,10 @@ class MetricAggregatorTest {
         val produced = AtomicLong()
         val flushCount = AtomicInteger()
         val recorded = AtomicLong()
+        val rejected = AtomicLong()
         val sink = object : MetricAggregator.Sink {
             override fun counter(name: String, value: Long) {
+                if (name == MetricAggregator.DROPPED_METRIC_NAME) { rejected.addAndGet(value); return }
                 if (name != "shared.counter") return
                 if (blockFirstDelivery.compareAndSet(true, false)) {
                     flushDeliveryBlocked.set(true)
@@ -345,7 +367,7 @@ class MetricAggregatorTest {
 
         aggregator.flush(sink)
         assertTrue(flushCount.get() > 0)
-        assertEquals(produced.get(), recorded.get())
+        assertEquals(produced.get(), recorded.get() + rejected.get())
     }
 
     @Test
@@ -416,7 +438,8 @@ class MetricAggregatorTest {
             MetricAggregationMode.LAST -> assertEquals(202L, gauge.value)
             else -> throw AssertionError("unexpected mode ${gauge.mode}")
         }
-        assertEquals(20_000L, gauge.count)
+        assertTrue(gauge.count > 0L)
+        assertEquals(20_000L, gauge.count + (sink.counters[MetricAggregator.DROPPED_METRIC_NAME] ?: 0L))
     }
 
     private class RecordingSink : MetricAggregator.Sink {

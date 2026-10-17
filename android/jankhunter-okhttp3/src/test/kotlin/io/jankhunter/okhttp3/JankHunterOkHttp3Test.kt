@@ -42,6 +42,21 @@ import org.junit.Test
 
 class JankHunterOkHttp3Test {
     @Test
+    fun newCallPreservesSubclassDispatchAndOriginalCallIdentity() {
+        val request = Request.Builder().url("https://example.com/").build()
+        val expected = OkHttpClient().newCall(request)
+        var invocations = 0
+        val custom = object : OkHttpClient() {
+            override fun newCall(request: Request): Call {
+                invocations++
+                return expected
+            }
+        }
+        assertSame(expected, JankHunterOkHttp3.newCall(custom, request))
+        assertEquals(1, invocations)
+    }
+
+    @Test
     fun facadeKeepsStaticInstrumentationAbi() {
         val facade = Class.forName("io.jankhunter.okhttp3.JankHunterOkHttp3")
         val wrapEventListenerFactory = facade.getDeclaredMethod(

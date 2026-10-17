@@ -42,6 +42,10 @@ func (c *collector) addUpstreamIncompleteness(counters map[uint64]uint64, addRea
 		label string
 	}{
 		{jhlog.QualityAsyncCompletionInvalid, "недостоверные завершения"},
+		{jhlog.QualityWorkRegistrationCapacity, "достигнут лимит наблюдателей регистрации WorkManager"},
+		{jhlog.QualityWorkRegistrationTimeout, "истёк срок наблюдения регистрации WorkManager"},
+		{jhlog.QualityWorkChainDeclarationOmitted, "достигнут лимит объявлений цепочек WorkManager"},
+		{jhlog.QualityWorkRequestBuilderOmitted, "лимит наблюдений WorkRequest.Builder или конфликт подсказок UUID"},
 		{jhlog.QualityAsyncTokenCapacityRejected, "таблица операций заполнена"},
 		{jhlog.QualityAsyncTokenIdExhausted, "идентификаторы операций исчерпаны"},
 	} {

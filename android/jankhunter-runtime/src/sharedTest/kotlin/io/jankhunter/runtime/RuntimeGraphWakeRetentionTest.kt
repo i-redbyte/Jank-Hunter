@@ -18,7 +18,7 @@ class RuntimeGraphWakeRetentionTest {
         val allowWait = CountDownLatch(1)
         val consumed = CountDownLatch(1)
         val reads = AtomicInteger()
-        val graph = RuntimeCallGraph({ 0L }, { null }, { 0L }, { 1 }, exactAdmission = { false },
+        val graph = RuntimeCallGraph({ 0L }, { null }, { 0L }, { 1 },
             batchObserver = { consumed.countDown() },
             uptimeNanos = {
                 if (reads.incrementAndGet() == 3) {

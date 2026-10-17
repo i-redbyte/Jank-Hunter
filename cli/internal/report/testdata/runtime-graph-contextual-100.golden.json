@@ -119,6 +119,7 @@
   "Warnings": null,
   "CollectionSegments": [
     {
+      "HTTPCollectionStateKnown": true,
       "Source": "testdata/runtime-graph-contextual-100.jhlog",
       "Status": "closed_clean",
       "Sealed": true,

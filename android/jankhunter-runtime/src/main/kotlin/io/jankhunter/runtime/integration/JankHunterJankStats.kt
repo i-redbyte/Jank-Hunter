@@ -1,36 +1,34 @@
 package io.jankhunter.runtime.integration
 
 import android.view.Window
+import java.lang.reflect.InvocationTargetException
+import io.jankhunter.runtime.JankHunterFrameListenerV1
+import io.jankhunter.runtime.JankHunterFrameTrackingV1
+import io.jankhunter.runtime.JankHunterJankStatsAdapterV1
 import io.jankhunter.runtime.RuntimeHookFailureReason
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookGuard
 
 /** Checks the optional dependency before loading the typed AndroidX integration. */
 internal object JankHunterJankStats {
-    private val dependencyAvailable by lazy(LazyThreadSafetyMode.PUBLICATION, ::isDependencyAvailable)
+    private val adapter by lazy(LazyThreadSafetyMode.PUBLICATION, ::loadAdapter)
+    internal fun available(): Boolean = adapter != null
 
     fun install(window: Window?, onFrame: FrameListener): Handle? {
-        if (window == null || !dependencyAvailable) return null
-        var callback: JankStatsFrameCallback? = null
-        return try {
-            val frameCallback = JankStatsFrameCallback(onFrame)
-            callback = frameCallback
-            Handle(JankStatsTrackingControl(window, frameCallback))
-        } catch (throwable: Throwable) {
-            callback?.close()
-            RuntimeHookGuard.rethrowFatal(throwable)
+        if (window == null) return null
+        val available = adapter ?: return null
+        return try { Handle(available.create(window, onFrame)) }
+        catch (failure: Throwable) {
+            RuntimeHookGuard.rethrowFatal(failure)
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
             null
         }
     }
 
-    internal fun createFrameListener(onFrame: FrameListener): Any? {
-        if (!dependencyAvailable) return null
-        return JankStatsFrameCallback(onFrame)
-    }
+    internal fun createFrameListener(onFrame: FrameListener): Any? = adapter?.createFrameCallback(onFrame)
 
-    internal class Handle(control: TrackingControl) {
-        private var control: TrackingControl? = control
+    internal class Handle(control: JankHunterFrameTrackingV1) {
+        private var control: JankHunterFrameTrackingV1? = control
 
         @Synchronized
         fun setTrackingEnabled(enabled: Boolean) {
@@ -50,28 +48,24 @@ internal object JankHunterJankStats {
         }
     }
 
-    internal interface TrackingControl : AutoCloseable {
-        fun setTrackingEnabled(enabled: Boolean)
+    internal interface TrackingControl : JankHunterFrameTrackingV1
+
+    internal fun interface FrameListener : JankHunterFrameListenerV1 {
+        override fun onFailure() { RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_FRAME) }
     }
 
-    internal fun interface FrameListener {
-        fun onFrame(isJank: Boolean, durationNanos: Long)
-    }
-
-    private fun isDependencyAvailable(): Boolean {
+    private fun loadAdapter(): JankHunterJankStatsAdapterV1? {
         return try {
             Class.forName("androidx.metrics.performance.JankStats")
-            true
-        } catch (_: ClassNotFoundException) {
-            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
-            false
-        } catch (_: NoClassDefFoundError) {
-            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
-            false
-        } catch (throwable: Throwable) {
-            RuntimeHookGuard.rethrowFatal(throwable)
+            Class.forName("io.jankhunter.runtime.integration.AndroidXJankStatsAdapter")
+                .getDeclaredConstructor().newInstance() as JankHunterJankStatsAdapterV1
+        } catch (_: ClassNotFoundException) { null }
+        catch (_: NoClassDefFoundError) { null }
+        catch (failure: Throwable) {
+            val cause = (failure as? InvocationTargetException)?.targetException ?: failure
+            RuntimeHookGuard.rethrowFatal(cause)
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
-            false
+            null
         }
     }
 }

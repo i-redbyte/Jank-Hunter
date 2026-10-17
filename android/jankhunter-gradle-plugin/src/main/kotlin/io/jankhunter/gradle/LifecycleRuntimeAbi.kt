@@ -4,6 +4,37 @@ import org.objectweb.asm.Opcodes
 
 /** Fail at build time rather than emitting calls that fail with linkage errors on a device. */
 internal object LifecycleRuntimeAbi {
+    fun validateSdk(headers: Map<String, HookAbiClass>) {
+        sdkInterface(headers, LifecycleAccessorEmitter.ACCESSOR, LifecycleAccessorEmitter.KIND_METHOD + "()I")
+        sdkInterface(headers, LifecycleAccessorEmitter.ACCESSOR,
+            LifecycleAccessorEmitter.VISIT_METHOD + LifecycleAccessorEmitter.VISIT_DESCRIPTOR)
+        sdkInterface(headers, LifecycleAccessorEmitter.SINK, "accept(Ljava/lang/Object;Ljava/lang/String;)V")
+        val owner = "io/jankhunter/runtime/JankHunterHooks"
+        val hooks = headers[owner] ?: error("Missing Jank Hunter lifecycle hook owner $owner")
+        requireAbi(hooks.access and Opcodes.ACC_PUBLIC != 0, owner)
+        requireAbi(hooks.access and Opcodes.ACC_INTERFACE == 0, owner)
+        for (descriptor in listOf(
+            "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)V",
+            "(Ljava/lang/Object;ILjava/lang/String;Ljava/lang/String;)V",
+        )) {
+            val signature = "watchLifecycleObject$descriptor"
+            val flags = hooks.methods[signature] ?: 0
+            requireAbi(
+                flags and (Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC) == (Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC) &&
+                    flags and Opcodes.ACC_ABSTRACT == 0,
+                "$owner.$signature",
+            )
+        }
+    }
+
+    private fun sdkInterface(headers: Map<String, HookAbiClass>, owner: String, signature: String) {
+        val header = headers[owner] ?: error("Missing Jank Hunter lifecycle hook owner $owner")
+        requireAbi(header.access and Opcodes.ACC_PUBLIC != 0, owner)
+        requireAbi(header.access and Opcodes.ACC_INTERFACE != 0, owner)
+        val flags = header.methods[signature] ?: 0
+        requireAbi(flags and Opcodes.ACC_PUBLIC != 0 && flags and Opcodes.ACC_STATIC == 0, "$owner.$signature")
+    }
+
     fun validate(index: LifecycleClassIndex) {
         interfaceMethod(index, LifecycleAccessorEmitter.ACCESSOR, LifecycleAccessorEmitter.KIND_METHOD + "()I")
         interfaceMethod(index, LifecycleAccessorEmitter.ACCESSOR, LifecycleAccessorEmitter.VISIT_METHOD + LifecycleAccessorEmitter.VISIT_DESCRIPTOR)

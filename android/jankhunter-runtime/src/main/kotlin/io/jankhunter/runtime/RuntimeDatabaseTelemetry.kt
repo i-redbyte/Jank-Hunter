@@ -50,6 +50,7 @@ private const val MAX_DATABASE_FAILURE_CAUSE_DEPTH = 4
 
 internal class RuntimeDatabaseTelemetry(
     private val access: RuntimeTelemetryAccess,
+    private val concurrency: RuntimeConcurrencyTelemetry? = null,
 ) {
     private val preparedStatements = PreparedStatementRegistry(
         onEviction = { access.writer?.recordQuality(QualityCounterId.PREPARED_STATEMENT_REGISTRY_EVICTION) },
@@ -290,6 +291,8 @@ internal class RuntimeDatabaseTelemetry(
                     durationUs = durationUs,
                     mainThread = isMainThread(),
                 )
+                recordCausalCost(durationUs * NANOS_PER_MICROSECOND,
+                    epoch.tokens.causalContext(token.operationToken))
             } finally {
                 epoch.tokens.release(token.operationToken)
             }
@@ -299,13 +302,14 @@ internal class RuntimeDatabaseTelemetry(
     fun enter(): Long {
         if (!isEnabled()) return 0L
         val epoch = access.collectionEpoch ?: return 0L
-        return epoch.tokens.begin(RuntimeAsyncTokenTable.DATABASE, SystemClock.elapsedRealtimeNanos())
+        return epoch.tokens.begin(RuntimeAsyncTokenTable.DATABASE, SystemClock.elapsedRealtimeNanos(),
+            concurrency?.captureCausalContext())
     }
 
     fun enterAt(startedNanos: Long): Long {
         if (!isEnabled()) return 0L
         val epoch = access.collectionEpoch ?: return 0L
-        return epoch.tokens.begin(RuntimeAsyncTokenTable.DATABASE, startedNanos)
+        return epoch.tokens.begin(RuntimeAsyncTokenTable.DATABASE, startedNanos, concurrency?.captureCausalContext())
     }
 
     fun exit(
@@ -343,6 +347,7 @@ internal class RuntimeDatabaseTelemetry(
                 } else {
                     recordTransactionStatement(operation.toLong(), epoch.id)
                 }
+                val durationNanos = (SystemClock.elapsedRealtimeNanos() - started).coerceAtLeast(0L)
                 epoch.writer.database(
                     sourceId = sourceId,
                     sourceName = sourceName,
@@ -362,9 +367,11 @@ internal class RuntimeDatabaseTelemetry(
                     },
                     transactionId = transactionId,
                     statementToken = statementToken,
-                    durationUs = (SystemClock.elapsedRealtimeNanos() - started).coerceAtLeast(0L) / NANOS_PER_MICROSECOND,
+                    durationUs = durationNanos / NANOS_PER_MICROSECOND,
                     mainThread = isMainThread(),
                 )
+                recordCausalCost(durationNanos, epoch.tokens.causalContext(token),
+                    android.os.Process.myTid().toLong())
             } finally {
                 epoch.tokens.release(token)
             }
@@ -374,6 +381,12 @@ internal class RuntimeDatabaseTelemetry(
     fun rejectDuplicateCompletion() = access.rejectAsyncCompletion(RuntimeAsyncTokenTable.REJECT_CONSUMED)
 
     fun isEnabled(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.SQLITE)
+
+    private fun recordCausalCost(durationNanos: Long, parent: JankHunterCausalContext?,
+        executionTid: Long = 0L) {
+        concurrency?.recordCost(RuntimeCausalOperationKind.DATABASE, durationNanos, -1L, -1L, 0L,
+            null, 0, 0, parent, executionTid)
+    }
 
     private fun currentTransactionId(epochId: Long): Long {
         val automatic = transactions.currentTransactionId(epochId)

@@ -5,7 +5,7 @@ import org.objectweb.asm.Opcodes
 import org.objectweb.asm.tree.MethodNode
 import org.objectweb.asm.tree.TryCatchBlockNode
 
-/** Keeps injected database failure handlers ahead of application catch blocks. */
+/** Keeps injected operation failure handlers ahead of application catch blocks. */
 internal class DatabasePriorityMethodNode(
     access: Int,
     name: String,

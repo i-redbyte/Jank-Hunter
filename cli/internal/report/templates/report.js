@@ -552,6 +552,23 @@
     }, { passive: true });
   }
 
+  const anchorNav = document.querySelector('.nav');
+  let anchorOffset = -1;
+  const syncAnchorOffset = () => {
+    if (!anchorNav) return;
+    const nextOffset = Math.ceil(anchorNav.getBoundingClientRect().height + 12);
+    if (nextOffset === anchorOffset) return;
+    anchorOffset = nextOffset;
+    document.documentElement.style.setProperty('--report-anchor-offset', `${nextOffset}px`);
+  };
+  syncAnchorOffset();
+  if (anchorNav && 'ResizeObserver' in window) {
+    const anchorNavObserver = new ResizeObserver(syncAnchorOffset);
+    anchorNavObserver.observe(anchorNav);
+  } else {
+    window.addEventListener('resize', syncAnchorOffset, { passive: true });
+  }
+
   const revealHashTarget = (hash = window.location.hash) => {
     if (!hash || hash === '#') return;
     let id = hash.slice(1);
@@ -567,22 +584,51 @@
       details.open = true;
       details = details.parentElement?.closest('details');
     }
+    syncAnchorOffset();
     document.querySelectorAll('.nav a[href^="#"]').forEach((link) => {
       const active = link.hash === hash;
       link.classList.toggle('active', active);
       if (active) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
     });
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Jump directly: lazy sections can change height during a smooth scroll.
+    target.scrollIntoView({ behavior: 'instant', block: 'start' });
   };
 
   document.addEventListener('click', (event) => {
     const link = event.target.closest?.('a[href^="#"]');
     if (!link) return;
-    requestAnimationFrame(() => revealHashTarget(link.hash));
+    event.preventDefault();
+    // The bundle owns its history. A srcdoc document cannot push the parent URL.
+    if (window.parent === window) history.pushState(null, '', link.hash);
+    revealHashTarget(link.hash);
   });
   window.addEventListener('hashchange', () => revealHashTarget());
   if (window.location.hash) requestAnimationFrame(() => revealHashTarget());
+
+  const deliverReportSelection = (selection) => {
+    if (!selection || !/^jh-select-(thread|thread-attempts|thread-resources|coroutines)$/.test(selection.type)) return;
+    document.dispatchEvent(new CustomEvent(selection.type, {detail:selection.detail || {}}));
+  };
+  window.jhNavigateSelection = (href, type, detail) => {
+    const selection = {type, detail};
+    if (window.parent !== window) {
+      window.parent.postMessage({type:'jankhunter-report:navigate',href,selection},'*');
+      return;
+    }
+    try { sessionStorage.setItem('jankhunter-report-selection', JSON.stringify(selection)); } catch (_) {}
+    window.location.href = href;
+  };
+  window.addEventListener('message', event => {
+    if (event.data?.type === 'jankhunter-report:selection') deliverReportSelection(event.data.selection);
+  });
+  try {
+    const pending = sessionStorage.getItem('jankhunter-report-selection');
+    if (pending) {
+      sessionStorage.removeItem('jankhunter-report-selection');
+      requestAnimationFrame(() => deliverReportSelection(JSON.parse(pending)));
+    }
+  } catch (_) {}
 
   document.querySelectorAll('[data-zero-toggle]').forEach((toggle) => {
     const scope = toggle.closest('[data-zero-scope]') || document.body;

@@ -218,7 +218,7 @@ func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeatures != 0xffbfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
+	if RequiredFeatures != 0x1ffbfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
 		t.Fatalf(
 			"features = required 0x%x gzip optional 0x%x raw optional 0x%x",
 			RequiredFeatures,
@@ -1103,6 +1103,19 @@ func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
 	}
 }
 
+func TestSessionArchiveQualityCountersKeepWireNames(t *testing.T) {
+	tests := map[uint64]string{
+		QualitySessionArchivedTotal:   "session_archived_total",
+		QualitySessionRecoveredTotal:  "session_archive_recovered_total",
+		QualitySessionIncompleteTotal: "session_archive_incomplete_total",
+	}
+	for id, want := range tests {
+		if !IsKnownQualityCounter(id) || QualityCounterName(id) != want {
+			t.Fatalf("counter %x: known=%t name=%q, want %q", id, IsKnownQualityCounter(id), QualityCounterName(id), want)
+		}
+	}
+}
+
 func TestBufferedRuntimeGraphQualityCountersKeepWireNames(t *testing.T) {
 	cases := map[uint64]string{
 		QualityRuntimeGraphShutdownLoss:          "runtime_graph_shutdown_loss_total",
@@ -1372,6 +1385,16 @@ func TestWorkerLifecycleRoundTrip(t *testing.T) {
 				WorkerRef: StableSymbol(0x1234), InstanceID: 0x32621,
 				Stage: WorkerStageStarted, RunAttempt: 2, Generation: 3,
 			},
+		},
+		{
+			Type: EventWorker, TimeMS: 500,
+			Worker: &WorkerEvent{WorkerRef: StableSymbol(0x1234), InstanceID: 0x32621,
+				Stage: WorkerStageForegroundEntered, RunAttempt: 2, Generation: 3},
+		},
+		{
+			Type: EventWorker, TimeMS: 800,
+			Worker: &WorkerEvent{WorkerRef: StableSymbol(0x1234), InstanceID: 0x32621,
+				Stage: WorkerStageForegroundAttemptBoundary, RunAttempt: 2, Generation: 3},
 		},
 		{
 			Type: EventWorker, TimeMS: 850, Flags: uint64(FlagWorkerStopReasonKnown),
@@ -1918,7 +1941,7 @@ func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
 		want   string
 	}{
 		{name: "unknown marker 0x80", marker: 0x80, major: 2, want: "unsupported .jhlog format"},
-		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.1.0; expected 5.1.0"},
+		{name: "previous major", marker: 0x81, major: 1, want: fmt.Sprintf("unsupported JHLOG version 1.%d.%d; expected %s", FormatMinor, FormatPatch, FormatVersionString)},
 		{name: "unknown marker", marker: 0x82, major: 2, want: "unsupported .jhlog format"},
 	} {
 		t.Run(version.name, func(t *testing.T) {

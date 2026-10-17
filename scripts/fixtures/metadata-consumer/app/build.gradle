@@ -1,0 +1,47 @@
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'io.jankhunter.android'
+android {
+    namespace 'com.fixture.compat'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.fixture.compat'
+        minSdk 28
+        targetSdk 35
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    testBuildType 'release'
+    buildTypes {
+        release {
+            minifyEnabled true
+            signingConfig signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'compat.pro'
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+jankHunter {
+    enabled.set(true)
+    enabledBuildTypes.set(['debug','release'] as Set)
+    profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)
+    processes.set(io.jankhunter.gradle.JankHunterProcesses.MAIN_ONLY)
+    packages('com.fixture.compat', 'com.fixture.callback')
+    autoInit.set(true)
+    metadataCompatibilityMode.set(io.jankhunter.gradle.JankHunterMetadataCompatibilityMode.COMPATIBILITY)
+    enable(io.jankhunter.gradle.JankHunterFeatureBundle.CONCURRENCY_ALL)
+    release { approval ->
+        approval.privacyReviewed()
+        approval.performanceBudget(file('compat-budget.txt'))
+    }
+}
+dependencies {
+    implementation project(':callback-library')
+    implementation "io.jankhunter:jankhunter-android-sdk:${project.findProperty('jhVersion')}"
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.2.21'
+    implementation 'org.jetbrains.kotlin:kotlin-reflect:2.2.21'
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestCompileOnly 'com.google.errorprone:error_prone_annotations:2.41.0'
+}

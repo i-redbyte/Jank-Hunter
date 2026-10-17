@@ -48,9 +48,9 @@ internal class ExecutionBinaryRecordEncoder(
         flags: Long,
     ) {
         require(instanceId != 0L)
-        require(stage in Jhlog.WORKER_STAGE_ENQUEUED..Jhlog.WORKER_STAGE_REGISTERED_OBSERVED)
+        require(stage in Jhlog.WORKER_STAGE_ENQUEUED..Jhlog.WORKER_STAGE_FOREGROUND_ATTEMPT_BOUNDARY)
         require(stage == Jhlog.WORKER_STAGE_ENQUEUED || stage == Jhlog.WORKER_STAGE_REGISTERED_OBSERVED || workerId != 0L)
-        require(outcome in Jhlog.WORKER_OUTCOME_UNKNOWN..Jhlog.WORKER_OUTCOME_CANCELLED)
+        require(outcome in Jhlog.WORKER_OUTCOME_UNKNOWN..Jhlog.WORKER_OUTCOME_STOPPED)
         val finished = stage == Jhlog.WORKER_STAGE_FINISHED
         require(finished || outcome == Jhlog.WORKER_OUTCOME_UNKNOWN)
         require(finished || durationMs == 0L)

@@ -3,12 +3,16 @@ package io.jankhunter.runtime
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import java.util.concurrent.atomic.AtomicLongArray
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /** Epoch ownership is kept by the runtime. Public operation tokens contain primitive IDs only. */
-internal class RuntimeCollectionEpochs {
+internal class RuntimeCollectionEpochs(
+    private val workCleanup: RuntimeWorkCleanup = RuntimeWorkCleanup(),
+) {
     private val ids = RuntimeAsyncTokenIds()
+    private val causalIds = AtomicLong()
     private val lifecycle = ReentrantLock()
     private val pendingRejections = AtomicLongArray(RuntimeAsyncTokenTable.REJECT_ID_EXHAUSTED + 2)
 
@@ -23,7 +27,8 @@ internal class RuntimeCollectionEpochs {
             writer.recordQuality(QualityCounterId.ASYNC_TOKEN_ID_EXHAUSTED)
             return@withLock
         }
-        val epoch = RuntimeCollectionEpoch(id, writer, config, RuntimeAsyncTokenTable(ids, rejected = ::reject))
+        val epoch = RuntimeCollectionEpoch(id, writer, config, RuntimeAsyncTokenTable(ids, rejected = ::reject),
+            causalIds, workCleanup)
         current = epoch
         flushPending(writer)
     }
@@ -36,6 +41,8 @@ internal class RuntimeCollectionEpochs {
             epoch.writer.recordQuality(QualityCounterId.ASYNC_UNFINISHED_HTTP + kind - 1, unfinished)
             epoch.writer.recordQuality(QualityCounterId.ASYNC_COMPLETION_IN_PROGRESS_AT_STOP, completing)
         }
+        epoch.registrations.close()
+        epoch.causalRegistry?.close()
         flushPending(epoch.writer)
     }
 
@@ -79,4 +86,23 @@ internal class RuntimeCollectionEpoch(
     val writer: AsyncLogWriter,
     val config: JankHunterConfig,
     val tokens: RuntimeAsyncTokenTable,
-)
+    causalIds: AtomicLong,
+    workCleanup: RuntimeWorkCleanup,
+) {
+    val causalIdFloor = causalIds.get() + 1L
+    val causalRegistry = if (config.concurrencyDiagnosticsEnabled()) {
+        RuntimeCausalRegistry(config.concurrencyMaxTrackedEntities(), nextId = causalIds)
+    } else null
+    val registrations = RuntimeWorkRegistrations(
+        { android.os.SystemClock.elapsedRealtime() },
+        cleanup = workCleanup,
+        lost = { reason -> writer.recordQuality(when (reason) {
+            RuntimeWorkRegistrations.CAPACITY -> QualityCounterId.WORK_REGISTRATION_CAPACITY
+            RuntimeWorkRegistrations.TIMEOUT -> QualityCounterId.WORK_REGISTRATION_TIMEOUT
+            else -> QualityCounterId.WORK_REGISTRATION_CLOSED
+        }) },
+    )
+    val threadIdentities = io.jankhunter.runtime.internal.system.ThreadIdentityRegistry()
+    val workChains = RuntimeWorkChainTracker()
+    val workBuilders = RuntimeWorkBuilderTracker()
+}

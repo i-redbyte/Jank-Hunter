@@ -38,6 +38,8 @@ type ReportOptions struct {
 	AnimatedBackground bool
 	GeneratedAt        string
 	Links              ReportLinks
+	// SourcePaths keeps file names intact, including commas, in the inspect header.
+	SourcePaths []string
 	// TransientOutput skips durability barriers for companion pages created inside a private
 	// temporary directory and immediately consumed by WriteBundle. Standalone and final reports
 	// keep the default durable atomic write path.
@@ -54,6 +56,8 @@ type ReportLinks struct {
 	Influence           string
 	Diagnostics         string
 	DependencyInjection string
+	Threads             string
+	Workers             string
 }
 
 type ReportPaths struct {
@@ -63,6 +67,8 @@ type ReportPaths struct {
 	Influence           string
 	Diagnostics         string
 	DependencyInjection string
+	Threads             string
+	Workers             string
 }
 
 func PathsFor(primary string) ReportPaths {
@@ -73,6 +79,8 @@ func PathsFor(primary string) ReportPaths {
 		Influence:           companionReportPath(primary, "influence"),
 		Diagnostics:         companionReportPath(primary, "diagnostics"),
 		DependencyInjection: companionReportPath(primary, "di"),
+		Threads:             companionReportPath(primary, "threads"),
+		Workers:             companionReportPath(primary, "workers"),
 	}
 }
 
@@ -81,12 +89,34 @@ func (p ReportPaths) MainLink() ReportLinks {
 }
 
 func WriteInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
-	lang := reportLanguage()
+	return writeInspectView(path, summary, options, "main")
+}
+
+func WriteThreadInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
+	return writeInspectView(path, summary, options, "threads")
+}
+
+func WriteWorkerInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
+	return writeInspectView(path, summary, options, "workers")
+}
+
+func writeInspectView(path string, summary analyze.Summary, options ReportOptions, view string) error {
+	var analysis ReportAnalysis
+	logGrowth := template.JS("null")
+	if view == "main" {
+		analysis = inspectAnalysis(summary, reportLanguage())
+		logGrowth = logGrowthJSON(summary.LogGrowth)
+	}
 	return execute(path, cachedInspectTemplate, map[string]any{
+		"ReportView":                    view,
+		"MainReportHref":                options.Links.Main,
+		"ThreadReportHref":              options.Links.Threads,
+		"WorkerReportHref":              options.Links.Workers,
 		"GeneratedAt":                   options.generatedAt(),
 		"Summary":                       summary,
-		"LogGrowthJSON":                 logGrowthJSON(summary.LogGrowth),
-		"Analysis":                      inspectAnalysis(summary, lang),
+		"SourcePaths":                   options.SourcePaths,
+		"LogGrowthJSON":                 logGrowth,
+		"Analysis":                      analysis,
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
 		"InfluenceReportHref":           options.Links.Influence,
@@ -110,6 +140,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 	return execute(path, cachedCompareTemplate, map[string]any{
 		"GeneratedAt": options.generatedAt(),
 		"Comparison":  comparison,
+		"Overview":    comparisonOverview(comparison),
 		"LogGroups": []logReportGroup{
 			{Title: "Логи базы", Empty: "Детали логов базы не встроены.", Logs: baselineLogs},
 			{Title: "Логи проверяемого прогона", Empty: "Данные логов проверяемого прогона не встроены.", Logs: candidateLogs},

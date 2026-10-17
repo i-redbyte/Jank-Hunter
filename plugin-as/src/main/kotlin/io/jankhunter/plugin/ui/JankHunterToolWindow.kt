@@ -1,6 +1,5 @@
 package io.jankhunter.plugin.ui
 
-import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
@@ -26,13 +25,13 @@ import io.jankhunter.plugin.execution.JankHunterRunValidator
 import io.jankhunter.plugin.execution.JankHunterUserPaths
 import io.jankhunter.plugin.services.JankHunterNotifications
 import io.jankhunter.plugin.services.JankHunterProjectIntrospection
+import io.jankhunter.plugin.services.JankHunterProcessRunner
 import io.jankhunter.plugin.services.JankHunterProjectService
 import io.jankhunter.plugin.settings.JankHunterSettings
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.FlowLayout
 import java.io.File
-import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Future
@@ -90,6 +89,9 @@ class JankHunterToolWindow(
     private val backgroundTasks = mutableListOf<Future<*>>()
     private var currentTask = UserTask.REPORT
     private var processHandler: OSProcessHandler? = null
+    private var pendingProcess: PendingResource<OSProcessHandler>? = null
+    private val consoleOutput = CoalescingConsoleBuffer(500_000)
+    private var runGeneration = 0L
     private var commandStarting = false
     private var advancedModeVisible = false
     private var disposed = false
@@ -132,6 +134,10 @@ class JankHunterToolWindow(
     override fun dispose() {
         if (disposed) return
         disposed = true
+        runGeneration++
+        pendingProcess?.close()
+        pendingProcess = null
+        consoleOutput.close()
         JankHunterProjectService.getInstance(project).unregister(this)
         backgroundTasks.forEach { it.cancel(true) }
         backgroundTasks.clear()
@@ -276,6 +282,7 @@ class JankHunterToolWindow(
             showError(error.message ?: "Не удалось прочитать параметры запуска.")
             return
         }
+        val generation = ++runGeneration
         commandStarting = true
         setBusy(true)
         statusLabel.text = "Проверка входных данных…"
@@ -289,6 +296,7 @@ class JankHunterToolWindow(
                 PreparedRun(normalized, command, validation.errors, validation.warnings)
             },
             onDone = { result ->
+                if (generation != runGeneration) return@runInBackground
                 val prepared = result.getOrElse { error ->
                     commandStarting = false
                     setBusy(false)
@@ -389,42 +397,50 @@ class JankHunterToolWindow(
 
     private fun startProcess(prepared: PreparedRun) {
         val command = prepared.command
-        val outputParent = command.outputPath?.let(::File)?.parentFile
-        if (outputParent != null && !outputParent.isDirectory && !outputParent.mkdirs()) {
-            commandStarting = false
-            setBusy(false)
-            showError("Не удалось создать папку отчёта: ${outputParent.path}")
-            return
-        }
-
         advancedPanel.setCommandPreview(command.displayText())
         advancedPanel.appendConsole("$ ${command.displayText()}\n\n")
         prepared.warnings.forEach { warning -> advancedPanel.appendConsole("warning: $warning\n") }
+        val pending = PendingResource<OSProcessHandler>(JankHunterProcessRunner::discardUnstarted)
+        pendingProcess = pending
+        runInBackground(
+            task = { pending.publish(JankHunterProcessRunner.create(project, command)) },
+            onDone = { result ->
+                if (pendingProcess !== pending) {
+                    pending.close()
+                    return@runInBackground
+                }
+                pendingProcess = null
+                val failure = result.exceptionOrNull()
+                if (failure != null) {
+                    pending.close()
+                    commandStarting = false
+                    setBusy(false)
+                    showError(failure.message ?: "Не удалось запустить Jank Hunter CLI.")
+                    return@runInBackground
+                }
+                pending.claim()?.let { handler -> observeProcess(handler, prepared) }
+            },
+        )
+    }
 
-        val commandLine = GeneralCommandLine(command.executable)
-            .withParameters(command.args)
-            .withCharset(StandardCharsets.UTF_8)
-        project.basePath?.let { commandLine.withWorkDirectory(it) }
-
-        val handler = runCatching { OSProcessHandler(commandLine) }.getOrElse { error ->
-            commandStarting = false
-            setBusy(false)
-            showError(error.message ?: "Не удалось запустить Jank Hunter CLI.")
-            return
-        }
+    private fun observeProcess(handler: OSProcessHandler, prepared: PreparedRun) {
+        val command = prepared.command
         commandStarting = false
         processHandler = handler
         handler.addProcessListener(
             object : ProcessListener {
                 override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
-                    ApplicationManager.getApplication().invokeLater {
-                        if (!disposed) advancedPanel.appendConsole(event.text)
+                    if (consoleOutput.offer(event.text)) {
+                        ApplicationManager.getApplication().invokeLater {
+                            val text = consoleOutput.drain()
+                            if (!disposed) advancedPanel.appendConsole(text)
+                        }
                     }
                 }
 
                 override fun processTerminated(event: ProcessEvent) {
                     ApplicationManager.getApplication().invokeLater {
-                        if (disposed || project.isDisposed) return@invokeLater
+                        if (disposed || project.isDisposed || processHandler !== handler) return@invokeLater
                         processHandler = null
                         setBusy(false)
                         advancedPanel.appendConsole("\nПроцесс завершился с кодом ${event.exitCode}\n")
@@ -500,6 +516,13 @@ class JankHunterToolWindow(
     }
 
     private fun stopProcess() {
+        runGeneration++
+        pendingProcess?.close()
+        pendingProcess = null
+        if (commandStarting) {
+            commandStarting = false
+            setBusy(false)
+        }
         processHandler?.destroyProcess()
         statusLabel.text = "Остановка…"
     }

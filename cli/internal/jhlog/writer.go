@@ -35,12 +35,13 @@ type recordEncodeState struct {
 }
 
 type eventPayloadEncodeState struct {
-	symbolOrigins             bool
-	legacyGaugeSum            bool
-	legacyHTTPFirstByte       bool
-	legacyUIDTraffic          bool
-	legacyHTTPCollectionState bool
-	lastDatabaseTransactionID uint64
+	symbolOrigins               bool
+	legacyGaugeSum              bool
+	legacyHTTPFirstByte         bool
+	legacyUIDTraffic            bool
+	legacyHTTPCollectionState   bool
+	legacyCausalCollectionState bool
+	lastDatabaseTransactionID   uint64
 }
 
 type databaseDescriptorKey struct {
@@ -135,10 +136,11 @@ func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
 		runtimeBlock:        newRuntimeBlockEncoder(),
 		microPage:           newMicroPageBuilder(),
 		payloadState: eventPayloadEncodeState{legacyGaugeSum: header.RequiredFeatures&FeatureGaugeWideSum == 0,
-			legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
-			legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
-			symbolOrigins:             header.RequiredFeatures&FeatureSymbolOrigin != 0,
-			legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0},
+			legacyUIDTraffic:            header.RequiredFeatures&FeatureUIDTraffic == 0,
+			legacyHTTPCollectionState:   header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+			legacyCausalCollectionState: header.RequiredFeatures&FeatureCausalConcurrency == 0,
+			symbolOrigins:               header.RequiredFeatures&FeatureSymbolOrigin != 0,
+			legacyHTTPFirstByte:         header.RequiredFeatures&FeatureHTTPFirstByte == 0},
 	}
 	writer.payload.Grow(256)
 	return writer, nil
@@ -211,6 +213,9 @@ func (w *Writer) WriteEvent(event Event) error {
 	}
 	if event.Type == EventSegmentEnd {
 		return fmt.Errorf("segment end is reserved for Writer.Close")
+	}
+	if event.Type == EventCausalEvent && w.header.RequiredFeatures&FeatureCausalConcurrency == 0 {
+		return fmt.Errorf("causal event requires feature32")
 	}
 	if event.Type == EventRuntimeCall {
 		return w.WriteRuntimeCallBlock([]Event{event})
@@ -366,7 +371,7 @@ func (w *Writer) WriteRuntimeCallBlock(events []Event) error {
 }
 
 func (w *Writer) writeEventRecord(event Event, semanticCount uint64) error {
-	if !event.Type.IsSemanticData() {
+	if !event.Type.IsSemanticData() || uint64(event.Type) > 1<<microPageTypeBits {
 		if err := w.flushMicroPage(); err != nil {
 			return err
 		}

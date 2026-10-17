@@ -101,20 +101,31 @@ func validGateConfidence(value string) bool {
 
 func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 	if err := validateThresholdConfig(config); err != nil {
-		return GateResult{Failed: true, Failures: []string{err.Error()}}
+		return failedGateResult(err.Error())
 	}
 	if !hasGateThreshold(config) {
-		return GateResult{}
+		return GateResult{Status: GateDisabled}
 	}
 	failures := evaluateCompletenessGate(comparison, config)
-	failures = append(failures, evaluateMetricGate(comparison, config)...)
+	var inconclusive []string
+	blockedReason := scenarioGateBlockedReason(comparison.Scope.Comparability, config)
+	if blockedReason == "" {
+		failures = append(failures, evaluateMetricGate(comparison, config)...)
+	} else {
+		inconclusive = append(inconclusive, blockedReason)
+		inconclusive = append(inconclusive, evaluateMetricGate(comparison, config)...)
+	}
 	if config.MinConfidence != "" && len(comparison.Deltas) == 0 {
-		failures = append(failures, "min_confidence cannot be evaluated: comparison has no metrics")
+		if blockedReason == "" {
+			failures = append(failures, "min_confidence cannot be evaluated: comparison has no metrics")
+		} else {
+			inconclusive = append(inconclusive, "min_confidence cannot be evaluated: comparison has no metrics")
+		}
 	}
 	if config.MinConfidence != "" && len(comparison.Deltas) > 0 {
 		confidence := comparison.Deltas[0].Confidence
 		if confidenceRank(confidence) < confidenceRank(config.MinConfidence) {
-			failures = append(failures, fmt.Sprintf(
+			message := fmt.Sprintf(
 				"confidence=%s below %s (%s; %s; collection quality: %s, %s; collect 5+ independent acquisition groups and 500+ non-session events per cohort and resolve collection-quality reasons for high confidence)",
 				confidence,
 				config.MinConfidence,
@@ -122,18 +133,142 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 				acquisitionGateDetail("candidate", comparison.Candidate),
 				collectionQualityGateDetail("baseline", comparison.Baseline),
 				collectionQualityGateDetail("candidate", comparison.Candidate),
-			))
+			)
+			if blockedReason == "" {
+				failures = append(failures, message)
+			} else {
+				inconclusive = append(inconclusive, message)
+			}
 		}
 	}
 	if config.RequireCleanCohorts && len(comparison.CohortWarnings) > 0 {
 		for _, warning := range comparison.CohortWarnings {
-			failures = append(failures, "cohort mismatch: "+warning)
+			message := "cohort mismatch: " + warning
+			if blockedReason == "" {
+				failures = append(failures, message)
+			} else {
+				inconclusive = append(inconclusive, message)
+			}
 		}
 	}
-	failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)
-	failures = append(failures, evaluateProblemGate(comparison, config.Problems)...)
+	if blockedReason == "" {
+		failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)
+		failures = append(failures, evaluateProblemGate(comparison, config.Problems)...)
+	} else {
+		failures = append(failures, evaluateLeakGate(comparison, absoluteLeakThreshold(config.Leaks))...)
+		failures = append(failures, evaluateProblemGate(comparison, absoluteProblemThreshold(config.Problems))...)
+		inconclusive = append(inconclusive, evaluateLeakGate(comparison, relativeLeakThreshold(config.Leaks))...)
+		inconclusive = append(inconclusive, evaluateProblemGate(comparison, relativeProblemThreshold(config.Problems))...)
+	}
 	failures = append(failures, evaluateAndroidComponentGate(comparison.AndroidComponents, config.AndroidComponents)...)
-	return GateResult{Failed: len(failures) > 0, Failures: failures}
+	return gateResultFromFailures(failures, inconclusive)
+}
+
+func scenarioGateBlockedReason(comparability ScenarioComparability, config ThresholdConfig) string {
+	if !hasScenarioRelativeThreshold(config) {
+		return ""
+	}
+	switch comparability {
+	case ScenarioFull:
+		return ""
+	case ScenarioPartial:
+		if config.AllowPartialComparison {
+			return ""
+		}
+		return "regression gate cannot evaluate partial scenario coverage without allow_partial_comparison=true"
+	case ScenarioNone:
+		return "regression gate cannot evaluate reports without comparable scenarios"
+	case ScenarioUnknown:
+		return "regression gate cannot evaluate reports with unknown scenario coverage"
+	default:
+		// Hand-built legacy comparisons have no scenario field. Their individual
+		// Comparable flags remain authoritative until they are migrated to v2.
+		return ""
+	}
+}
+
+func hasScenarioRelativeThreshold(config ThresholdConfig) bool {
+	metricChecks := config.MaxSeverity != "" || config.MinConfidence != "" || config.RequireCleanCohorts
+	for name := range config.Metrics {
+		if name != completenessMetric {
+			metricChecks = true
+			break
+		}
+	}
+	leaks := config.Leaks
+	problems := config.Problems
+	return metricChecks || leaks.MaxNew != nil || leaks.MaxWorse != nil || leaks.FailOnNew || leaks.FailOnWorse || leaks.FailOnNewHigh ||
+		problems.FailOnNew || problems.FailOnRegressed
+}
+
+func absoluteLeakThreshold(config LeakThreshold) LeakThreshold {
+	return LeakThreshold{
+		MaxCandidateTotal: config.MaxCandidateTotal,
+		MaxHigh:           config.MaxHigh, MaxRuntimeOnly: config.MaxRuntimeOnly,
+		RequireHeapForHigh: config.RequireHeapForHigh,
+	}
+}
+
+func relativeLeakThreshold(config LeakThreshold) LeakThreshold {
+	return LeakThreshold{
+		MaxNew: config.MaxNew, MaxWorse: config.MaxWorse,
+		FailOnNew: config.FailOnNew, FailOnWorse: config.FailOnWorse, FailOnNewHigh: config.FailOnNewHigh,
+	}
+}
+
+func absoluteProblemThreshold(config ProblemGateThreshold) ProblemGateThreshold {
+	return ProblemGateThreshold{
+		MaxCritical: config.MaxCritical, MaxHigh: config.MaxHigh, MaxMedium: config.MaxMedium,
+		MaxSeverity: config.MaxSeverity, MinConfidence: config.MinConfidence,
+		ExcludeCategories: config.ExcludeCategories, ExcludeDetectors: config.ExcludeDetectors,
+		RequiredCoverage: config.RequiredCoverage,
+	}
+}
+
+func relativeProblemThreshold(config ProblemGateThreshold) ProblemGateThreshold {
+	return ProblemGateThreshold{
+		MinConfidence: config.MinConfidence, FailOnNew: config.FailOnNew, FailOnRegressed: config.FailOnRegressed,
+		ExcludeCategories: config.ExcludeCategories, ExcludeDetectors: config.ExcludeDetectors,
+	}
+}
+
+func failedGateResult(message string) GateResult {
+	return GateResult{Status: GateFail, Failed: true, Failures: []string{message}, Checks: []GateCheck{{Status: GateFail, Message: message}}}
+}
+
+func gateResultFromFailures(failures, inconclusive []string) GateResult {
+	if len(failures) == 0 && len(inconclusive) == 0 {
+		return GateResult{Status: GatePass, Checks: []GateCheck{{Status: GatePass}}}
+	}
+	all := make([]string, 0, len(failures)+len(inconclusive))
+	all = append(all, failures...)
+	all = append(all, inconclusive...)
+	result := GateResult{Status: GateInconclusive, Failed: true, Failures: all, Checks: make([]GateCheck, 0, len(all))}
+	for _, failure := range failures {
+		status := GateFail
+		if gateFailureIsInconclusive(failure) {
+			status = GateInconclusive
+		}
+		result.Checks = append(result.Checks, GateCheck{Status: status, Message: failure})
+		if status == GateFail {
+			result.Status = GateFail
+		}
+	}
+	for _, message := range inconclusive {
+		result.Checks = append(result.Checks, GateCheck{Status: GateInconclusive, Message: message})
+	}
+	return result
+}
+
+func gateFailureIsInconclusive(message string) bool {
+	return strings.Contains(message, "cannot be evaluated") ||
+		strings.Contains(message, "cannot evaluate") ||
+		strings.Contains(message, "incomparable") ||
+		strings.Contains(message, "not comparable") ||
+		strings.Contains(message, "confidence=") && strings.Contains(message, " below ") ||
+		strings.HasPrefix(message, "cohort mismatch:") ||
+		strings.Contains(message, "partial scenario coverage") ||
+		strings.Contains(message, "partial analysis")
 }
 
 func evaluateAndroidComponentGate(comparison AndroidComponentComparison, config AndroidComponentGateThreshold) []string {
@@ -251,12 +386,26 @@ func evaluateProblemGate(comparison Comparison, config ProblemGateThreshold) []s
 	for _, delta := range comparison.ProblemComparison.Deltas {
 		finding := delta.Candidate
 		if finding == nil {
+			finding = delta.Baseline
+		}
+		if finding == nil {
 			continue
 		}
 		if _, excluded := excludedCategories[finding.Category]; excluded {
 			continue
 		}
 		if _, excluded := excludedDetectors[finding.DetectorID]; excluded {
+			continue
+		}
+		// A detector's confidence does not establish before/after comparability.
+		// Check this before confidence filtering and before skipping baseline-only
+		// findings; neither absence nor weak evidence can turn a requested check green.
+		newCheckUnavailable := config.FailOnNew && delta.Candidate != nil && delta.Baseline == nil && !delta.Comparable
+		regressionCheckUnavailable := config.FailOnRegressed && delta.Candidate != nil && delta.Baseline != nil && !delta.Comparable
+		if newCheckUnavailable || regressionCheckUnavailable {
+			failures = append(failures, fmt.Sprintf("problem comparison %s cannot be evaluated: observations are not comparable", delta.Fingerprint))
+		}
+		if delta.Candidate == nil {
 			continue
 		}
 		counts[finding.Severity]++
@@ -266,10 +415,10 @@ func evaluateProblemGate(comparison Comparison, config ProblemGateThreshold) []s
 		if config.MaxSeverity != "" && problemSeverityRank(finding.Severity) > problemSeverityRank(config.MaxSeverity) {
 			failures = append(failures, fmt.Sprintf("problem %s severity=%s exceeds %s", finding.Fingerprint, finding.Severity, config.MaxSeverity))
 		}
-		if config.FailOnNew && delta.Status == "new" {
+		if config.FailOnNew && delta.Comparable && (delta.Status == "new" || delta.Observation == ObservationObservedOnlyAfter) {
 			failures = append(failures, fmt.Sprintf("new problem %s (%s)", finding.Fingerprint, finding.Title))
 		}
-		if config.FailOnRegressed && delta.Status == "regressed" {
+		if config.FailOnRegressed && delta.Comparable && delta.Status == "regressed" {
 			failures = append(failures, fmt.Sprintf("regressed problem %s (%s)", finding.Fingerprint, finding.Title))
 		}
 	}

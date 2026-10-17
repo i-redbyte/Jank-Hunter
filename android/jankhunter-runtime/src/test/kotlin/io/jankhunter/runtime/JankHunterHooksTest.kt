@@ -49,6 +49,12 @@ class JankHunterHooksTest {
                 Integer.TYPE,
                 Integer.TYPE,
             ),
+            "workerFailure" to arrayOf(
+                java.lang.Long.TYPE,
+                java.lang.Long.TYPE,
+                Integer.TYPE,
+                Throwable::class.java,
+            ),
             "wrapRunnable" to arrayOf(Runnable::class.java, String::class.java),
             "wrapCallable" to arrayOf(Callable::class.java, String::class.java),
             "wrapCoroutineBlock" to arrayOf(Function2::class.java, String::class.java),

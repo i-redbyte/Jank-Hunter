@@ -717,6 +717,7 @@ func BenchmarkOperationAnalysisHighVolume(b *testing.B) {
 	dict := map[uint64]string{1: "content.open"}
 	header := jhlog.DefaultSegmentHeader()
 	header.ProcessInstanceID[0] = 1
+	header.RunID[0] = 1
 	for iteration := 0; iteration < b.N; iteration++ {
 		accumulator := newOperationAnalysisAccumulator()
 		accumulator.startLog(header)

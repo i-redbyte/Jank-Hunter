@@ -13,14 +13,13 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.LockSupport
 
 internal class RuntimeHookEventSession(
     private val maxCounterKeys: RuntimeIntSource,
     private val maxLogSpamKeys: RuntimeIntSource,
-    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
-    private val admissionWaitNanos: RuntimeLongSource = RuntimeLongSource { DEFAULT_ADMISSION_WAIT_NS },
     private val consumerDelayNanos: Long = 0L,
     private val publisherAdmissionObserver: (() -> Unit)? = null,
     private val consumerLoopObserver: (() -> Unit)? = null,
@@ -40,6 +39,8 @@ internal class RuntimeHookEventSession(
 
     private val threadBuffer = ThreadLocal<WeakReference<EventBuffer>>()
     private val buffers = ConcurrentLinkedQueue<EventBuffer>()
+    private val producerReservations = AtomicInteger()
+    private val registering = AtomicInteger()
     private val epoch = AtomicLong(1L)
     private val running = AtomicBoolean(false)
     private val clearRequested = AtomicBoolean(false)
@@ -85,10 +86,27 @@ internal class RuntimeHookEventSession(
             buffers.forEach { buffer -> buffer.owner.get()?.let(LockSupport::unpark) }
             if (consumer?.isAlive != true && hasConsumerOwner) {
                 startupCleanupPending.set(true)
-                completeFailedStartIfIdle()
+                scheduleFailedStartCleanup()
             }
             RuntimeHookGuard.rethrowFatal(error)
             throw error
+        }
+    }
+
+    private fun scheduleFailedStartCleanup() {
+        if (!hasActivePublishers()) {
+            completeFailedStartIfIdle()
+            return
+        }
+        // Created only by the lifecycle start caller, never by an injected hook. At most one
+        // fallback owner per session; the transport admits at most two session owners.
+        RuntimeHookGuard.run(RuntimeHookFailureReason.COLLECTOR) {
+            Thread({
+                while (startupCleanupPending.get()) {
+                    if (!hasActivePublishers()) completeFailedStartIfIdle()
+                    else LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1L))
+                }
+            }, "JankHunterStartupCleanup").apply { isDaemon = true }.start()
         }
     }
 
@@ -216,7 +234,10 @@ internal class RuntimeHookEventSession(
 
     private inline fun publish(write: (EventBuffer, Int) -> Unit): Boolean {
         if (!acceptingPublishers) return false
-        val buffer = producerBuffer() ?: return false
+        val buffer = producerBuffer() ?: run {
+            if (acceptingPublishers) recordPreAdmissionLoss(bufferLoss)
+            return false
+        }
         buffer.producerActive = true
         try {
             if (!acceptingPublishers) return false
@@ -241,35 +262,13 @@ internal class RuntimeHookEventSession(
             buffer.producerActive = false
             if (!acceptingPublishers) {
                 consumer?.let(LockSupport::unpark)
-                completeFailedStartIfIdle()
             }
         }
     }
 
     private fun claimPosition(buffer: EventBuffer): Long {
-        val immediate = buffer.sequencer.tryClaimProducer()
-        if (immediate != SpscSlotSequencer.NO_POSITION) return immediate
-        val waitNs = if (exactAdmission.getAsBoolean()) admissionWaitNanos.getAsLong().coerceAtLeast(0L) else 0L
-        if (waitNs == 0L) return SpscSlotSequencer.NO_POSITION
-        val startedAtNs = System.nanoTime()
-        backpressureCount.incrementAndGet()
-        try {
-            while (acceptingPublishers && !consumerFailed.get() && exactAdmission.getAsBoolean()) {
-                // isInterrupted preserves the application's interrupt status and avoids park spinning.
-                if (Thread.currentThread().isInterrupted) break
-                val remaining = waitNs - (System.nanoTime() - startedAtNs)
-                if (remaining <= 0L) break
-                val position = buffer.sequencer.tryClaimProducer()
-                if (position != SpscSlotSequencer.NO_POSITION) return position
-                buffer.producerWaiting = true
-                wakeConsumer()
-                LockSupport.parkNanos(minOf(BACKPRESSURE_PARK_NS, remaining))
-            }
-            return SpscSlotSequencer.NO_POSITION
-        } finally {
-            buffer.producerWaiting = false
-            backpressureNanos.addAndGet((System.nanoTime() - startedAtNs).coerceAtLeast(1L))
-        }
+        // Diagnostic backpressure must never extend an application/logger critical section.
+        return buffer.sequencer.tryClaimProducer()
     }
 
     private fun closePublisherGate() {
@@ -279,17 +278,43 @@ internal class RuntimeHookEventSession(
     private fun producerBuffer(): EventBuffer? {
         val currentEpoch = epoch.get()
         threadBuffer.get()?.get()?.takeIf { it.epoch == currentEpoch }?.let { return it }
-        val buffer = EventBuffer(Thread.currentThread(), currentEpoch)
-        producerRegistrationObserver?.invoke()
-        if (!acceptingPublishers || epoch.get() != currentEpoch) return null
-        buffers.add(buffer)
-        if (!acceptingPublishers || epoch.get() != currentEpoch) {
-            buffers.remove(buffer)
-            buffer.clearAll()
-            return null
+        registering.incrementAndGet()
+        var reserved = false
+        var registered = false
+        var buffer: EventBuffer? = null
+        try {
+            if (!acceptingPublishers || epoch.get() != currentEpoch) return null
+            reserved = reserveProducerBuffer()
+            if (!reserved) return null
+            buffer = EventBuffer(Thread.currentThread(), currentEpoch)
+            producerRegistrationObserver?.invoke()
+            if (!acceptingPublishers || epoch.get() != currentEpoch) return null
+            buffers.add(buffer)
+            registered = true
+            threadBuffer.set(WeakReference(buffer))
+            return buffer
+        } catch (failure: Throwable) {
+            if (registered && buffers.remove(buffer)) registered = false
+            throw failure
+        } finally {
+            if (reserved && !registered) {
+                buffer?.clearAll()
+                producerReservations.decrementAndGet()
+            }
+            registering.decrementAndGet()
+            if (!acceptingPublishers) {
+                consumer?.let(LockSupport::unpark)
+            }
         }
-        threadBuffer.set(WeakReference(buffer))
-        return buffer
+    }
+
+    private fun reserveProducerBuffer(): Boolean {
+        repeat(32) {
+            val count = producerReservations.get()
+            if (count >= MAX_PRODUCER_BUFFERS) return false
+            if (producerReservations.compareAndSet(count, count + 1)) return true
+        }
+        return false
     }
 
     private fun runConsumerFailOpen() {
@@ -304,7 +329,9 @@ internal class RuntimeHookEventSession(
                 RuntimeHookGuard.rethrowFatal(error)
             }
             var lastFlushAtNs = System.nanoTime()
+            var ownedRegistered = false
             while (running.get() || hasActiveOrBufferedEvents()) {
+                if (!ownedRegistered) ownedRegistered = JankHunterHooks.observeOwnedThread("Jank Hunter event consumer")
                 consumerLoopObserver?.invoke()
                 producerWake.clear()
                 delayConsumerForTest()
@@ -512,6 +539,7 @@ internal class RuntimeHookEventSession(
     }
 
     private fun hasActivePublishers(): Boolean {
+        if (registering.get() != 0) return true
         for (buffer in buffers) if (buffer.producerActive) return true
         return false
     }
@@ -530,8 +558,10 @@ internal class RuntimeHookEventSession(
 
     private fun reclaimDeadBuffers() {
         for (buffer in buffers) {
-            if (buffer.owner.get() == null && buffer.sequencer.isEmpty() && buffers.remove(buffer)) {
+            if (buffer.owner.get()?.isAlive != true && !buffer.producerActive && buffer.sequencer.isEmpty() && buffers.remove(buffer)) {
                 addSaturating(retiredProducerAccepted, buffer.acceptedCount())
+                buffer.clearAll()
+                producerReservations.decrementAndGet()
             }
         }
     }
@@ -543,7 +573,11 @@ internal class RuntimeHookEventSession(
     }
 
     private fun clearRegistry() {
-        while (true) buffers.poll()?.clearAll() ?: return
+        while (true) {
+            val buffer = buffers.poll() ?: return
+            buffer.clearAll()
+            producerReservations.decrementAndGet()
+        }
     }
 
     private fun retireAllBuffers() {
@@ -551,6 +585,7 @@ internal class RuntimeHookEventSession(
             val buffer = buffers.poll() ?: return
             addSaturating(retiredProducerAccepted, buffer.acceptedCount())
             buffer.clearAll()
+            producerReservations.decrementAndGet()
         }
     }
 
@@ -608,6 +643,9 @@ internal class RuntimeHookEventSession(
         const val CONSUMER_NAME = "JankHunterEvents"
         const val NO_FLUSH_REQUEST = -1L
         const val BUFFER_CAPACITY = 256
+        // Seven 256-slot primitive/reference arrays plus owner/state remain below 8 MiB
+        // per session even with 8-byte references. At most two sessions are retained.
+        const val MAX_PRODUCER_BUFFERS = 512
         const val MAX_BATCH_SIZE = 128
         const val BATCH_POOL_CAPACITY = 256
         const val TYPE_METHOD: Byte = 1
@@ -616,7 +654,6 @@ internal class RuntimeHookEventSession(
         const val JOIN_POLL_MS = 50L
         const val FLUSH_INTERVAL_NS = 5_000_000_000L
         const val BACKPRESSURE_PARK_NS = 100_000L
-        const val DEFAULT_ADMISSION_WAIT_NS = 5_000_000L
         const val EVENT_CONSUMER_PRIORITY = Process.THREAD_PRIORITY_DEFAULT + 1
     }
 }

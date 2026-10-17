@@ -20,8 +20,20 @@ func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
 			Summary:            "Качество сбора: изменения модели состояний не рассчитаны: хотя бы одна сторона совмещает отдельные временные шкалы, поэтому соседние состояния не относятся к одному прогону.",
 		}}
 	}
+	if len(baseline.States) == 0 || len(candidate.States) == 0 {
+		return []MarkovDelta{{Metric: "Сопоставимость наблюдений состояний", Unit: "интервалов",
+			BaselineValue: float64(len(baseline.States)), CandidateValue: float64(len(candidate.States)),
+			BaselineAvailable: len(baseline.States) > 0, CandidateAvailable: len(candidate.States) > 0,
+			Severity: "medium", Summary: "Качество сбора: сравнение состояний не рассчитано: хотя бы на одной стороне нет наблюдаемых состояний. Отсутствие измерений не означает здоровое состояние."}}
+	}
+	leftTransitions := markovTransitionEventCount(baseline.Transitions) > 0
+	rightTransitions := markovTransitionEventCount(candidate.Transitions) > 0
+	count := markovDeltaCount("Здоровые → плохие состояния", "шт", float64(baseline.HealthyToBadCount), float64(candidate.HealthyToBadCount), true)
+	if !leftTransitions || !rightTransitions {
+		count = unavailableMarkovDelta(count.Metric, count.Unit, count.BaselineValue, count.CandidateValue, leftTransitions, rightTransitions)
+	}
 	deltas := []MarkovDelta{
-		markovDeltaCount("Здоровые → плохие состояния", "шт", float64(baseline.HealthyToBadCount), float64(candidate.HealthyToBadCount), true),
+		count,
 		markovDeltaProbability("Доля плохих состояний", baseline.BadStateExposure, candidate.BadStateExposure, true),
 		markovDeltaTransitionMatrixDivergence(baseline, candidate),
 	}
@@ -40,9 +52,13 @@ func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
 	}
 	states := markovStickyStateUnion(baseline.StickyStates, candidate.StickyStates)
 	for _, state := range states {
-		base := stickyProbability(baseline.StickyStates, state)
-		cand := stickyProbability(candidate.StickyStates, state)
-		deltas = append(deltas, markovDeltaProbability("Долгое состояние: "+MarkovStateLabel(state), base, cand, true))
+		base, baseKnown := stickyProbability(baseline.Transitions, state)
+		cand, candKnown := stickyProbability(candidate.Transitions, state)
+		row := markovDeltaProbability("Долгое состояние: "+MarkovStateLabel(state), base, cand, true)
+		if !baseKnown || !candKnown {
+			row = unavailableMarkovDelta(row.Metric, row.Unit, row.BaselineValue, row.CandidateValue, baseKnown, candKnown)
+		}
+		deltas = append(deltas, row)
 	}
 	return deltas
 }
@@ -58,7 +74,7 @@ func unavailableMarkovDelta(metric, unit string, baseline, candidate float64, ba
 		BaselineAvailable:  baselineAvailable,
 		CandidateAvailable: candidateAvailable,
 		Severity:           "medium",
-		Summary:            fmt.Sprintf("%s не сравнивается: завершённый плохой эпизод наблюдался только на одной стороне.", metric),
+		Summary:            fmt.Sprintf("%s не сравнивается: необходимые наблюдения отсутствуют хотя бы на одной стороне.", metric),
 	}
 }
 
@@ -116,6 +132,11 @@ func markovDeltaDuration(metric string, baseline, candidate float64, higherIsWor
 }
 
 func markovDeltaTransitionMatrixDivergence(baseline, candidate MarkovModel) MarkovDelta {
+	left := markovTransitionEventCount(baseline.Transitions) > 0
+	right := markovTransitionEventCount(candidate.Transitions) > 0
+	if !left || !right {
+		return unavailableMarkovDelta("Расхождение матрицы переходов", "индекс", 0, 0, left, right)
+	}
 	divergence := markovTransitionMatrixDivergence(baseline, candidate)
 	severity := markovMatrixDivergenceSeverity(divergence, baseline, candidate)
 	summary := fmt.Sprintf("Матрица переходов изменилась на %.3f по расхождению Йенсена-Шеннона; показатель близкий к 1 означает сильное изменение сценария.", divergence)
@@ -287,11 +308,16 @@ func markovStickyStateUnion(baseline, candidate []MarkovStickyState) []string {
 	return states
 }
 
-func stickyProbability(states []MarkovStickyState, state string) float64 {
-	for _, item := range states {
-		if item.State == state {
-			return item.Probability
+// StickyStates is only a top-three display projection, never the probability store.
+func stickyProbability(transitions []MarkovTransition, state string) (float64, bool) {
+	probability, known := 0.0, false
+	for _, transition := range transitions {
+		if transition.From == state && transition.Count > 0 {
+			known = true
+			if transition.To == state {
+				probability = transition.Probability
+			}
 		}
 	}
-	return 0
+	return probability, known
 }

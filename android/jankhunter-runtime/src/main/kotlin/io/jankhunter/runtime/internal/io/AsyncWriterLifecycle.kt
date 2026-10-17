@@ -1,5 +1,6 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -44,8 +45,9 @@ internal class AsyncWriterLifecycle {
         if (reason == TERMINAL_REASON_NONE || !terminalCallbackDelivered.compareAndSet(false, true)) return
         try {
             callback.onTerminal(writer, reason, terminal.failure)
-        } catch (_: Throwable) {
-            // A lifecycle callback must not escape the fail-open writer boundary.
+        } catch (failure: Throwable) {
+            RuntimeHookGuard.rethrowFatal(failure)
+            // Non-fatal observer failures must not kill the writer.
         }
     }
 

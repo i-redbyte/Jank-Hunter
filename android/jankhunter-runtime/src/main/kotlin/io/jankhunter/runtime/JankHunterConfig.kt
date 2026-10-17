@@ -6,6 +6,8 @@ import java.io.File
 class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
     private val runtimeEnabled = builder.runtimeEnabled
+    private val taskObservationMode = builder.taskObservationMode
+    private val coroutineObservationMode = builder.coroutineObservationMode
     private val runtimeCallGraphEnabled = builder.runtimeCallGraphEnabled
     private val availableRuntimeFeaturesMask = builder.availableRuntimeFeaturesMask
     private val enabledRuntimeFeaturesMask = builder.enabledRuntimeFeaturesMask
@@ -14,6 +16,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
     private val httpSlowThresholdMs = builder.httpSlowThresholdMs
     private val memorySampleIntervalMs = builder.memorySampleIntervalMs
+    private val threadSampleIntervalMs = builder.threadSampleIntervalMs
+    private val threadSamplerEnabled = builder.threadSamplerEnabled
+    private val concurrencyDetailedEnabled = builder.concurrencyDetailedEnabled
+    private val concurrencyMaxTrackedEntities = builder.concurrencyMaxTrackedEntities
     private val systemSamplerEnabled = builder.systemSamplerEnabled
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
     private val mainLooperDispatchMonitorEnabled = builder.mainLooperDispatchMonitorEnabled
@@ -23,6 +29,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val roomTracingEnabled = builder.roomTracingEnabled
     private val databaseTracingEnabled = builder.databaseTracingEnabled
     private val workerTracingEnabled = builder.workerTracingEnabled
+    private val workerRegistrySource = builder.workerRegistrySource
+    private val workerRegistryIntervalMs = builder.workerRegistryIntervalMs
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
@@ -63,11 +71,16 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
     private val binaryStorage = builder.binaryStorage
+    private val storagePolicy = builder.storagePolicy
     private val symbolNamespace = builder.symbolNamespace.copyOf()
 
     fun enabled(): Boolean = enabled
 
     fun runtimeEnabled(): Boolean = runtimeEnabled
+
+    fun taskObservationMode(): JankHunterExecutionObservationMode = taskObservationMode
+
+    fun coroutineObservationMode(): JankHunterExecutionObservationMode = coroutineObservationMode
 
     fun runtimeCallGraphEnabled(): Boolean =
         runtimeCallGraphEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.CALL_GRAPH)
@@ -106,6 +119,20 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun memorySampleIntervalMs(): Long = memorySampleIntervalMs.coerceAtLeast(1L)
 
+    fun threadSamplerEnabled(): Boolean =
+        threadSamplerEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.THREAD_SAMPLING)
+
+    fun threadSampleIntervalMs(): Long = threadSampleIntervalMs.coerceAtLeast(500L)
+
+    fun concurrencyDiagnosticsEnabled(): Boolean =
+        isRuntimeFeatureEnabled(JankHunterRuntimeFeature.CONCURRENCY_DIAGNOSTICS)
+
+    fun concurrencyDetailedEnabled(): Boolean =
+        concurrencyDetailedEnabled && concurrencyDiagnosticsEnabled()
+
+    fun concurrencyMaxTrackedEntities(): Int =
+        concurrencyMaxTrackedEntities.coerceIn(1, MAX_CONCURRENCY_TRACKED_ENTITIES)
+
     fun systemSamplerEnabled(): Boolean = systemSamplerEnabled
 
     fun systemSampleIntervalMs(): Long = systemSampleIntervalMs.coerceAtLeast(1L)
@@ -132,6 +159,10 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun workerTracingEnabled(): Boolean =
         workerTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.WORKERS)
+
+    fun workerRegistrySource(): JankHunterWorkRegistrySource? = workerRegistrySource
+
+    fun workerRegistryIntervalMs(): Long = workerRegistryIntervalMs.coerceAtLeast(5000L)
 
     internal fun semanticTracingEnabled(): Boolean =
         composeTracingEnabled() || roomTracingEnabled() || workerTracingEnabled()
@@ -233,12 +264,16 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun binaryStorage(): JankHunterBinaryStorage? = binaryStorage
 
+    fun storagePolicy(): JankHunterStoragePolicy? = storagePolicy
+
     internal fun symbolNamespace(): ByteArray = symbolNamespace.copyOf()
 
     fun toBuilder(): Builder {
         return Builder()
             .enabled(enabled)
             .runtimeEnabled(runtimeEnabled)
+            .taskObservationMode(taskObservationMode)
+            .coroutineObservationMode(coroutineObservationMode)
             .runtimeCallGraphEnabled(runtimeCallGraphEnabled)
             .availableRuntimeFeaturesMask(availableRuntimeFeaturesMask)
             .enabledRuntimeFeaturesMask(enabledRuntimeFeaturesMask)
@@ -247,6 +282,10 @@ class JankHunterConfig private constructor(builder: Builder) {
             .ownerBlockThresholdMs(ownerBlockThresholdMs)
             .httpSlowThresholdMs(httpSlowThresholdMs)
             .memorySampleIntervalMs(memorySampleIntervalMs)
+            .threadSamplerEnabled(threadSamplerEnabled)
+            .threadSampleIntervalMs(threadSampleIntervalMs)
+            .concurrencyDetailedEnabled(concurrencyDetailedEnabled)
+            .concurrencyMaxTrackedEntities(concurrencyMaxTrackedEntities)
             .systemSamplerEnabled(systemSamplerEnabled)
             .systemSampleIntervalMs(systemSampleIntervalMs)
             .mainLooperDispatchMonitorEnabled(mainLooperDispatchMonitorEnabled)
@@ -256,6 +295,8 @@ class JankHunterConfig private constructor(builder: Builder) {
             .roomTracingEnabled(roomTracingEnabled)
             .databaseTracingEnabled(databaseTracingEnabled)
             .workerTracingEnabled(workerTracingEnabled)
+            .workerRegistrySource(workerRegistrySource)
+            .workerRegistryIntervalMs(workerRegistryIntervalMs)
             .objectWatcherEnabled(objectWatcherEnabled)
             .retainedObjectDelayMs(retainedObjectDelayMs)
             .retainedObjectForceGcEnabled(retainedObjectForceGcEnabled)
@@ -296,7 +337,9 @@ class JankHunterConfig private constructor(builder: Builder) {
             .allowedProcesses(allowedProcesses)
             .processNameRedactor(processNameRedactor)
             .binaryStorage(binaryStorage)
+            .storagePolicy(storagePolicy)
             .symbolNamespace(symbolNamespace)
+            .also { it.binaryStorageExplicitlySet = false }
     }
 
     fun isProcessAllowed(processName: String, mainProcessName: String): Boolean {
@@ -308,6 +351,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     class Builder {
         internal var enabled = true
         internal var runtimeEnabled = true
+        internal var taskObservationMode = JankHunterExecutionObservationMode.WRAPPERS
+        internal var coroutineObservationMode = JankHunterExecutionObservationMode.WRAPPERS
         internal var runtimeCallGraphEnabled = true
         internal var availableRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
         internal var enabledRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
@@ -316,6 +361,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var ownerBlockThresholdMs = 250L
         internal var httpSlowThresholdMs = 1_000L
         internal var memorySampleIntervalMs = 10_000L
+        internal var threadSamplerEnabled = false
+        internal var threadSampleIntervalMs = 5_000L
+        internal var concurrencyDetailedEnabled = false
+        internal var concurrencyMaxTrackedEntities = 4096
         internal var systemSamplerEnabled = true
         internal var systemSampleIntervalMs = 15_000L
         internal var mainLooperDispatchMonitorEnabled = false
@@ -325,6 +374,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var roomTracingEnabled = true
         internal var databaseTracingEnabled = true
         internal var workerTracingEnabled = true
+        internal var workerRegistrySource: JankHunterWorkRegistrySource? = null
+        internal var workerRegistryIntervalMs = 30_000L
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
@@ -364,12 +415,18 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var mainProcessOnly = false
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
+        internal var binaryStorageExplicitlySet = false
         internal var binaryStorage: JankHunterBinaryStorage? = null
+        internal var storagePolicy: JankHunterStoragePolicy? = null
         internal var symbolNamespace: ByteArray = ByteArray(0)
 
         fun enabled(value: Boolean) = apply { enabled = value }
 
         fun runtimeEnabled(value: Boolean) = apply { runtimeEnabled = value }
+
+        fun taskObservationMode(value: JankHunterExecutionObservationMode) = apply { taskObservationMode = value }
+
+        fun coroutineObservationMode(value: JankHunterExecutionObservationMode) = apply { coroutineObservationMode = value }
 
         fun runtimeCallGraphEnabled(value: Boolean) = apply { runtimeCallGraphEnabled = value }
 
@@ -403,6 +460,14 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun memorySampleIntervalMs(value: Long) = apply { memorySampleIntervalMs = value }
 
+        fun threadSamplerEnabled(value: Boolean) = apply { threadSamplerEnabled = value }
+
+        fun threadSampleIntervalMs(value: Long) = apply { threadSampleIntervalMs = value }
+
+        fun concurrencyDetailedEnabled(value: Boolean) = apply { concurrencyDetailedEnabled = value }
+
+        fun concurrencyMaxTrackedEntities(value: Int) = apply { concurrencyMaxTrackedEntities = value }
+
         fun systemSamplerEnabled(value: Boolean) = apply { systemSamplerEnabled = value }
 
         fun systemSampleIntervalMs(value: Long) = apply { systemSampleIntervalMs = value }
@@ -418,6 +483,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun roomTracingEnabled(value: Boolean) = apply { roomTracingEnabled = value }
 
         fun databaseTracingEnabled(value: Boolean) = apply { databaseTracingEnabled = value }
+
+        fun workerRegistrySource(value: JankHunterWorkRegistrySource?) = apply { workerRegistrySource = value }
+
+        fun workerRegistryIntervalMs(value: Long) = apply { workerRegistryIntervalMs = value }
 
         fun workerTracingEnabled(value: Boolean) = apply { workerTracingEnabled = value }
 
@@ -503,13 +572,23 @@ class JankHunterConfig private constructor(builder: Builder) {
             processNameRedactor = value
         }
 
-        fun binaryStorage(value: JankHunterBinaryStorage?) = apply { binaryStorage = value }
+        fun binaryStorage(value: JankHunterBinaryStorage?) = apply {
+            binaryStorage = value
+            binaryStorageExplicitlySet = true
+        }
+
+        fun storagePolicy(value: JankHunterStoragePolicy?) = apply { storagePolicy = value }
 
         internal fun symbolNamespace(value: ByteArray?) = apply {
             symbolNamespace = value?.takeIf { it.size == SYMBOL_NAMESPACE_BYTES }?.copyOf() ?: ByteArray(0)
         }
 
-        fun build(): JankHunterConfig = JankHunterConfig(this)
+        fun build(): JankHunterConfig {
+            require(storagePolicy == null || binaryStorage == null) {
+                "storagePolicy and binaryStorage cannot both own Jank Hunter storage"
+            }
+            return JankHunterConfig(this)
+        }
     }
 
 
@@ -517,6 +596,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         private const val BYTES_PER_MIB = 1_048_576L
         private const val SYMBOL_NAMESPACE_BYTES = 16
         private const val MAX_QUEUE_SIZE = 262_144
+        private const val MAX_CONCURRENCY_TRACKED_ENTITIES = 16_384
         private const val MAX_DICTIONARY_ENTRIES = 65_536
         private const val MAX_DICTIONARY_VALUE_BYTES = 16_384
 

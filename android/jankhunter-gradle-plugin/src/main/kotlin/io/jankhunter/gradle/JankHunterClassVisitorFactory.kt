@@ -4,12 +4,18 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import org.objectweb.asm.AnnotationVisitor
+import org.objectweb.asm.Attribute
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.FieldVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.commons.AdviceAdapter
+import org.objectweb.asm.commons.CodeSizeEvaluator
 import org.objectweb.asm.tree.MethodNode
+import org.objectweb.asm.tree.MethodInsnNode
+import org.objectweb.asm.tree.LineNumberNode
+import org.objectweb.asm.tree.FrameNode
 
 abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunterInstrumentationParameters> {
     override fun createClassVisitor(
@@ -18,9 +24,10 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     ): ClassVisitor {
         val params = parameters.get()
         val classData = classContext.currentClassData
-        val selection = InstrumentationClassSelector.evaluate(params, classData)
+        val classOrigin = CausalCodeOrigin.UNKNOWN
+        val selection = InstrumentationClassSelector.evaluate(params, classData, classOrigin)
         val hookConfig = InstrumentationHookConfigFactory.create(params)
-        var visitor = nextClassVisitor
+        var visitor = HookAbiValidationSession.index(params).visitor(nextClassVisitor)
         if (selection.runtime || selection.autoInit || selection.networkBoundary || selection.databaseBoundary) {
             val hierarchyResolver = if (selection.runtime || selection.autoInit) {
                 ClassHierarchyResolver(classContext)
@@ -38,6 +45,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
                     )
                     else -> hookConfig.autoInitOnly()
                 },
+                classOrigin = classOrigin,
                 classHierarchy = hierarchyResolver?.resolve(classData.className).orEmpty(),
                 resolveOwnerHierarchy = hierarchyResolver
                     ?.let { resolver -> resolver::resolve }
@@ -62,7 +70,9 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
-        return InstrumentationClassSelector.evaluate(parameters.get(), classData).any()
+        return InstrumentationClassSelector.evaluate(
+            parameters.get(), classData, CausalCodeOrigin.UNKNOWN,
+        ).any()
     }
 }
 
@@ -70,6 +80,7 @@ internal class JankHunterClassVisitor(
     next: ClassVisitor,
     private val className: String,
     private val config: HookConfig,
+    private val classOrigin: CausalCodeOrigin = CausalCodeOrigin.UNKNOWN,
     classHierarchy: Set<String> = setOf(className),
     private val resolveOwnerHierarchy: (String) -> Set<String> = { setOf(it) },
     private val hierarchyResolutionDiagnostics: () -> Map<ClassHierarchyResolutionFailure, Int> = { emptyMap() },
@@ -78,14 +89,35 @@ internal class JankHunterClassVisitor(
     private val diagnosticsOnlyWhenHookApplied: Boolean = false,
     private val syntheticLifecycleCallbacks: Map<String, Int>? = null,
     private val existingLifecycleMethods: Set<String> = emptySet(),
+    private val diagnosticsSink: ((InstrumentationDiagnosticsRecord) -> Unit)? = null,
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
     private val lambdaCaptures = if (config.classGraph) LambdaCaptureClassBuilder(className) else null
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(
         className,
-        if (instrumentationMarkerDescriptor == LifecycleInstrumentationMarker.DESCRIPTOR) "lifecycle" else "main",
+        when {
+            instrumentationMarkerDescriptor == LifecycleInstrumentationMarker.DESCRIPTOR -> "lifecycle"
+            config.metadataDecodePathway == MetadataDecodePathway.CAUSAL -> "causal"
+            else -> "main"
+        },
     )
+    private val diagnosticsPass = when {
+        instrumentationMarkerDescriptor == LifecycleInstrumentationMarker.DESCRIPTOR -> "lifecycle"
+        config.metadataDecodePathway == MetadataDecodePathway.CAUSAL -> "causal"
+        else -> "main"
+    }
+    private var previousDiagnostics: Attribute? = null
+    private var previousArtifacts: MutableMap<String, Attribute>? = null
+
+    override fun visitAttribute(attribute: Attribute) {
+        if (attribute.type == InstrumentationEvidenceAttribute(diagnosticsPass).type) previousDiagnostics = attribute
+        else if ((config.classGraph && (attribute.type == "JankHunterBuildEvidenceV1_class_graph" || attribute.type == "JankHunterBuildEvidenceV1_lambda_capture")) ||
+            attribute.type == "JankHunterBuildEvidenceV1_android_component") {
+            if (previousArtifacts == null) previousArtifacts = HashMap()
+            previousArtifacts!![attribute.type] = attribute
+        } else super.visitAttribute(attribute)
+    }
     private val roomPolicy = RoomDaoInstrumentationPolicy(config.roomTracing, config.databaseTracing)
     private val classHierarchy = classHierarchy.mapTo(linkedSetOf()) { it.replace('.', '/') }
     private val androidComponentCatalog = AndroidComponentCatalogClassBuilder(className, this.classHierarchy)
@@ -103,7 +135,12 @@ internal class JankHunterClassVisitor(
     private var autoInitMethodPresent = false
     private var alreadyInstrumented = false
     private var classHookApplied = false
+    val hasAppliedHooks: Boolean get() = classHookApplied
     private var roomDatabaseFieldPresent = false
+    private var plainFields: MutableMap<String, String>? = null
+    private val taskBoundariesEnabled = config.executors || config.threadLifecycle || config.concurrencyDiagnostics
+    private val taskLambdas = if (taskBoundariesEnabled) TaskLambdaIndex(className) else null
+    private var deferredTaskMethods: MutableList<() -> Unit>? = null
 
     override fun visit(
         version: Int,
@@ -143,11 +180,13 @@ internal class JankHunterClassVisitor(
             alreadyInstrumented = true
             return delegate
         }
-        if (
-            descriptor == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR &&
-            config.methodFilterMode != JankHunterMethodFilterMode.NONE
-        ) {
-            return KotlinGeneratedMethodIndex.collectingVisitor(delegate) { kotlinGeneratedMethods = it }
+        if (descriptor == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR) {
+            return KotlinGeneratedMethodIndex.collectingVisitor(
+                delegate, config.metadataCompatibilityMode, className, config.metadataDecodePathway,
+            ) {
+                kotlinGeneratedMethods = it
+                diagnostics.recordKotlinMetadata(it)
+            }
         }
         return JankAnnotationParser.visitorFor(descriptor, delegate, classAnnotations)
     }
@@ -161,6 +200,11 @@ internal class JankHunterClassVisitor(
     ): FieldVisitor? {
         lambdaCaptures?.recordField(access, name, descriptor)
         name?.let { androidComponentCatalog.recordField(access, it, descriptor, value) }
+        if (name != null && config.methodFilterMode != JankHunterMethodFilterMode.NONE &&
+            access and (Opcodes.ACC_VOLATILE or Opcodes.ACC_STATIC) == 0) {
+            val fields = plainFields ?: HashMap<String, String>().also { plainFields = it }
+            fields[name] = descriptor
+        }
         if (descriptor == ROOM_DATABASE_DESCRIPTOR) roomDatabaseFieldPresent = true
         return super.visitField(access, name, descriptor, signature, value)
     }
@@ -216,7 +260,7 @@ internal class JankHunterClassVisitor(
         }
         val coroutineOwner = if (
             CoroutineStateMachineInstrumentationPolicy.matches(
-                config.coroutines,
+                config.coroutines || config.concurrencyDiagnostics,
                 name,
                 descriptor,
                 classHierarchy,
@@ -226,6 +270,15 @@ internal class JankHunterClassVisitor(
         } else {
             null
         }
+        val methodDiagnostics = InstrumentationDiagnosticsClassBuilder(className, diagnosticsPass)
+        var methodHookApplied = false
+        var componentHookApplied = false
+        val commitHooks = {
+            if (methodHookApplied) classHookApplied = true
+            if (componentHookApplied) androidComponentCatalog.recordInstrumented(name, descriptor)
+        }
+        var coroutineEntryLine: Int? = null
+        var trivialMethod: MethodFilterDecision? = null
         val instrument = {
                 target: MethodVisitor,
                 origins: List<DatabaseInvocationOrigin>,
@@ -245,9 +298,12 @@ internal class JankHunterClassVisitor(
                 superName,
                 classHierarchy,
                 resolveOwnerHierarchy,
-                diagnostics,
+                methodDiagnostics,
+                classOrigin = classOrigin,
+                trivialMethod = trivialMethod,
+                taskLambdaKind = taskLambdas?.kind(name, descriptor),
                 autoInitComponent = autoInitComponent.takeIf { autoInitEntryPoint },
-                recordClassHookApplied = { classHookApplied = true },
+                recordClassHookApplied = { methodHookApplied = true },
                 recordStaticEdge = { calleeOwner, calleeName ->
                     recordStaticEdge(name, descriptor, calleeOwner, calleeName)
                 },
@@ -259,48 +315,90 @@ internal class JankHunterClassVisitor(
                     AndroidServiceInstrumentationPolicy.isService(classHierarchy),
                 serviceCallback = serviceCallback,
                 recordServiceHookApplied = {
-                    androidComponentCatalog.recordInstrumented(name, descriptor)
-                    classHookApplied = true
+                    componentHookApplied = true
+                    methodHookApplied = true
                 },
                 receiverCallback = receiverCallback,
                 recordReceiverHookApplied = {
-                    androidComponentCatalog.recordInstrumented(name, descriptor)
-                    classHookApplied = true
+                    componentHookApplied = true
+                    methodHookApplied = true
                 },
                 binderServer = binderServer,
                 binderDescriptor = binderDescriptor,
                 coroutineOwner = coroutineOwner,
+                entrySourceLine = coroutineEntryLine,
                 recordBinderHookApplied = {
-                    androidComponentCatalog.recordInstrumented(name, descriptor)
-                    classHookApplied = true
+                    componentHookApplied = true
+                    methodHookApplied = true
                 },
             )
         }
         if (!config.databaseTracing) {
             val captures = lambdaCaptures
-            if (captures == null) return instrument(next, emptyList()) {}
             return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
                 override fun visitEnd() {
                     super.visitEnd()
-                    captures.recordMethod(this)
-                    accept(instrument(next, emptyList()) {})
+                    emitIndexedMethod(this, next) {
+                        if (config.methodFilterMode != JankHunterMethodFilterMode.NONE) {
+                            trivialMethod = TrivialMethodClassifier.classify(this, className, plainFields.orEmpty())
+                        }
+                        captures?.recordMethod(this)
+                        coroutineEntryLine = instructions.toArray().filterIsInstance<LineNumberNode>()
+                            .firstOrNull()?.line
+                        if (config.concurrencyDiagnostics) {
+                            val transformed = DatabasePriorityMethodNode(access, name, descriptor, signature, exceptions)
+                            accept(instrument(transformed, emptyList(), transformed::recordPriorityHandler))
+                            transformed.promotePriorityBlocks()
+                            emitWithinCodeBudget(this, transformed, next, methodDiagnostics, commitHooks)
+                        } else {
+                            val transformed = MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions)
+                            accept(instrument(transformed, emptyList()) {})
+                            emitWithinCodeBudget(this, transformed, next, methodDiagnostics, commitHooks)
+                        }
+                    }
                 }
             }
         }
         return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
             override fun visitEnd() {
                 super.visitEnd()
-                lambdaCaptures?.recordMethod(this)
-                val origins = analyzeDatabaseInvocationOrigins(className, this)
-                if (!requiresDatabaseCatchPriority(name, descriptor, origins)) {
-                    accept(instrument(next, origins) {})
-                    return
+                emitIndexedMethod(this, next) {
+                    if (config.methodFilterMode != JankHunterMethodFilterMode.NONE) {
+                        trivialMethod = TrivialMethodClassifier.classify(this, className, plainFields.orEmpty())
+                    }
+                    coroutineEntryLine = instructions.toArray().filterIsInstance<LineNumberNode>()
+                        .firstOrNull()?.line
+                    lambdaCaptures?.recordMethod(this)
+                    val origins = analyzeDatabaseInvocationOrigins(className, this)
+                    if (!config.concurrencyDiagnostics && !requiresDatabaseCatchPriority(name, descriptor, origins)) {
+                        val transformed = MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions)
+                        accept(instrument(transformed, origins) {})
+                        emitWithinCodeBudget(this, transformed, next, methodDiagnostics, commitHooks)
+                        return@emitIndexedMethod
+                    }
+                    val transformed = DatabasePriorityMethodNode(access, name, descriptor, signature, exceptions)
+                    accept(instrument(transformed, origins, transformed::recordPriorityHandler))
+                    transformed.promotePriorityBlocks()
+                    emitWithinCodeBudget(this, transformed, next, methodDiagnostics, commitHooks)
                 }
-                val transformed = DatabasePriorityMethodNode(access, name, descriptor, signature, exceptions)
-                accept(instrument(transformed, origins, transformed::recordPriorityHandler))
-                transformed.promotePriorityBlocks()
-                transformed.accept(next)
             }
+        }
+    }
+
+    /** An oversized optional transform must never prevent the host application from building. */
+    private fun emitWithinCodeBudget(
+        original: MethodNode, transformed: MethodNode, next: MethodVisitor,
+        methodDiagnostics: InstrumentationDiagnosticsClassBuilder, commitHooks: () -> Unit,
+    ) {
+        val size = CodeSizeEvaluator(null)
+        transformed.accept(size)
+        if (size.maxSize > 65_535 || transformed.maxLocals > 65_535) {
+            diagnostics.recordSkippedMethod("code_size_budget")
+            original.accept(next)
+        } else {
+            diagnostics.mergeMethod(methodDiagnostics.finish())
+            commitHooks()
+            transformed.accept(next)
         }
     }
 
@@ -327,33 +425,48 @@ internal class JankHunterClassVisitor(
         }
     }
 
+    private fun emitEvidence(kind: String, json: String) {
+        val previous = previousArtifacts?.remove("JankHunterBuildEvidenceV1_$kind")
+        super.visitAttribute(previous ?: InstrumentationEvidenceAttribute(kind, json))
+    }
+
     override fun visitEnd() {
+        deferredTaskMethods?.forEach { it() }
+        deferredTaskMethods = null
         emitSyntheticLifecycleMethodsIfNeeded()
         emitSyntheticAutoInitMethodIfNeeded()
         if (!alreadyInstrumented && (!markerOnlyWhenHookApplied || classHookApplied)) {
             super.visitAnnotation(instrumentationMarkerDescriptor, false)?.visitEnd()
         }
         if (config.classGraph) {
+            if (edges.isNotEmpty()) emitEvidence("class_graph", ClassGraphWriter.record(className.replace('/', '.'), edges))
+            val captures = lambdaCaptures?.finish().orEmpty()
+            if (captures.isNotEmpty()) emitEvidence("lambda_capture", LambdaCaptureWriter.records(className, captures))
             ClassGraphWriter.write(config.classGraphDirectory, className, edges)
             LambdaCaptureWriter.write(
                 config.lambdaCaptureDirectory,
                 className,
-                lambdaCaptures?.finish().orEmpty(),
+                captures,
             )
         }
         val hierarchyFailures = hierarchyResolutionDiagnostics()
         diagnostics.recordHierarchyResolutionFailures(hierarchyFailures)
-        if (hierarchyFailures.isNotEmpty() || !diagnosticsOnlyWhenHookApplied || classHookApplied) {
-            InstrumentationDiagnosticsWriter.write(
-                config.instrumentationDiagnosticsDirectory,
-                diagnostics.finish(),
-            )
+        val metadataIncomplete = kotlinGeneratedMethods.analysisStatus != KotlinMetadataAnalysisStatus.READABLE &&
+            kotlinGeneratedMethods.analysisStatus != KotlinMetadataAnalysisStatus.ABSENT
+        if (metadataIncomplete || hierarchyFailures.isNotEmpty() || !diagnosticsOnlyWhenHookApplied || classHookApplied) {
+            val record = diagnostics.finish()
+            val evidence = if (alreadyInstrumented) previousDiagnostics else null
+            super.visitAttribute(evidence ?: InstrumentationEvidenceAttribute(diagnosticsPass,
+                InstrumentationDiagnosticsWriter.toJsonLine(record)))
+            if (diagnosticsSink != null) diagnosticsSink.invoke(record)
+            else InstrumentationDiagnosticsWriter.write(config.instrumentationDiagnosticsDirectory, record)
+        } else {
+            previousDiagnostics?.let { super.visitAttribute(it) }
         }
-        AndroidComponentCatalogWriter.write(
-            config.androidComponentCatalogDirectory,
-            className,
-            androidComponentCatalog.finish(),
-        )
+        val component = androidComponentCatalog.finish()
+        component?.let { emitEvidence("android_component", AndroidComponentCatalogWriter.toJsonLine(it)) }
+        AndroidComponentCatalogWriter.write(config.androidComponentCatalogDirectory, className, component)
+        previousArtifacts?.values?.forEach { super.visitAttribute(it) }
         super.visitEnd()
     }
 
@@ -420,14 +533,65 @@ internal class JankHunterClassVisitor(
         signature: String?,
         exceptions: Array<out String>?,
     ): MethodVisitor {
-        val captures = lambdaCaptures ?: return target
+        val captures = lambdaCaptures
+        if (captures == null && !taskBoundariesEnabled) return target
         return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
             override fun visitEnd() {
                 super.visitEnd()
-                captures.recordMethod(this)
+                taskLambdas?.record(this)
+                captures?.recordMethod(this)
                 accept(target)
             }
         }
+    }
+
+    private fun emitIndexedMethod(method: MethodNode, target: MethodVisitor, emit: () -> Unit) {
+        taskLambdas?.record(method)
+        val constructorSkipReason = originalConstructorReason(method)
+        if (constructorSkipReason != null) {
+            // Pre-initialization handlers or alternative super paths are unsafe for a single
+            // method-wide catch-all, which would read uninitialized JH token locals.
+            // Keep this uncommon constructor intact, including its original exception semantics.
+            diagnostics.recordSkippedMethod(constructorSkipReason)
+            lambdaCaptures?.recordMethod(method)
+            method.accept(target)
+            return
+        }
+        if (taskBoundariesEnabled && method.access and Opcodes.ACC_SYNTHETIC != 0) {
+            val pending = deferredTaskMethods ?: ArrayList<() -> Unit>().also { deferredTaskMethods = it }
+            pending.add(emit)
+        } else {
+            emit()
+        }
+    }
+
+    private fun originalConstructorReason(method: MethodNode): String? {
+        if (method.name != "<init>") return null
+        var unknownFrame = false
+        for (block in method.tryCatchBlocks) {
+            var instruction = block.handler.next
+            var frame: FrameNode? = null
+            while (instruction != null && instruction.opcode < 0) {
+                if (instruction is FrameNode) { frame = instruction; break }
+                instruction = instruction.next
+            }
+            // Legacy classfiles without handler frames also stay unchanged; do not guess this's
+            // initialization state. AGP supplies expanded frames for modern Kotlin/Java inputs.
+            if (frame == null || frame.type != Opcodes.F_NEW || frame.local?.firstOrNull() != className) unknownFrame = true
+            if (frame?.local.orEmpty().contains(Opcodes.UNINITIALIZED_THIS)) return "constructor_preinitialization_handler"
+        }
+        if (unknownFrame) return "constructor_handler_initialization_unknown"
+        val initializationCandidates = method.instructions.asSequence().filterIsInstance<MethodInsnNode>().filter {
+            it.opcode == Opcodes.INVOKESPECIAL && it.name == "<init>" && (it.owner == className || it.owner == superName)
+        }.take(2).count()
+        if (initializationCandidates > 1) {
+            var initializationPaths = 0
+            method.accept(object : AdviceAdapter(Opcodes.ASM9, null, method.access, method.name, method.desc) {
+                override fun onMethodEnter() { initializationPaths++ }
+            })
+            if (initializationPaths > 1) return "constructor_multiple_initialization_paths"
+        }
+        return null
     }
 
     private companion object {

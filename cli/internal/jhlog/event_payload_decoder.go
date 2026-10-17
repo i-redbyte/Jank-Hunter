@@ -24,6 +24,38 @@ func decodeEventPayload(
 		return decodeRuntimeCallPayload(reader, event, symbolNamespace, runtimeCallScratch, segmentState)
 	case EventIO:
 		return decodeIOPayload(reader, event, symbolNamespace, segmentState, valueScratch[:])
+	case EventWorkSubmission:
+		return decodeWorkSubmission(reader, event)
+	case EventWorkChainEdge:
+		return decodeWorkChainEdge(reader, event)
+	case EventWorkerFailure:
+		return decodeWorkerFailure(reader, event)
+	case EventWorkerProgress:
+		return decodeWorkerProgress(reader, event)
+	case EventCoroutineSegment:
+		return decodeCoroutineSegment(reader, event)
+	case EventCausalEvent:
+		if segmentState.legacyCausalCollectionState {
+			return fmt.Errorf("causal event requires feature32")
+		}
+		return decodeCausalEvent(reader, event)
+	case EventWorkChainRoot:
+		if err := decodeWorkSubmission(reader, event); err != nil {
+			return err
+		}
+		event.WorkChainRoot = event.WorkSubmission
+		event.WorkSubmission = nil
+		return nil
+	case EventThreadLifecycle:
+		return decodeThreadLifecycle(reader, event)
+	case EventWorkerIdentity:
+		return decodeWorkerIdentity(reader, event)
+	case EventWorkRegistry:
+		return decodeWorkRegistry(reader, event)
+	case EventWorkerCatalog:
+		return decodeWorkerCatalog(reader, event)
+	case EventThreadSnapshot:
+		return decodeThreadSnapshot(reader, event)
 	case EventWorker:
 		return decodeWorkerPayload(reader, event, symbolNamespace, segmentState, valueScratch[:])
 	case EventWebSocket:
@@ -81,4 +113,26 @@ func readPayloadValues(reader *recordReader, scratch []uint64, names ...string) 
 		values[index] = value
 	}
 	return values, nil
+}
+
+// Check the wire width before converting to a byte-backed enum. Semantic
+// validators then reject unsupported values without losing their high bits.
+func validatePayloadByteFields(values []uint64, indices ...int) error {
+	for _, index := range indices {
+		if values[index] > 255 {
+			return fmt.Errorf("payload field %d value %d exceeds byte range", index, values[index])
+		}
+	}
+	return nil
+}
+
+func readPayloadByteValue(reader *recordReader, name string) (uint64, error) {
+	value, err := readPayloadValue(reader, name)
+	if err != nil {
+		return 0, err
+	}
+	if value > 255 {
+		return 0, fmt.Errorf("%s value %d exceeds byte range", name, value)
+	}
+	return value, nil
 }

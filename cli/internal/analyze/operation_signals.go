@@ -11,11 +11,14 @@ func (a *operationAnalysisAccumulator) recordSignal(event jhlog.Event, operation
 	if operationID == 0 || event.Operation != nil {
 		return
 	}
-	caller := ""
+	caller, metricName := "", ""
 	if len(owner) > 0 {
 		caller = owner[0]
 	}
-	signal, tracked := operationSignal(event, caller)
+	if len(owner) > 1 {
+		metricName = owner[1]
+	}
+	signal, tracked := operationSignal(event, caller, metricName)
 	if !tracked {
 		return
 	}
@@ -144,12 +147,20 @@ func operationDatabaseStatements(signals operationDatabaseSignals) []OperationDa
 	return result
 }
 
-func operationSignal(event jhlog.Event, owner string) (operationSignals, bool) {
+func operationSignal(event jhlog.Event, owner string, metricName ...string) (operationSignals, bool) {
 	var signal operationSignals
 	switch {
 	case event.HTTP != nil:
 		signal.httpCount = 1
 		signal.httpDurationMS = event.HTTP.DurationMS
+		if event.Flags&uint64(jhlog.FlagHTTPResponseBytesKnown) != 0 {
+			signal.httpRxBytes = event.HTTP.RxBytes
+			signal.httpBytesKnown++
+		}
+		if event.Flags&uint64(jhlog.FlagHTTPRequestBytesKnown) != 0 {
+			signal.httpTxBytes = event.HTTP.TxBytes
+			signal.httpBytesKnown++
+		}
 		if httpEventFailed(event.HTTP, event.Flags) {
 			signal.httpFailures = 1
 		}
@@ -187,6 +198,7 @@ func operationSignal(event jhlog.Event, owner string) (operationSignals, bool) {
 		signal.ioDurationUS = event.IO.DurationUS
 		if event.Flags&uint64(jhlog.FlagIOBytesKnown) != 0 {
 			signal.ioBytes = event.IO.Bytes
+			signal.ioBytesKnown = 1
 		}
 	case event.Problem != nil:
 		signal.problemCount = maxUint64(event.Problem.Count, 1)
@@ -201,6 +213,18 @@ func operationSignal(event jhlog.Event, owner string) (operationSignals, bool) {
 		}
 	case event.Metric != nil:
 		signal.metricEvents = 1
+		name := ""
+		if len(metricName) > 0 {
+			name = metricName[0]
+		}
+		if name == workerMetricDeviceCPU || name == workerMetricCoreCPU {
+			count := maxUint64(event.Metric.Count, 1)
+			sum := event.Metric.Sum
+			if sum == 0 {
+				sum = saturatingMultiply(event.Metric.Value, count)
+			}
+			signal.cpuSumX100, signal.cpuSamples = sum, count
+		}
 	case event.Retained != nil:
 		signal.retainedObjects = event.Retained.Count
 	case event.Memory != nil:
@@ -230,6 +254,12 @@ func (a *operationAnalysisAccumulator) rollUpLateSignal(
 			return
 		}
 		if context.included {
+			if context.profileAggregate != nil && context.profileAggregate.aggregate != context.aggregate {
+				context.profileAggregate.aggregate.signals.merge(signal)
+				if database != nil {
+					context.profileAggregate.aggregate.database.add(*database)
+				}
+			}
 			if context.aggregate != nil {
 				context.aggregate.signals.merge(signal)
 				if database != nil {

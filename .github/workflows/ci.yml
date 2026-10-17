@@ -44,6 +44,14 @@ jobs:
       - name: Test and assemble
         working-directory: android
         run: ./gradlew test :jankhunter-gradle-plugin:test assemble --no-daemon --stacktrace
+      - name: Fast stability regression gates
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_kotlin_boundary.py'
+          python3 -m unittest discover -s scripts -p 'test_stability*.py'
+          python3 wire/generate.py --check
+          for artifact in android/jankhunter-runtime/build/outputs/aar/*-release.aar android/jankhunter-okhttp3/build/outputs/aar/*-release.aar android/jankhunter-workmanager/build/outputs/aar/*-release.aar; do
+            python3 scripts/validate-kotlin-boundary.py --artifact "$artifact"
+          done
       - name: Test standalone plugin on Java 17
         working-directory: android
         run: ./gradlew -p jankhunter-gradle-plugin test --no-daemon --stacktrace

@@ -121,6 +121,11 @@ func qualityCounterWarnings(counters map[uint64]uint64, exactAdmission bool) []s
 		{jhlog.QualityAsyncCompletionStale, "отклонены завершения из предыдущей сессии; повторная потеря данных новой сессии не подразумевается"},
 		{jhlog.QualityAsyncCompletionDuplicate, "отклонены повторные завершения уже учтённых операций"},
 		{jhlog.QualityAsyncCompletionInvalid, "отклонены завершения без достоверного токена начала"},
+		{jhlog.QualityWorkRegistrationCapacity, "WorkManager: новые наблюдения регистрации не приняты из-за лимита; сами задания не отменены"},
+		{jhlog.QualityWorkRegistrationTimeout, "WorkManager: истёк срок наблюдения регистрации; результат регистрации неизвестен"},
+		{jhlog.QualityWorkRegistrationClosed, "WorkManager: наблюдения регистрации не закончены к остановке диагностики; это не отмена заданий"},
+		{jhlog.QualityWorkChainDeclarationOmitted, "WorkManager: объявления цепочек не сохранены из-за лимита; пропуск не означает отсутствие зависимости"},
+		{jhlog.QualityWorkRequestBuilderOmitted, "WorkManager: явные параметры Builder не сохранены из-за лимита или конфликта UUID; значения расписания могут быть неизвестны"},
 		{jhlog.QualityAsyncTokenCapacityRejected, "не начат учёт асинхронных операций из-за заполнения таблицы"},
 		{jhlog.QualityAsyncTokenIdExhausted, "не начат учёт асинхронных операций из-за исчерпания идентификаторов"},
 		{jhlog.QualityAsyncCompletionFeatureDisabled, "завершения не записаны после отключения источника"},
@@ -177,6 +182,10 @@ func runtimeHookFailureDetails(counters map[uint64]uint64) ([]RuntimeHookFailure
 		{jhlog.QualityJankStatsFrameFailure, "jankstats_frame", "evidence_loss", "активный JankStats не смог прочитать данные кадра"},
 		{jhlog.QualityJankStatsControlFailure, "jankstats_control", "evidence_loss", "не удалось переключить состояние активного JankStats"},
 		{jhlog.QualityRuntimeHookUnclassifiedFailure, "unclassified", "evidence_loss", "источник внутренней ошибки определить не удалось"},
+		{jhlog.QualityHookReentrancy, "hook_reentrancy", "evidence_loss", "повторный вход в диагностический перехват пропущен без изменения пользовательского метода"},
+		{jhlog.QualityCollectorBreaker, "collector_breaker", "evidence_loss", "дорогой сборщик отключён до нового периода наблюдения после повторных внутренних ошибок"},
+		{jhlog.QualityRegistryContention, "registry_contention", "evidence_loss", "причинная идентичность осталась неизвестной из-за занятого diagnostic registry"},
+		{jhlog.QualityHookCounterContention, "hook_counter_contention", "evidence_loss", "счётчик сохранил факт потери, но исходная категория неизвестна из-за contention"},
 	}
 	details := make([]RuntimeHookFailureDetail, 0, len(descriptors)+1)
 	classified := uint64(0)

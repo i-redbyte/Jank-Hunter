@@ -67,5 +67,6 @@ internal fun lifecycleHookConfig(diagnosticsDirectory: String): HookConfig {
         ioTracing = false,
         classGraphDirectory = "",
         instrumentationDiagnosticsDirectory = diagnosticsDirectory,
+        metadataDecodePathway = MetadataDecodePathway.LIFECYCLE,
     )
 }

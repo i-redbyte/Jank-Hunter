@@ -14,6 +14,18 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val autoInit: Property<Boolean>
 
     @get:Input
+    abstract val threadSamplerEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val threadSampleIntervalMs: Property<Long>
+
+    @get:Input
+    abstract val concurrencyDetailedEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val concurrencyMaxTrackedEntities: Property<Int>
+
+    @get:Input
     abstract val mainThreadStallThresholdMs: Property<Long>
 
     @get:Input
@@ -102,6 +114,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
 
     init {
         autoInit.convention(true)
+        threadSamplerEnabled.convention(false)
+        threadSampleIntervalMs.convention(5_000L)
+        concurrencyDetailedEnabled.convention(false)
+        concurrencyMaxTrackedEntities.convention(4_096)
         mainLooperDispatchMonitorEnabled.convention(false)
         ioTracingEnabled.convention(true)
         exactEventCollectionEnabled.convention(true)
@@ -139,6 +155,18 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.enabled"
                         android:value="true" />
+                    <meta-data
+                        android:name="io.jankhunter.thread_sampler_enabled"
+                        android:value="${threadSamplerEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.thread_sample_interval_ms"
+                        android:value="${threadSampleIntervalMs.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.concurrency_detailed_enabled"
+                        android:value="${concurrencyDetailedEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.concurrency_max_tracked_entities"
+                        android:value="${concurrencyMaxTrackedEntities.get()}" />
                     <meta-data
                         android:name="io.jankhunter.main_thread_stall_threshold_ms"
                         android:value="${mainThreadStallThresholdMs.get()}" />

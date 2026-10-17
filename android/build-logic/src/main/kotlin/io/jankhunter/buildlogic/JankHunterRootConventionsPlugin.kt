@@ -8,6 +8,7 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.artifacts.repositories.PasswordCredentials
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.withType
@@ -33,6 +34,7 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
                 }
                 "jankhunter-okhttp3" -> "Optional OkHttp 3 integration for Jank Hunter network telemetry."
                 "jankhunter-workmanager" -> "Optional WorkManager lifecycle integration for Jank Hunter."
+                "jankhunter-jankstats" -> "Optional AndroidX JankStats frame adapter for the portable runtime."
                 "jankhunter-gradle-plugin" -> "Gradle/ASM instrumentation plugin for Jank Hunter Android builds."
                 "jankhunter-cli" -> "Command-line tools for inspecting and comparing Jank Hunter logs."
                 else -> "Jank Hunter Android component."
@@ -58,6 +60,7 @@ private fun Project.configureAllKotlinImportAnalysis() {
 
 internal fun Project.configureJankHunterDetekt() {
     pluginManager.apply("dev.detekt")
+    configureDetektJavaClasspath()
     val catalog = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
     dependencies.add("detektPlugins", catalog.findLibrary("detekt-rules-ktlint-wrapper").get())
     extensions.configure<DetektExtension> {
@@ -74,6 +77,25 @@ internal fun Project.configureJankHunterDetekt() {
             checkstyle.required.set(true)
             sarif.required.set(true)
             markdown.required.set(false)
+        }
+    }
+}
+
+internal fun Project.configureDetektJavaClasspath() {
+    val projectTasks = tasks
+    afterEvaluate {
+        projectTasks.withType<Detekt>().configureEach {
+            if (name == "detekt" || !name.startsWith("detekt")) return@configureEach
+            if (name.endsWith("UnitTest") || name.endsWith("AndroidTest")) {
+                // Detekt has no Kotlin test friend-module context for internal supertypes.
+                source(project.fileTree("src/main") { include("**/*.kt") })
+            }
+            val javaCompileName = "compile${name.removePrefix("detekt")}JavaWithJavac"
+            if (javaCompileName in projectTasks.names) {
+                val javaCompile = projectTasks.named(javaCompileName, JavaCompile::class.java)
+                // The Android Kotlin compilation does not expose its own Java classes to Detekt.
+                classpath.from(javaCompile.flatMap { it.destinationDirectory })
+            }
         }
     }
 }

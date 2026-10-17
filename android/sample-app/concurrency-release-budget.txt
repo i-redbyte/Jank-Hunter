@@ -1,0 +1,6 @@
+jankhunter_release_performance_budget_v1
+
+Этот вариант предназначен для проверки диагностики в минифицированном sample-приложении.
+Измерения normal/detailed и disabled проводит ConcurrencyBoundaryBenchmarkTest; результаты
+публикуются отдельно в specs/009-concurrency-diagnostics. Этот файл не утверждает,
+что измеренный бюджет автоматически применим к приложению-потребителю.

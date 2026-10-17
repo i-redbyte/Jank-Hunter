@@ -5,16 +5,23 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** A separate bounded lane lets a snapshot on the maintenance thread wait for a metric drain. */
-internal class RuntimeMetricDrainExecutor : RuntimeTaskExecutor {
+/** A bounded diagnostics lane with no caller-runs fallback. */
+internal class RuntimeMetricDrainExecutor(
+    threadName: String = "JankHunterMetricDrain",
+    private val threadLabel: String = "Jank Hunter metric drain",
+    queueCapacity: Int = 1,
+) : RuntimeTaskExecutor {
     private val executor = ThreadPoolExecutor(
-        0, 1, IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1),
-        { task -> Thread(task, "JankHunterMetricDrain").apply { isDaemon = true; priority = Thread.NORM_PRIORITY } },
+        0, 1, IDLE_TIMEOUT_MS, TimeUnit.MILLISECONDS, ArrayBlockingQueue(queueCapacity),
+        { task -> Thread(task, threadName).apply { isDaemon = true; priority = Thread.NORM_PRIORITY } },
         ThreadPoolExecutor.AbortPolicy(),
     )
 
     override fun execute(task: () -> Unit): Boolean = try {
-        executor.execute { RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE, task) }
+        executor.execute {
+            JankHunterHooks.observeOwnedThread(threadLabel)
+            RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE, task)
+        }
         true
     } catch (_: RejectedExecutionException) {
         false

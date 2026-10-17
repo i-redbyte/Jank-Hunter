@@ -151,6 +151,34 @@ var collectorCapabilityDefinitions = [...]collectorCapabilityDefinition{
 			return semanticCollectorObservation(summary, "jankhunter.semantic.v1.worker.")
 		},
 	},
+	{
+		flag: jhlog.CollectorThread, label: "Снимки потоков",
+		description: "Опциональный сбор потоков и связь записанных завершений HTTP, БД и файловых операций с TID записи.",
+		observation: func(summary analyze.Summary) string {
+			if summary.ThreadAnalysis == nil {
+				return "Наблюдения потоков в журнале не найдены."
+			}
+			return fmt.Sprintf("Сохранено %d завершений операций на потоках; пропущено по лимиту %d.",
+				len(summary.ThreadAnalysis.Resources), summary.ThreadAnalysis.DroppedResources)
+		},
+	},
+	{
+		flag: jhlog.CollectorConcurrencyDiagnostics, label: "Причинная диагностика потоков и задач",
+		description: "Записывает точные границы выполнения и связи по ID для поддержанных Kotlin/Java API.",
+		observation: func(summary analyze.Summary) string {
+			if summary.CausalAnalysis == nil {
+				return "Причинные события в доступных журналах не записаны."
+			}
+			return fmt.Sprintf("Записано %d событий и %d сущностей; потери показаны в разделе потоков.", summary.CausalAnalysis.Events, summary.CausalAnalysis.Entities)
+		},
+	},
+	{
+		flag: jhlog.CollectorConcurrencyDetailed, label: "Подробная причинная диагностика",
+		description: "Добавляет подробные данные только при явном включении и в пределах лимитов сбора.",
+		observation: func(summary analyze.Summary) string {
+			return "Фактический состав записей и потери показаны на странице потоков."
+		},
+	},
 }
 
 func semanticCollectorObservation(summary analyze.Summary, prefix string) string {

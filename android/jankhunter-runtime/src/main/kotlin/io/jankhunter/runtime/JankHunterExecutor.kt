@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 
 internal class JankHunterExecutor internal constructor(
-    private val delegate: Executor,
+    delegate: Executor,
     name: String?,
     ownerName: String?,
     clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
@@ -33,7 +33,7 @@ internal class JankHunterExecutorService internal constructor(
     ownerName: String?,
     clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
     callbacks: RuntimeAsyncCallbacks,
-) : AbstractExecutorService() {
+) : ContextExecutorService(ownerName, callbacks) {
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock, callbacks)
 
     override fun execute(command: Runnable) {
@@ -63,7 +63,7 @@ internal class JankHunterScheduledExecutorService internal constructor(
     clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
     callbacks: RuntimeAsyncCallbacks,
     scheduledClock: RuntimeLongSource = RuntimeLongSource(System::nanoTime),
-) : AbstractExecutorService(), ScheduledExecutorService {
+) : ContextExecutorService(ownerName, callbacks), ScheduledExecutorService {
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock, callbacks, scheduledClock)
 
     override fun execute(command: Runnable) {
@@ -123,9 +123,32 @@ internal class JankHunterScheduledExecutorService internal constructor(
     }
 }
 
+/** Keep the native RunnableFuture visible to rejection, cancellation and queue policies. */
+internal abstract class ContextExecutorService(
+    private val ownerName: String?,
+    private val callbacks: RuntimeAsyncCallbacks,
+) : AbstractExecutorService() {
+    override fun <T> newTaskFor(callable: Callable<T>): java.util.concurrent.RunnableFuture<T> =
+        java.util.concurrent.FutureTask(contextual(callable))
+
+    override fun <T> newTaskFor(runnable: Runnable, value: T): java.util.concurrent.RunnableFuture<T> =
+        newTaskFor(Callable { runnable.run(); value })
+
+    private fun <T> contextual(callable: Callable<T>): Callable<T> {
+        if (!callbacks.isExecutorActive()) return callable
+        val context = RuntimeHookGuard.value<JankHunterContext?>(null) { callbacks.captureContext(ownerName) }
+            ?: return callable
+        return Callable {
+            if (callbacks.isExecutorActive()) {
+                callbacks.callWithContext(context, ownerName) { callable.call() }
+            } else callable.call()
+        }
+    }
+}
+
 private class ExecutorTaskTracker(
     private val delegate: Executor,
-    private val name: String?,
+    name: String?,
     private val ownerName: String?,
     private val clock: RuntimeLongSource,
     private val callbacks: RuntimeAsyncCallbacks,
@@ -144,7 +167,12 @@ private class ExecutorTaskTracker(
     fun isActive(): Boolean = callbacks.isExecutorActive()
 
     fun execute(command: Runnable) {
-        if (!isActive()) {
+        // Preserve native cancellation/serialization and comparator contracts. In particular,
+        // rejection handlers must receive the same Future that submit returned to the caller.
+        if (!isActive() || command is Comparable<*> || command is java.util.concurrent.Future<*> ||
+            command is java.io.Serializable ||
+            (delegate as? ThreadPoolExecutor)?.queue is java.util.concurrent.PriorityBlockingQueue<*>
+        ) {
             delegate.execute(command)
             return
         }
@@ -430,6 +458,7 @@ internal class ExecutorMetricKeys(name: String?, ownerName: String?, scheduled: 
     val activeCount = executor + "active_count"
     val poolSize = executor + "pool_size"
     val completedTaskCount = executor + "completed_task_count"
+    val poolSnapshotAge = executor + "pool_snapshot_age_ms"
     val service = executor + "service_ms"
     val failure = executor + "failure.count"
     val ownerStarted = ownerName?.takeIf(String::isNotBlank)?.let { owner + "started.count" }
@@ -478,7 +507,11 @@ private class TrackedScheduledFuture<V>(
 
     override fun getDelay(unit: TimeUnit): Long = delegate.getDelay(unit)
 
-    override fun compareTo(other: Delayed): Int = delegate.compareTo(other)
+    override fun compareTo(other: Delayed): Int {
+        if (other === this) return 0
+        val nativeOther = if (other is TrackedScheduledFuture<*>) other.delegate else other
+        return delegate.compareTo(nativeOther)
+    }
 }
 
 internal fun metricExecutorName(name: String?): String {
@@ -488,6 +521,5 @@ internal fun metricExecutorName(name: String?): String {
         ?: "unknown"
 }
 
-internal fun ThreadPoolExecutor.snapshotActiveCount(): Int = activeCount
 
 private val EXECUTOR_METRIC_UNSAFE_CHARS = Regex("[^A-Za-z0-9_.-]+")

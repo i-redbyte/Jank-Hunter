@@ -12,6 +12,22 @@ import org.junit.Test
 
 class RuntimeCrashFlushHandlerTest {
     @Test
+    fun retiredHandlerOnlyForwardsTheOriginalCrash() {
+        val original = IllegalStateException("host")
+        var forwarded = 0
+        val handler = RuntimeCrashFlushHandler(
+            { _, failure -> assertSame(original, failure); forwarded++ },
+            { error("retired diagnostic") }, { error("retired metrics") }, { error("retired hooks") },
+            { error("retired graph") }, { error("retired writer") }, { error("retired clock") },
+            requestWriterFlush = { error("retired request") },
+        )
+        handler.deactivate()
+        handler.deactivate()
+        handler.uncaughtException(Thread.currentThread(), original)
+        assertEquals(1, forwarded)
+    }
+
+    @Test
     fun everyStageReceivesOnlyTheRemainingSharedBudget() {
         var now = 0L
         val calls = mutableListOf<Pair<String, Long>>()

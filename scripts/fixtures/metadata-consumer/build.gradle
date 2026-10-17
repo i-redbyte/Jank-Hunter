@@ -1,0 +1,14 @@
+buildscript {
+    repositories {
+        exclusiveContent {
+            forRepository { maven { url = uri(project.findProperty('jhRepository')) } }
+            filter { includeGroup('io.jankhunter') }
+        }
+        google(); mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.10.1'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.21'
+        classpath "io.jankhunter:jankhunter-gradle-plugin:${project.findProperty('jhVersion')}"
+    }
+}

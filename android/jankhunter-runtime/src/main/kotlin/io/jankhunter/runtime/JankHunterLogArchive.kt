@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.SessionLogName
+import io.jankhunter.runtime.internal.io.ArtifactFrontierInputStream
 import java.io.File
 import java.io.IOException
 import java.util.zip.Deflater
@@ -28,6 +29,7 @@ internal object JankHunterLogArchiveWriter {
         }
 
         val sources = canonicalSources(snapshot.logPaths, target)
+        val limits = snapshot.logPaths.indices.associate { index -> File(snapshot.logPaths[index]).canonicalPath to snapshot.byteLimit(index) }
         val temporary = File.createTempFile(".jh-archive-", ".tmp", parent)
         var published = false
         try {
@@ -35,10 +37,15 @@ internal object JankHunterLogArchiveWriter {
                 // JHLOG chunks are already compressed. Recompressing them burns device CPU for
                 // negligible gain, while a standard ZIP still provides a single shareable file.
                 output.setLevel(Deflater.NO_COMPRESSION)
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
                 sources.forEach { source ->
                     output.putNextEntry(ZipEntry(source.name).apply { time = 0L })
-                    source.inputStream().buffered(COPY_BUFFER_BYTES).use { input ->
-                        input.copyTo(output, COPY_BUFFER_BYTES)
+                    ArtifactFrontierInputStream(source, checkNotNull(limits[source.canonicalPath])).use { input ->
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            if (count > 0) output.write(buffer, 0, count)
+                        }
                     }
                     output.closeEntry()
                 }

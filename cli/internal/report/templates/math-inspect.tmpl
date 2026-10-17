@@ -49,7 +49,7 @@
         <div class="metric"><div class="label">События данных</div><div class="value">{{.Math.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Summary.TotalRecordCount}}</div></div>
         <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
         <div class="metric"><div class="label">{{tip "Подтормаживания интерфейса" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
-        <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{.Math.Summary.MemoryMaxKB}} КБ</div><div class="hint">макс. PSS</div></div>
+        <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{dataSize .Math.Summary.MemoryMaxKB}}</div><div class="hint">макс. PSS</div></div>
         <div class="metric"><div class="label">{{tip "Контексты операций" "Количество сочетаний экрана, операции и источника работ. Это связывает математические сигналы с измеряемым действием пользователя или системы."}}</div><div class="value">{{len .Math.Summary.SignalContexts}}</div><div class="hint">окон {{summaryProblemWindows .Math.Summary}}, вызовов логов {{summaryLogSpam .Math.Summary}}</div></div>
       </div>
       <div>
@@ -182,7 +182,7 @@
         <table class="timeline-table">
           <tr><th>Экран / операция / источник</th><th>Маршрут</th><th>HTTP</th><th>Верхние 5% HTTP</th><th>Подтормаживания интерфейса</th><th>Паузы</th><th>Лишние сообщения журнала</th><th>Проблемы</th><th>Макс. память процесса</th></tr>
           {{range .Math.Summary.SignalContexts}}
-          <tr><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
+          <tr><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{dataSize .MemoryMaxKB}}</td></tr>
           {{else}}<tr><td colspan="9" class="muted">Нет контекстов операций. Чтобы связать сигналы с действиями, добавьте измеряемые операции.</td></tr>{{end}}
         </table>
         <div class="split">
@@ -316,7 +316,7 @@
             <table class="timeline-table">
               <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учётом разделяемых страниц. Пропуск означает отсутствие замера памяти, а не нулевое потребление."}}</th><th>{{tip "Свободная RAM" "Доступная память системы в момент замера контекста. Пропуск означает отсутствие замера."}}</th><th>{{tip "Получено с прошлого замера" "Сколько байт получил UID приложения с предыдущего замера контекста. Ноль может быть реальным отсутствием трафика."}}</th><th>{{tip "Отправлено с прошлого замера" "Сколько байт отправил UID приложения с предыдущего замера контекста."}}</th></tr>
               {{range $math.Timeline}}
-              <tr class="{{memoryBucketClass .}}"><td>{{bucketRange .}}</td><td>{{if .HasMemoryPSS}}{{.MemoryPSSKB}} КБ{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasAvailableMemory}}{{.AvailableMemoryKB}} КБ{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasTrafficSample}}{{.TrafficRxBytes}} байт{{else}}<span class="muted">нет пары замеров</span>{{end}}</td><td>{{if .HasTrafficSample}}{{.TrafficTxBytes}} байт{{else}}<span class="muted">нет пары замеров</span>{{end}}</td></tr>
+              <tr class="{{memoryBucketClass .}}"><td>{{bucketRange .}}</td><td>{{if .HasMemoryPSS}}{{dataSize .MemoryPSSKB}}{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasAvailableMemory}}{{dataSize .AvailableMemoryKB}}{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasTrafficSample}}{{dataSizeBytes .TrafficRxBytes}}{{else}}<span class="muted">нет пары замеров</span>{{end}}</td><td>{{if .HasTrafficSample}}{{dataSizeBytes .TrafficTxBytes}}{{else}}<span class="muted">нет пары замеров</span>{{end}}</td></tr>
               {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
             </table>
           </div>

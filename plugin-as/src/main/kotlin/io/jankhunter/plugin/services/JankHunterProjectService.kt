@@ -24,12 +24,9 @@ class JankHunterProjectService(private val project: Project) : Disposable {
     private var view: JankHunterToolWindow? = null
     private var floatingWindow: JDialog? = null
     private var lastWindowBounds: Rectangle? = null
-    private var pendingClassFilter: String? = null
 
     fun register(windowView: JankHunterToolWindow) {
         view = windowView
-        pendingClassFilter?.let(windowView::applyClassFilter)
-        pendingClassFilter = null
     }
 
     fun unregister(windowView: JankHunterToolWindow) {
@@ -95,7 +92,6 @@ class JankHunterProjectService(private val project: Project) : Disposable {
         val dialog = floatingWindow
         view = null
         floatingWindow = null
-        pendingClassFilter = null
         currentView?.dispose()
         dialog?.dispose()
     }

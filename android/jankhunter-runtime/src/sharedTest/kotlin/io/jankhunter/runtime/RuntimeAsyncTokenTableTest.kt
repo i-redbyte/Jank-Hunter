@@ -9,6 +9,37 @@ import org.junit.Test
 
 class RuntimeAsyncTokenTableTest {
     @Test
+    fun asynchronousTokenProducerNeverWaitsForAnotherTelemetryOwner() {
+        val table = RuntimeAsyncTokenTable(RuntimeAsyncTokenIds(), capacity = 4)
+        val token = table.begin(RuntimeAsyncTokenTable.HTTP, 1L)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val lock = try {
+            table.javaClass.getDeclaredField("lock").apply { isAccessible = true }.get(table) as java.util.concurrent.locks.ReentrantLock
+        } catch (missing: NoSuchFieldException) { null }
+        val holder = Thread {
+            if (lock == null) synchronized(table) { entered.countDown(); release.await() }
+            else { lock.lock(); try { entered.countDown(); release.await() } finally { lock.unlock() } }
+        }
+        val producer = Thread {
+            try {
+                assertEquals(0L, table.begin(RuntimeAsyncTokenTable.HTTP, 2L))
+                assertEquals(-1L, table.claim(token, RuntimeAsyncTokenTable.HTTP))
+            } catch (error: Throwable) { failure.set(error) }
+            finally { done.countDown() }
+        }
+        try {
+            holder.start()
+            assertTrue(entered.await(5L, java.util.concurrent.TimeUnit.SECONDS))
+            producer.start()
+            assertTrue("async token hook waited for diagnostic monitor", done.await(100L, java.util.concurrent.TimeUnit.MILLISECONDS))
+            assertEquals(null, failure.get())
+        } finally { release.countDown(); holder.join(5_000L); producer.join(5_000L); table.close { _, _, _ -> } }
+    }
+
+    @Test
     fun exactTransactionsAreIndependentOfAsyncSlotCapacity() {
         val table = RuntimeAsyncTokenTable(RuntimeAsyncTokenIds(), capacity = 1)
         val http = table.begin(RuntimeAsyncTokenTable.HTTP, 7L)

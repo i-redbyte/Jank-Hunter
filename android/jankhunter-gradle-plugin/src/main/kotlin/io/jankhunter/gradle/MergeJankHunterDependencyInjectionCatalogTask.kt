@@ -42,10 +42,9 @@ abstract class MergeJankHunterDependencyInjectionCatalogTask : DefaultTask() {
             shardsDirectory.orNull?.asFile?.deleteRecursively()
             return
         }
-        val records = shardsDirectory.orNull?.asFile
-            ?.let(InstrumentationArtifactFiles::readJsonlLines)
-            .orEmpty()
-            .asSequence()
+        val sources = if (shardFiles.files.isNotEmpty()) shardFiles.files.sortedBy { it.path }.flatMap { it.readLines() }
+            else shardsDirectory.orNull?.asFile?.let(InstrumentationArtifactFiles::readJsonlLines).orEmpty()
+        val records = sources.asSequence().filter(String::isNotBlank)
             .distinct()
             .sorted()
             .toList()

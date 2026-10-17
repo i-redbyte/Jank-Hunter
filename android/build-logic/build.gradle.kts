@@ -36,6 +36,10 @@ gradlePlugin {
             id = "io.jankhunter.kotlin-gradle-plugin"
             implementationClass = "io.jankhunter.buildlogic.JankHunterKotlinGradlePlugin"
         }
+        register("metadataReader") {
+            id = "io.jankhunter.metadata-reader"
+            implementationClass = "io.jankhunter.buildlogic.JankHunterMetadataReaderPlugin"
+        }
         register("cliPackage") {
             id = "io.jankhunter.cli-package"
             implementationClass = "io.jankhunter.buildlogic.JankHunterCliPackagePlugin"

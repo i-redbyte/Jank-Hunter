@@ -24,8 +24,20 @@ internal class RuntimeState {
     val lifecycleLock = Any()
     val storageValveLock = Any()
     private val configuration = AtomicReference(RuntimeConfigurationSnapshot())
+    private val processObservationModes = AtomicReference<JankHunterExecutionObservationModes?>()
+    private val defaultObservationModes = JankHunterExecutionObservationModes()
+
+    fun observationModes(): JankHunterExecutionObservationModes = processObservationModes.get() ?: defaultObservationModes
+
+    private fun selectObservationModes(config: JankHunterConfig) {
+        if (processObservationModes.get() == null) {
+            processObservationModes.compareAndSet(null,
+                JankHunterExecutionObservationModes(config.taskObservationMode(), config.coroutineObservationMode()))
+        }
+    }
     val featureGate = RuntimeFeatureGate()
-    val collectionEpochs = RuntimeCollectionEpochs()
+    val workCleanup = RuntimeWorkCleanup()
+    val collectionEpochs = RuntimeCollectionEpochs(workCleanup)
     val started = AtomicBoolean(false)
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
@@ -53,20 +65,6 @@ internal class RuntimeState {
             updateConfiguration { current -> current.copy(config = value) }
         }
 
-    /** Immutable build-time baseline used for every non-cumulative remote reconfiguration. */
-    var baseConfig: JankHunterConfig?
-        get() = configuration.get().baseConfig
-        set(value) {
-            updateConfiguration { current -> current.copy(baseConfig = value) }
-        }
-
-    /** Last storage selected through the storage valve, including an explicit built-in `null`. */
-    var selectedBinaryStorage: JankHunterBinaryStorage?
-        get() = configuration.get().selectedBinaryStorage
-        set(value) {
-            updateConfiguration { current -> current.copy(selectedBinaryStorage = value) }
-        }
-
     /** Changes whenever bound configuration or runtime availability changes. */
     var lifecycleGeneration: Long
         get() = configuration.get().lifecycleGeneration
@@ -88,6 +86,15 @@ internal class RuntimeState {
 
     @Volatile
     var memorySampler: MemorySampler? = null
+
+    @Volatile
+    var workRegistryCollector: io.jankhunter.runtime.internal.system.WorkRegistryCollector? = null
+
+    @Volatile
+    var workRegistryHandle: io.jankhunter.runtime.internal.system.MaintenanceHandle? = null
+
+    @Volatile
+    var threadSnapshotCollector: io.jankhunter.runtime.internal.system.ThreadSnapshotCollector? = null
 
     @Volatile
     var systemContextSampler: SystemContextSampler? = null
@@ -122,20 +129,36 @@ internal class RuntimeState {
     fun configurationSnapshot(): RuntimeConfigurationSnapshot = configuration.get()
 
     fun bindInitialConfiguration(config: JankHunterConfig) {
+        selectObservationModes(config)
         updateConfiguration { current ->
             current.copy(
                 config = config,
-                baseConfig = config,
+                initializationGeneration = current.initializationGeneration + 1L,
+                desiredRuntimeEnabled = config.runtimeEnabled(),
                 selectedBinaryStorage = config.binaryStorage(),
                 lifecycleGeneration = current.lifecycleGeneration + 1L,
             )
         }
     }
 
-    fun bindCurrentConfiguration(config: JankHunterConfig): JankHunterConfig {
+    fun bindCurrentConfiguration(
+        config: JankHunterConfig,
+        storageUpdate: RuntimeStorageUpdate? = null,
+    ): JankHunterConfig {
+        selectObservationModes(config)
         while (true) {
             val current = configuration.get()
-            val selectedStorage = current.selectedBinaryStorage
+            val selectedStorage = when (storageUpdate) {
+                null -> current.selectedBinaryStorage
+                is RuntimeStorageUpdate.Replace -> {
+                    check(current.storageRequestId == storageUpdate.expectedRequestId) { "Stale storage update" }
+                    config.binaryStorage()
+                }
+                is RuntimeStorageUpdate.Restore -> {
+                    if (current.storageRequestId == storageUpdate.expectedRequestId) config.binaryStorage()
+                    else current.selectedBinaryStorage
+                }
+            }
             val effectiveConfig = if (config.binaryStorage() === selectedStorage) {
                 config
             } else {
@@ -143,21 +166,35 @@ internal class RuntimeState {
             }
             val updated = current.copy(
                 config = effectiveConfig,
+                selectedBinaryStorage = selectedStorage,
+                desiredRuntimeEnabled = config.runtimeEnabled(),
                 lifecycleGeneration = current.lifecycleGeneration + 1L,
             )
             if (configuration.compareAndSet(current, updated)) return effectiveConfig
         }
     }
 
-    fun advanceLifecycleGeneration() {
-        updateConfiguration { current ->
-            current.copy(lifecycleGeneration = current.lifecycleGeneration + 1L)
+    /** Publishes explicit runtime intent together with the configuration used by the next start. */
+    fun bindRuntimeEnabled(enabled: Boolean, invalidateSession: Boolean = true): JankHunterConfig? {
+        while (true) {
+            val current = configuration.get()
+            val config = current.config?.toBuilder()?.runtimeEnabled(enabled)?.build()
+            val updated = current.copy(
+                config = config,
+                desiredRuntimeEnabled = enabled,
+                runtimeRequestGeneration = current.runtimeRequestGeneration + 1L,
+                lifecycleGeneration = current.lifecycleGeneration + if (invalidateSession) 1L else 0L,
+            )
+            if (configuration.compareAndSet(current, updated)) return config
         }
     }
 
     fun clearConfiguration() {
         updateConfiguration { current ->
-            RuntimeConfigurationSnapshot(lifecycleGeneration = current.lifecycleGeneration + 1L)
+            RuntimeConfigurationSnapshot(
+                initializationGeneration = current.initializationGeneration + 1L,
+                lifecycleGeneration = current.lifecycleGeneration + 1L,
+            )
         }
     }
 
@@ -194,7 +231,12 @@ internal class RuntimeState {
 
 internal data class RuntimeConfigurationSnapshot(
     val config: JankHunterConfig? = null,
-    val baseConfig: JankHunterConfig? = null,
+    /** Identity of init/clear, without retaining an obsolete host configuration. */
+    val initializationGeneration: Long = 0L,
+    /** User intent survives session failure and restrictions imposed by the remaining config. */
+    val desiredRuntimeEnabled: Boolean = true,
+    /** Includes explicit no-op requests, without invalidating an active storage switch. */
+    val runtimeRequestGeneration: Long = 0L,
     val selectedBinaryStorage: JankHunterBinaryStorage? = null,
     val lifecycleGeneration: Long = 0L,
     val storageRequestId: Long = 0L,
@@ -205,4 +247,10 @@ internal enum class RuntimeLifecycle {
     STARTING,
     STARTED,
     STOPPING,
+}
+
+/** Storage completion may publish independently of lifecycleLock while a session drains. */
+internal sealed interface RuntimeStorageUpdate {
+    data class Replace(val expectedRequestId: Long) : RuntimeStorageUpdate
+    data class Restore(val expectedRequestId: Long) : RuntimeStorageUpdate
 }

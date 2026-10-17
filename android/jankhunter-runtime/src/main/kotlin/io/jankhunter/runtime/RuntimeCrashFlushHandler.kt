@@ -1,33 +1,50 @@
 package io.jankhunter.runtime
 
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Bounded drain ordering; every stage must honor the supplied remaining timeout. */
 internal class RuntimeCrashFlushHandler(
     private val previous: Thread.UncaughtExceptionHandler?,
-    private val diagnostic: (String) -> Unit,
-    private val metrics: (Long) -> Boolean,
-    private val hooks: (Long) -> Boolean,
-    private val graph: (Long) -> Boolean,
-    private val writer: (Long) -> Boolean,
-    private val nanoTime: RuntimeLongSource = RuntimeLongSource(System::nanoTime),
+    diagnostic: (String) -> Unit,
+    metrics: (Long) -> Boolean,
+    hooks: (Long) -> Boolean,
+    graph: (Long) -> Boolean,
+    writer: (Long) -> Boolean,
+    nanoTime: RuntimeLongSource = RuntimeLongSource(System::nanoTime),
     private val draining: AtomicBoolean = AtomicBoolean(),
-    private val requestWriterFlush: () -> Unit = {},
+    requestWriterFlush: () -> Unit = {},
 ) : Thread.UncaughtExceptionHandler {
+    private val callbacks = AtomicReference(Callbacks(diagnostic, metrics, hooks, graph, writer, nanoTime, requestWriterFlush))
+
+    /** A later host handler can retain this handler in its forwarding chain after SDK shutdown. */
+    fun deactivate() { callbacks.set(null) }
+
+    private class Callbacks(
+        val diagnostic: (String) -> Unit,
+        val metrics: (Long) -> Boolean,
+        val hooks: (Long) -> Boolean,
+        val graph: (Long) -> Boolean,
+        val writer: (Long) -> Boolean,
+        val nanoTime: RuntimeLongSource,
+        val requestWriterFlush: () -> Unit,
+    )
+
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
         try {
-            val startedAtNs = nanoTime.getAsLong()
-            record("jankhunter.runtime.crash.count")
+            val active = callbacks.get() ?: return
+            val startedAtNs = active.nanoTime.getAsLong()
+            record(active, "jankhunter.runtime.crash.count")
             if (!draining.compareAndSet(false, true)) {
-                recordIncomplete("concurrent")
-                requestFlush()
+                recordIncomplete(active, "concurrent")
+                requestFlush(active)
                 return
             }
             try {
-                drain("metrics", metrics, startedAtNs)
-                drain("hooks", hooks, startedAtNs)
-                drain("graph", graph, startedAtNs)
-                if (!drain("writer", writer, startedAtNs)) requestFlush()
+                drain(active, "metrics", active.metrics, startedAtNs)
+                drain(active, "hooks", active.hooks, startedAtNs)
+                drain(active, "graph", active.graph, startedAtNs)
+                if (!drain(active, "writer", active.writer, startedAtNs)) requestFlush(active)
             } finally {
                 draining.set(false)
             }
@@ -36,33 +53,33 @@ internal class RuntimeCrashFlushHandler(
         }
     }
 
-    private fun drain(name: String, stage: (Long) -> Boolean, startedAtNs: Long): Boolean {
-        val elapsedNs = (nanoTime.getAsLong() - startedAtNs).coerceAtLeast(0L)
+    private fun drain(active: Callbacks, name: String, stage: (Long) -> Boolean, startedAtNs: Long): Boolean {
+        val elapsedNs = (active.nanoTime.getAsLong() - startedAtNs).coerceAtLeast(0L)
         val remainingMs = (CRASH_BUDGET_NS - elapsedNs).coerceAtLeast(0L) / NANOS_PER_MS
         if (remainingMs == 0L) {
-            recordIncomplete(name)
+            recordIncomplete(active, name)
             return false
         }
         val complete = try {
             stage(remainingMs)
         } catch (failure: Throwable) {
-            recordIncomplete(name)
+            recordIncomplete(active, name)
             RuntimeHookGuard.rethrowFatal(failure)
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
             return false
         }
-        if (!complete) recordIncomplete(name)
+        if (!complete) recordIncomplete(active, name)
         return complete
     }
 
-    private fun requestFlush() = RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE) {
-        requestWriterFlush()
+    private fun requestFlush(active: Callbacks) = RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE) {
+        active.requestWriterFlush()
     }
 
-    private fun recordIncomplete(name: String) = record("jankhunter.runtime.crash_flush.incomplete.$name.count")
+    private fun recordIncomplete(active: Callbacks, name: String) = record(active, "jankhunter.runtime.crash_flush.incomplete.$name.count")
 
-    private fun record(name: String) = RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE) {
-        diagnostic(name)
+    private fun record(active: Callbacks, name: String) = RuntimeHookGuard.run(RuntimeHookFailureReason.RUNTIME_LIFECYCLE) {
+        active.diagnostic(name)
     }
 
     private companion object {

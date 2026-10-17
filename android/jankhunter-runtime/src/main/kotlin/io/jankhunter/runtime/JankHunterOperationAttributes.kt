@@ -16,6 +16,24 @@ class JankHunterOperationAttributes private constructor(
 
     internal fun value(index: Int): String = entries[(index shl 1) + 1]
 
+    internal fun prepended(
+        key1: String,
+        value1: String,
+        key2: String,
+        value2: String,
+    ): JankHunterOperationAttributes {
+        val prefixed = Array(entries.size + 4) { index ->
+            when (index) {
+                0 -> key1
+                1 -> value1
+                2 -> key2
+                3 -> value2
+                else -> entries[index - 4]
+            }
+        }
+        return JankHunterOperationAttributes(prefixed)
+    }
+
     companion object {
         const val MAX_SIZE = 8
 

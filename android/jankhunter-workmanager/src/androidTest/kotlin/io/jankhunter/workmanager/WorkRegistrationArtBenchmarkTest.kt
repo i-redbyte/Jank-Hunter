@@ -31,16 +31,16 @@ class WorkRegistrationArtBenchmarkTest {
         output.writeText("")
         val manager = WorkManager.getInstance(instrumentation.targetContext)
         for (main in booleanArrayOf(true, false)) {
-            for (mode in listOf("accepted", "ignored", "inactive")) {
+            for (mode in listOf("accepted", "accepted_inactive", "ignored", "inactive")) {
                 val directory = File(output.parentFile, "work-benchmark-session")
                 JankHunter.shutdown()
                 directory.deleteRecursively()
                 val config = JankHunterConfig.builder().logDirectory(directory).autoStartCollectors(false)
                     .runtimeCallGraphEnabled(false).metricAggregationEnabled(false).build()
                 instrumentation.runOnMainSync { JankHunter.init(instrumentation.targetContext, config) }
-                if (mode == "inactive") JankHunter.setRuntimeEnabled(false)
+                if (mode == "inactive" || mode == "accepted_inactive") JankHunter.setRuntimeEnabled(false)
                 try {
-                    measure(manager, main, mode, output, label)
+                    measure(manager, main, mode, output, label, directory)
                 } finally {
                     instrumentation.runOnMainSync { JankHunter.shutdown() }
                 }
@@ -48,7 +48,7 @@ class WorkRegistrationArtBenchmarkTest {
         }
     }
 
-    private fun measure(manager: WorkManager, main: Boolean, mode: String, output: File, label: String) {
+    private fun measure(manager: WorkManager, main: Boolean, mode: String, output: File, label: String, directory: File) {
         val unique = "jh-benchmark-" + UUID.randomUUID()
         val existing = request()
         val requests = List(EVENTS + WARMUP) { request() }
@@ -59,10 +59,13 @@ class WorkRegistrationArtBenchmarkTest {
             warm.forEach { it.result.get(10L, TimeUnit.SECONDS) }
             drainQueries(manager)
             JankHunter.flush()
+            Runtime.getRuntime().gc()
             val operations = arrayOfNulls<Operation>(EVENTS)
             val samples = LongArray(EVENTS)
             var threadCPU = 0L
             val bytesBefore = allocated()
+            val gcBefore = gcCount()
+            val heapBefore = usedHeap()
             val processBefore = Process.getElapsedCpuTime()
             val wallBefore = System.nanoTime()
             onThread(main) {
@@ -80,23 +83,29 @@ class WorkRegistrationArtBenchmarkTest {
             val wall = System.nanoTime() - wallBefore
             val processCPU = Process.getElapsedCpuTime() - processBefore
             val bytes = allocated() - bytesBefore
+            val gcDelta = gcCount() - gcBefore
+            Runtime.getRuntime().gc()
+            val heapAfterGC = usedHeap()
+            val logBytes = directory.walkTopDown().filter { it.isFile && it.extension == "jhlog" }.sumOf(File::length)
             samples.sort()
             val last = manager.getWorkInfoById(requests.last().id).get(10L, TimeUnit.SECONDS)
-            if (mode == "accepted") assertNotNull(last) else assertNull(last)
+            if (mode.startsWith("accepted")) assertNotNull(last) else assertNull(last)
             output.appendText(JSONObject().put("label", label).put("main", main).put("mode", mode)
                 .put("events", EVENTS).put("p50_ns", samples[EVENTS / 2]).put("p95_ns", samples[EVENTS * 95 / 100])
                 .put("p99_ns", samples[EVENTS * 99 / 100]).put("thread_cpu_ns", threadCPU)
                 .put("process_cpu_ms", processCPU).put("complete_wall_ns", wall)
-                .put("process_allocated_bytes", bytes).toString() + "\n")
+                .put("process_allocated_bytes", bytes).put("gc_delta", gcDelta)
+                .put("heap_before_bytes", heapBefore).put("heap_after_gc_bytes", heapAfterGC)
+                .put("log_bytes", logBytes).toString() + "\n")
         } finally {
             manager.cancelUniqueWork(unique).result.get(10L, TimeUnit.SECONDS)
-            if (mode == "accepted") requests.forEach { manager.cancelWorkById(it.id).result.get(10L, TimeUnit.SECONDS) }
+            if (mode.startsWith("accepted")) requests.forEach { manager.cancelWorkById(it.id).result.get(10L, TimeUnit.SECONDS) }
             manager.pruneWork().result.get(10L, TimeUnit.SECONDS)
         }
     }
 
     private fun enqueue(manager: WorkManager, unique: String, mode: String, request: OneTimeWorkRequest): Operation =
-        if (mode == "accepted") manager.enqueueWithJankHunter(request)
+        if (mode.startsWith("accepted")) manager.enqueueWithJankHunter(request)
         else manager.enqueueUniqueWorkWithJankHunter(unique, ExistingWorkPolicy.KEEP, request)
 
     private fun onThread(main: Boolean, task: () -> Unit) {
@@ -110,5 +119,7 @@ class WorkRegistrationArtBenchmarkTest {
         const val EVENTS = 512
         const val WARMUP = 128
         fun allocated(): Long = Debug.getRuntimeStat("art.gc.bytes-allocated").toLong()
+        fun gcCount(): Long = Debug.getRuntimeStat("art.gc.gc-count").toLong()
+        fun usedHeap(): Long = Runtime.getRuntime().run { totalMemory() - freeMemory() }
     }
 }

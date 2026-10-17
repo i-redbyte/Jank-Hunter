@@ -11,6 +11,7 @@ internal class RuntimeContextTelemetry(
     private val access: RuntimeTelemetryAccess,
     private val callGraph: RuntimeCallGraph,
     private val elapsedRealtimeMs: RuntimeLongSource,
+    private val concurrency: RuntimeConcurrencyTelemetry? = null,
 ) {
     private val stallIds = AtomicLong()
 
@@ -97,6 +98,7 @@ internal class RuntimeContextTelemetry(
             operationId = context.operationId,
             collectionEpochId = collectionEpochId,
             httpToken = httpToken,
+            causalContext = concurrency?.captureCausalContext(),
         )
     }
 

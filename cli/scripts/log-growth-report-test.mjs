@@ -95,7 +95,7 @@ try {
   equal(/\b\d{4}-\d{2}-\d{2}\b/.test(await page.locator("#log-growth").innerText()), false, "в разделе нет видимых дат внутреннего вида");
   equal(await page.locator(".log-growth-chart-help").count(), 2, "у обоих графиков есть объяснение осей");
   equal(
-    (await page.locator(".log-growth-chart-help").first().textContent()).includes("по горизонтали — дата начала сессии"),
+    (await page.locator(".log-growth-chart-help").first().textContent()).includes("по горизонтали - дата начала сессии"),
     true,
     "объяснена горизонтальная ось сессий",
   );
@@ -156,7 +156,7 @@ try {
   equal(await page.locator("[data-growth-period-insight]").isVisible(), true, "оценка периода показана");
   equal(await page.locator("[data-growth-insight-title]").textContent(), "Есть отдельные остановки по лимиту", "оценка остановок по лимиту");
   equal(
-    (await page.locator("[data-growth-insight-details]").textContent()).includes("Самый объёмный день — 30.07.2026: 7 МиБ"),
+    (await page.locator("[data-growth-insight-details]").textContent()).includes("Самый объёмный день - 30.07.2026: 7 МиБ"),
     true,
     "оценка называет самый объёмный день",
   );

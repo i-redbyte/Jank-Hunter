@@ -21,7 +21,7 @@ class RuntimeGraphGlobalBudgetTest {
         val producersReady = CountDownLatch(PRODUCERS)
         val releaseProducers = CountDownLatch(1)
         val failure = AtomicReference<Throwable?>()
-        val graph = RuntimeCallGraph({ 1L }, { null }, { 0L }, { 128 }, exactAdmission = { false },
+        val graph = RuntimeCallGraph({ 1L }, { null }, { 0L }, { 128 },
             consumerLoopObserver = {
                 consumerEntered.countDown()
                 check(releaseConsumer.await(20L, TimeUnit.SECONDS))

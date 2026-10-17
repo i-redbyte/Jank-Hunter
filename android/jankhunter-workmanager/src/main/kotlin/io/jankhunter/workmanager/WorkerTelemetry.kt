@@ -28,19 +28,33 @@ internal object WorkerTelemetry {
         outcome: JankHunterWorkerOutcome,
         runAttempt: Int,
         generation: Int,
-    ) {
+    ): JankHunterWorkerOutcome {
         val stopped = worker.isStopped
-        val terminalOutcome = if (stopped) JankHunterWorkerOutcome.CANCELLED else outcome
         val stopReasonKnown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-        JankHunterWorkerRuntime.finished(
+        val stopReason = if (stopReasonKnown) worker.stopReason else 0
+        val terminalOutcome = workerTerminalOutcome(stopped, outcome, stopReasonKnown, stopReason)
+        if (token != 0L) JankHunterWorkerRuntime.finished(
             token = token,
             instanceId = instanceId,
             workerName = workerName,
             outcome = terminalOutcome,
             runAttempt = runAttempt,
             generation = generation,
-            stopReason = if (stopReasonKnown) worker.stopReason else 0,
+            stopReason = stopReason,
             stopReasonKnown = stopReasonKnown,
         )
+        return terminalOutcome
     }
+}
+
+/** A WorkManager stop can be caused by constraints, timeout or quota, not just cancellation. */
+internal fun workerTerminalOutcome(
+    stopped: Boolean,
+    outcome: JankHunterWorkerOutcome,
+    stopReasonKnown: Boolean,
+    stopReason: Int,
+): JankHunterWorkerOutcome = when {
+    !stopped -> outcome
+    stopReasonKnown && stopReason == androidx.work.WorkInfo.STOP_REASON_CANCELLED_BY_APP -> JankHunterWorkerOutcome.CANCELLED
+    else -> JankHunterWorkerOutcome.STOPPED
 }

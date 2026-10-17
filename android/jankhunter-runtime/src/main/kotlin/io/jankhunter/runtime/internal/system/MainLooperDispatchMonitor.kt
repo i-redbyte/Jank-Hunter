@@ -12,7 +12,7 @@ import kotlin.math.max
 
 internal class MainLooperDispatchMonitor(
     thresholdMs: Long,
-    private val recordDispatch: DispatchSampleRecorder,
+    recordDispatch: DispatchSampleRecorder,
     private val getMessageLogging: () -> Printer? = ::readMainLooperPrinter,
     private val setMessageLogging: (Printer?) -> Unit = { printer ->
         Looper.getMainLooper().setMessageLogging(printer)
@@ -28,11 +28,8 @@ internal class MainLooperDispatchMonitor(
     @Volatile
     private var previousPrinter: Printer? = null
     private val printer = Printer { line ->
-        try {
-            previousPrinter?.println(line)
-        } catch (throwable: Throwable) {
-            RuntimeHookGuard.rethrowFatal(throwable)
-        }
+        // This is application/profiler code, not a diagnostic failure to swallow.
+        previousPrinter?.println(line)
         if (!running.get()) return@Printer
         RuntimeHookGuard.run {
             tracker.onMessage(line)?.let { sample ->

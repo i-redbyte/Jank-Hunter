@@ -1,6 +1,6 @@
 # Служебные скрипты Jank Hunter
 
-Скрипты подключают Android `1.0.10` к приложению, проверяют Gradle-плагин и сквозной сценарий, измеряют производительность и маршрутизируют проверки монорепозитория.
+Скрипты подключают Android `1.0.13` к приложению, проверяют Gradle-плагин и сквозной сценарий, измеряют производительность и маршрутизируют проверки монорепозитория.
 
 Актуальный CLI имеет версию `1.0.0`, создаёт JHLOG `5.1.0` и сохраняет чтение `5.0.0`. При обновлении Android-компонентов обновляйте и сам исполняемый файл CLI; прежняя сборка с тем же номером может не поддерживать новые обязательные возможности формата.
 
@@ -66,7 +66,7 @@ python3 -B scripts/jank_hunter_ci.py --help
   --verify
 ```
 
-Скрипт читает `jankHunterVersion=1.0.10` из `android/gradle.properties` текущей рабочей копии и использует эту версию для плагина и `jankhunter-android-sdk`.
+Скрипт читает `jankHunterVersion=1.0.13` из `android/gradle.properties` текущей рабочей копии и использует эту версию для плагина и `jankhunter-android-sdk`.
 
 ### Подготовка Gradle-плагина
 
@@ -77,7 +77,7 @@ python3 -B scripts/jank_hunter_ci.py --help
   -Dmaven.repo.local="$HOME/work/MyApp/.jankhunter/maven" --no-daemon
 ```
 
-Замените путь на фактический Maven-каталог приложения; при `--maven-dir` укажите соответствующий абсолютный путь. Публикация в обычный `~/.m2/repository` не обновляет этот каталог. Повторяйте отдельную публикацию при обновлении исходников плагина, даже если номер остаётся `1.0.10`.
+Замените путь на фактический Maven-каталог приложения; при `--maven-dir` укажите соответствующий абсолютный путь. Публикация в обычный `~/.m2/repository` не обновляет этот каталог. Повторяйте отдельную публикацию при обновлении исходников плагина, даже если номер остаётся `1.0.13`.
 
 Для обычного Maven Local без интегратора нужны обе команды из каталога `android`:
 
@@ -96,8 +96,8 @@ python3 -B scripts/jank_hunter_ci.py --help
 2. Публикует Android-артефакты в `<target>/.jankhunter/maven`.
 3. Собирает утилиту и копирует её в `<target>/.jankhunter/bin/jankhunter`.
 4. Добавляет локальный Maven-репозиторий в `pluginManagement` и `dependencyResolutionManagement`.
-5. Добавляет плагин `io.jankhunter.android` версии `1.0.10`.
-6. Добавляет единую зависимость `io.jankhunter:jankhunter-android-sdk:1.0.10`.
+5. Добавляет плагин `io.jankhunter.android` версии `1.0.13`.
+6. Добавляет единую зависимость `io.jankhunter:jankhunter-android-sdk:1.0.13`.
 7. Создаёт управляемый блок `jankHunter { ... }` только для явно переданных настроек.
 8. При необходимости создаёт или обновляет `sdk.dir` в `local.properties`.
 9. Добавляет локальные каталоги и `local.properties` в `.gitignore`.
@@ -226,7 +226,7 @@ concurrency-all, android-system-all
 
 Сценарий:
 
-1. Публикует плагин и Android-артефакты `1.0.10` в изолированный Maven-репозиторий.
+1. Публикует плагин и Android-артефакты `1.0.13` в изолированный Maven-репозиторий.
 2. Проверяет, что `jankhunter-android-sdk` транзитивно содержит среду выполнения, аннотации и поддержку OkHttp.
 3. Создаёт внешний проект с приложением и библиотечными модулями.
 4. Собирает `debug` и `release`, включая R8.
@@ -308,6 +308,83 @@ python3 -B scripts/jank_hunter_ci.py run unit-tests
 
 Команда `scope` определяет, достаточно ли проверок поддерева Jank Hunter или требуется общий конвейер монорепозитория. При отсутствии достоверных сведений о сравнении изменений выбирается безопасный общий вариант.
 
+Известные SDD-каталоги Jank Hunter `specs/010…017` разрешены вместе с изменениями
+`jank-hunter/`. Для нового каталога обновите явный список `JANK_HUNTER_SPEC_PREFIXES`
+в `jank_hunter_ci.py` и тест селектора. Произвольные `specs/**`, документы других
+библиотек и смешанные изменения сохраняют общий CI. Сами тесты селектора входят
+в standalone unit gate.
+
+## Закреплённое окружение release
+
+Перед release gates запускается `verify-release-environment.py`. Runner должен
+быть заранее подготовлен: все зависимости скачаны, устройства подключены,
+baseline-репозитории сохранены отдельно от `$HOME/.m2/repository/io/jankhunter`,
+который workflow очищает перед публикацией кандидата. Consumer Gradle и сборка
+кандидата работают с `--offline`; недостающая зависимость останавливает проверку.
+
+Дополнительно к существующим `JH_GRADLE_*`, `JH_*_SERIAL` и baseline variables
+нужны две repository variables:
+
+- `JH_RELEASE_INPUTS_MANIFEST`: абсолютный путь к JSON на runner.
+- `JH_RELEASE_INPUTS_SHA256`: отдельно проверенный SHA-256 этого JSON.
+
+Manifest содержит следующую структуру (значения `APPROVED_*` заменяются реальными
+данными подготовленного окружения, а inventory содержит **все** файлы):
+
+```json
+{
+  "schema": 1,
+  "gradle": {
+    "JH_GRADLE_MIN": {"version": "8.0.2", "archive": "/approved/gradle-8.0.2-bin.zip"},
+    "JH_GRADLE_OLD": {"version": "8.11.1", "archive": "/approved/gradle-8.11.1-bin.zip"},
+    "JH_GRADLE_NEW": {"version": "8.13", "archive": "/approved/gradle-8.13-bin.zip"},
+    "JH_GRADLE_AGP9": {"version": "9.1.0", "archive": "/approved/gradle-9.1.0-bin.zip"}
+  },
+  "dependency_cache": {
+    "root": "/approved/gradle-home/caches/modules-2/files-2.1",
+    "files": {"relative/path/to/dependency.jar": "APPROVED_SHA256"}
+  },
+  "legacy_manifest_sha256": "APPROVED_EXACT_ARTIFACTS_JSON_SHA256",
+  "metadata_baseline": {
+    "version": "APPROVED_BASELINE_VERSION",
+    "files": {"relative/from/io/jankhunter/to/artifact.jar": "APPROVED_SHA256"}
+  },
+  "sdk_platforms": {
+    "33": {"revision": "APPROVED_REVISION", "android_jar_sha256": "APPROVED_SHA256"},
+    "34": {"revision": "APPROVED_REVISION", "android_jar_sha256": "APPROVED_SHA256"},
+    "35": {"revision": "APPROVED_REVISION", "android_jar_sha256": "APPROVED_SHA256"}
+  },
+  "devices": {
+    "JH_API28_SERIAL": {"abi": "arm64-v8a", "fingerprint": "APPROVED_BUILD_FINGERPRINT"},
+    "JH_API30_SERIAL": {"abi": "arm64-v8a", "fingerprint": "APPROVED_BUILD_FINGERPRINT"},
+    "JH_API37_SERIAL": {"abi": "arm64-v8a", "fingerprint": "APPROVED_BUILD_FINGERPRINT"},
+    "JH_WEAK_PHYSICAL_SERIAL": {"abi": "arm64-v8a", "fingerprint": "APPROVED_BUILD_FINGERPRINT"}
+  }
+}
+```
+
+`dependency_cache.root` должен совпадать с активным `GRADLE_USER_HOME` (по умолчанию
+`$HOME/.gradle`). Metadata baseline inventory задаётся относительно
+`$JH_METADATA_BASELINE_REPOSITORY/io/jankhunter`, версия совпадает с
+`JH_METADATA_BASELINE_VERSION`. Legacy baseline проверяется как публикация
+`1.0.12`, включая `exact-artifacts.json`, байты и координаты POM/module.
+
+SHA-256 официальных архивов Gradle закреплены в
+`release-gradle-distributions.json`; AGP9 lane допускает 9.1.0 или 9.4.1.
+До запуска Gradle проверяются архив и весь распакованный distribution, затем
+фактический `--version`. SDK проверяется по API, revision и SHA-256 `android.jar`.
+Устройства сверяются по API, ABI и build fingerprint; weak lane дополнительно
+требует физическое устройство с RAM 256 MiB–4 GiB и максимальной частотой всех
+CPU 100 MHz–2 GHz. Неполные сведения о CPU не считаются успешной проверкой.
+
+Самостоятельно сгенерированный inventory без независимого утверждения его SHA
+не подтверждает происхождение зависимостей. Manifest и pin должны пересматриваться
+при изменении окружения; проверка доверяет администраторам runner и repository
+variables. Она не защищает от привилегированного изменения обоих источников.
+Результат сохраняется в `release-environment-<revision>.json`, прикладывается к
+артефактам и обязателен для финального release gate. Отсутствие manifest, pin или
+обязательного устройства останавливает release; успешные unit-тесты их не заменяют.
+
 ## Длительная проверка ARM64
 
 ```bash
@@ -320,7 +397,7 @@ SOAK_ITERATIONS=20 ADB_BIN=adb ./scripts/run-runtime-arm64-soak.sh
 
 ```bash
 ./scripts/sync-github-master-to-gitlab.sh --dry-run
-./scripts/sync-github-master-to-gitlab.sh --version 1.0.10 --branch <ветка>
+./scripts/sync-github-master-to-gitlab.sh --version 1.0.13 --branch <ветка>
 ```
 
 Сценарий требует чистое состояние отслеживаемых файлов, копирует ветку `master` внешнего проекта в поддерево `jank-hunter/`, обновляет версию, создаёт коммит и отправляет выбранную ветку GitLab. Без `--version` увеличивается номер исправления. Сначала всегда используйте `--dry-run`.

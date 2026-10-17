@@ -17,6 +17,7 @@ internal class RuntimeLifecycleController(
     private val reconfigureLock = Any()
 
     fun init(context: Context?) {
+        if (state.writer?.isWorkerThread() == true) return
         val config = context?.let(JankHunterManifestConfig::read)
             ?: JankHunterConfig.builder().build()
         synchronized(state.lifecycleLock) {
@@ -36,6 +37,7 @@ internal class RuntimeLifecycleController(
     }
 
     fun init(context: Context?, providedConfig: JankHunterConfig?) {
+        if (state.writer?.isWorkerThread() == true) return
         val effectiveConfig = if (context != null && providedConfig != null) {
             JankHunterManifestConfig.mergeBuildMetadata(providedConfig, context)
         } else {
@@ -51,30 +53,46 @@ internal class RuntimeLifecycleController(
     fun isRuntimeEnabled(): Boolean = state.runtimeEnabled.get()
 
     fun setRuntimeEnabled(enabled: Boolean, reason: String?): Boolean {
+        if (state.writer?.isWorkerThread() == true) return false
         return synchronized(state.lifecycleLock) {
             setRuntimeEnabledLocked(enabled, reason)
         }
     }
 
     fun reconfigure(reason: String?, updater: JankHunterConfigUpdater): Boolean {
-        return synchronized(reconfigureLock) reconfigure@{
-            val snapshot = synchronized(state.lifecycleLock) snapshot@{
-                val context = state.initContext ?: return@snapshot null
+        // A host startup callback already owns lifecycleLock. Waiting for the update/valve
+        // lock from there inverts their order and can also replace an unfinished startup.
+        if (Thread.holdsLock(state.lifecycleLock) || state.writer?.isWorkerThread() == true) return false
+        return synchronized(reconfigureLock) configUpdate@{
+            val snapshot = synchronized(state.lifecycleLock) readSnapshot@{
+                val context = state.initContext ?: return@readSnapshot null
                 val configuration = state.configurationSnapshot()
-                val baseConfig = configuration.baseConfig ?: return@snapshot null
-                ReconfigurationSnapshot(context, baseConfig, configuration.lifecycleGeneration)
-            } ?: return@reconfigure false
+                val config = configuration.config ?: return@readSnapshot null
+                ReconfigurationSnapshot(context, config, configuration.desiredRuntimeEnabled,
+                    configuration.lifecycleGeneration, configuration.runtimeRequestGeneration, configuration.storageRequestId)
+            } ?: return@configUpdate false
 
             val requestedConfig = buildReconfiguredConfig(snapshot, updater)
-                ?: return@reconfigure false
+                ?: return@configUpdate false
             synchronized(state.storageValveLock) {
                 synchronized(state.lifecycleLock) apply@{
                     val configuration = state.configurationSnapshot()
                     if (configuration.lifecycleGeneration != snapshot.generation) return@apply false
-                    val updatedConfig = requestedConfig.toBuilder()
-                        .binaryStorage(configuration.selectedBinaryStorage)
+                    if (configuration.runtimeRequestGeneration != snapshot.runtimeRequestGeneration) return@apply false
+                    if (requestedConfig.storageExplicitlySet &&
+                        configuration.storageRequestId != snapshot.storageRequestId
+                    ) return@apply false
+                    val storage = if (requestedConfig.storageExplicitlySet) requestedConfig.config.binaryStorage()
+                        else configuration.selectedBinaryStorage
+                    // A storage switch can complete while the updater runs outside lifecycleLock.
+                    // Reject conflicting ownership before stopping the current session.
+                    if (storage != null && requestedConfig.config.storagePolicy() != null) return@apply false
+                    val updatedConfig = requestedConfig.config.toBuilder()
+                        .binaryStorage(storage)
                         .build()
-                    applyReconfigurationLocked(snapshot.context, updatedConfig, reason)
+                    applyReconfigurationLocked(snapshot.context, updatedConfig, reason,
+                        if (requestedConfig.storageExplicitlySet) RuntimeStorageUpdate.Replace(snapshot.storageRequestId)
+                        else null)
                 }
             }
         }
@@ -83,6 +101,7 @@ internal class RuntimeLifecycleController(
     fun diagnostics(): JankHunterInitDiagnostics = state.initDiagnostics
 
     fun shutdown() {
+        if (state.writer?.isWorkerThread() == true) return
         synchronized(state.lifecycleLock) {
             session.stop(clearInit = true)
         }
@@ -102,7 +121,7 @@ internal class RuntimeLifecycleController(
             return false
         }
         var processNameForDiagnostics: String? = null
-        var directoryForDiagnostics: File? = null
+        val diagnostics = StartupDiagnostics()
         try {
             val appContext = runtimeContext(context)
             val processName = ProcessNames.current(appContext)
@@ -118,6 +137,8 @@ internal class RuntimeLifecycleController(
                 return true
             }
             if (!config.isProcessAllowed(processName, appContext.packageName)) {
+                bindInitialConfig(appContext, config, runtimeEnabled = false)
+                markCollectionInactive()
                 coordinator.recordInitStatus("process_not_allowed", attempt, processName)
                 return true
             }
@@ -129,15 +150,15 @@ internal class RuntimeLifecycleController(
                 coordinator.recordInitStatus("runtime_disabled", attempt, processName)
                 return true
             }
-            directoryForDiagnostics = session.logDirectory(appContext, config)
-            directoryForDiagnostics = session.start(appContext, config, attempt, processName)
+            diagnostics.directory = session.logDirectory(appContext, config)
+            diagnostics.directory = session.start(appContext, config, attempt, processName)
             return true
         } catch (throwable: Throwable) {
             cleanupFailedSession(
                 throwable,
                 attempt,
                 processNameForDiagnostics,
-                directoryForDiagnostics,
+                diagnostics.directory,
             )
             RuntimeHookGuard.rethrowFatal(throwable)
             return false
@@ -147,16 +168,20 @@ internal class RuntimeLifecycleController(
     private fun buildReconfiguredConfig(
         snapshot: ReconfigurationSnapshot,
         updater: JankHunterConfigUpdater,
-    ): JankHunterConfig? {
+    ): RequestedReconfiguration? {
         return try {
-            snapshot.baseConfig.toBuilder()
+            val builder = snapshot.config.toBuilder()
+                .runtimeEnabled(snapshot.desiredRuntimeEnabled)
                 .also(updater::update)
-                .build()
+            RequestedReconfiguration(builder.build(), builder.binaryStorageExplicitlySet)
         } catch (throwable: Throwable) {
             RuntimeHookGuard.rethrowFatal(throwable)
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
             synchronized(state.lifecycleLock) {
-                if (state.lifecycleGeneration == snapshot.generation) {
+                val configuration = state.configurationSnapshot()
+                if (configuration.lifecycleGeneration == snapshot.generation &&
+                    configuration.runtimeRequestGeneration == snapshot.runtimeRequestGeneration
+                ) {
                     coordinator.recordInitFailure(
                         throwable,
                         state.initAttempts.get(),
@@ -173,19 +198,21 @@ internal class RuntimeLifecycleController(
         context: Context,
         config: JankHunterConfig,
         reason: String?,
+        storageUpdate: RuntimeStorageUpdate.Replace?,
     ): Boolean {
-        val previousConfig = state.config ?: return false
+        val previousConfiguration = state.configurationSnapshot()
+        val previousConfig = previousConfiguration.config ?: return false
         val previousRuntimeEnabled = state.runtimeEnabled.get()
         val previousStarted = state.started.get()
         val attempt = state.initAttempts.incrementAndGet()
         var processName: String? = null
-        var directory: File? = null
+        val diagnostics = StartupDiagnostics()
 
         return try {
             processName = ProcessNames.current(context)
             if (config.enabled() && !config.isProcessAllowed(processName, context.packageName)) {
                 session.stop(clearInit = false)
-                bindCurrentConfig(context, config, config.runtimeEnabled())
+                bindCurrentConfig(context, config, runtimeEnabled = false, storageUpdate = storageUpdate)
                 markCollectionInactive()
                 coordinator.recordInitStatus("process_not_allowed", attempt, processName)
                 return true
@@ -193,27 +220,41 @@ internal class RuntimeLifecycleController(
 
             session.stop(clearInit = false)
             val runtimeEnabled = config.enabled() && config.runtimeEnabled()
-            val activeConfig = bindCurrentConfig(context, config, runtimeEnabled)
+            val activeConfig = bindCurrentConfig(context, config, runtimeEnabled, storageUpdate)
             markCollectionInactive()
             when {
                 !activeConfig.enabled() -> coordinator.recordInitStatus("disabled", attempt, processName)
                 !runtimeEnabled -> coordinator.recordInitStatus("runtime_disabled", attempt, processName)
                 else -> {
-                    directory = session.logDirectory(context, activeConfig)
-                    directory = session.start(context, activeConfig, attempt, processName)
+                    diagnostics.directory = session.logDirectory(context, activeConfig)
+                    diagnostics.directory = session.start(context, activeConfig, attempt, processName)
                     recordRuntimeToggleReason("reconfigured", reason)
                 }
             }
             true
         } catch (throwable: Throwable) {
-            cleanupFailedSession(throwable, attempt, processName, directory)
+            // Host startup callbacks may explicitly shut down or replace this initialization.
+            val current = state.configurationSnapshot()
+            if (current.initializationGeneration != previousConfiguration.initializationGeneration || current.config == null ||
+                state.started.get() && current.config !== previousConfig
+            ) {
+                RuntimeHookGuard.rethrowFatal(throwable)
+                return false
+            }
+            cleanupFailedSession(throwable, attempt, processName, diagnostics.directory)
             RuntimeHookGuard.rethrowFatal(throwable)
             val failureDiagnostics = state.initDiagnostics
+            val requestChanged = current.runtimeRequestGeneration != previousConfiguration.runtimeRequestGeneration
+            val restoredConfig = if (requestChanged) {
+                previousConfig.toBuilder().runtimeEnabled(current.desiredRuntimeEnabled).build()
+            } else previousConfig
             restorePreviousSessionLocked(
                 context = context,
-                config = previousConfig,
-                runtimeEnabled = previousRuntimeEnabled,
+                config = restoredConfig,
+                runtimeEnabled = if (requestChanged) restoredConfig.enabled() && current.desiredRuntimeEnabled
+                    else previousRuntimeEnabled,
                 wasStarted = previousStarted,
+                storageRequestId = previousConfiguration.storageRequestId,
             )
             state.initDiagnostics = failureDiagnostics
             false
@@ -225,8 +266,10 @@ internal class RuntimeLifecycleController(
         config: JankHunterConfig,
         runtimeEnabled: Boolean,
         wasStarted: Boolean,
+        storageRequestId: Long,
     ) {
-        val activeConfig = bindCurrentConfig(context, config, runtimeEnabled)
+        val activeConfig = bindCurrentConfig(context, config, runtimeEnabled,
+            RuntimeStorageUpdate.Restore(storageRequestId))
         if (!wasStarted || !runtimeEnabled || !activeConfig.enabled()) return
         val attempt = state.initAttempts.incrementAndGet()
         var processName: String? = null
@@ -262,9 +305,10 @@ internal class RuntimeLifecycleController(
         context: Context,
         config: JankHunterConfig,
         runtimeEnabled: Boolean,
+        storageUpdate: RuntimeStorageUpdate? = null,
     ): JankHunterConfig {
         state.initContext = context
-        val activeConfig = state.bindCurrentConfiguration(config)
+        val activeConfig = state.bindCurrentConfiguration(config, storageUpdate)
         state.runtimeEnabled.set(runtimeEnabled)
         return activeConfig
     }
@@ -277,7 +321,7 @@ internal class RuntimeLifecycleController(
         if (!enabled) {
             coordinator.disableHooks()
             state.runtimeEnabled.set(false)
-            state.advanceLifecycleGeneration()
+            state.bindRuntimeEnabled(false)
             state.collectionInactiveSinceElapsedMs.set(elapsedRealtimeMs.getAsLong())
             if (coordinator.isStarting()) {
                 recordCounter("jankhunter.runtime.disabled.count", 1)
@@ -293,6 +337,7 @@ internal class RuntimeLifecycleController(
 
         if (!coordinator.isStopped()) {
             return if (state.started.get()) {
+                state.bindRuntimeEnabled(true, invalidateSession = false)
                 recordCounter("jankhunter.runtime.enabled.noop.count", 1)
                 recordRuntimeToggleReason("enabled_noop", reason)
                 true
@@ -304,15 +349,22 @@ internal class RuntimeLifecycleController(
 
         val appContext = state.initContext
         val config = state.config
-        if (appContext == null || config == null || !config.enabled()) {
+        if (appContext == null || config == null) {
             state.runtimeEnabled.set(false)
             coordinator.recordInitStatus("runtime_enable_missing_init", state.initAttempts.get())
             return false
         }
 
+        // Store the explicit request even when a global or process gate prevents this start.
+        val activeConfig = state.bindRuntimeEnabled(true) ?: return false
+        if (!activeConfig.enabled()) {
+            state.runtimeEnabled.set(false)
+            coordinator.recordInitStatus("disabled", state.initAttempts.get())
+            return false
+        }
         val attempt = state.initAttempts.incrementAndGet()
         var processNameForDiagnostics: String? = null
-        var directoryForDiagnostics: File? = null
+        val diagnostics = StartupDiagnostics()
         return try {
             val processName = ProcessNames.current(appContext)
             processNameForDiagnostics = processName
@@ -322,9 +374,8 @@ internal class RuntimeLifecycleController(
                 return false
             }
             state.runtimeEnabled.set(true)
-            state.advanceLifecycleGeneration()
-            directoryForDiagnostics = session.logDirectory(appContext, config)
-            directoryForDiagnostics = session.start(appContext, config, attempt, processName)
+            diagnostics.directory = session.logDirectory(appContext, activeConfig)
+            diagnostics.directory = session.start(appContext, activeConfig, attempt, processName)
             recordCounter("jankhunter.runtime.enabled.count", 1)
             recordRuntimeToggleReason("enabled", reason)
             session.requestFlush()
@@ -334,7 +385,7 @@ internal class RuntimeLifecycleController(
                 throwable,
                 attempt,
                 processNameForDiagnostics,
-                directoryForDiagnostics,
+                diagnostics.directory,
             )
             RuntimeHookGuard.rethrowFatal(throwable)
             false
@@ -394,9 +445,19 @@ internal class RuntimeLifecycleController(
         const val DEFAULT_RUNTIME_TOGGLE_REASON = "manual"
     }
 
+    private class RequestedReconfiguration(
+        val config: JankHunterConfig,
+        val storageExplicitlySet: Boolean,
+    )
+
     private class ReconfigurationSnapshot(
         val context: Context,
-        val baseConfig: JankHunterConfig,
+        val config: JankHunterConfig,
+        val desiredRuntimeEnabled: Boolean,
         val generation: Long,
+        val runtimeRequestGeneration: Long,
+        val storageRequestId: Long,
     )
 }
+
+private class StartupDiagnostics { var directory: File? = null }

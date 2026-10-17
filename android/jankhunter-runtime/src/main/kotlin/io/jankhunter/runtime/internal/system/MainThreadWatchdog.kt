@@ -161,8 +161,10 @@ internal class MainThreadWatchdog(
         val episodeTracker = StallEpisodeTracker(thresholdMs)
         var pendingStall: StallCapture? = null
         var lastObservationMs = run.lastBeatMs.get()
+        var ownedRegistered = false
         try {
             while (isCurrent(run.generation)) {
+                if (!ownedRegistered) ownedRegistered = io.jankhunter.runtime.JankHunterHooks.observeOwnedThread("Jank Hunter main watchdog")
                 RuntimeHookGuard.run {
                     val now = mainThread.uptimeMillis()
                     lastObservationMs = now

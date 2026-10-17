@@ -35,6 +35,11 @@ func ReadSessionHeader(path string) (SegmentHeader, error) {
 	if err != nil {
 		return SegmentHeader{}, fmt.Errorf("%s: read .jhlog magic: %w", path, err)
 	}
+	if bytes.Equal(prefix[:], ProcessMagic) {
+		if _, err := io.ReadFull(file, prefix[:]); err != nil {
+			return SegmentHeader{}, fmt.Errorf("%s: read first process epoch: %w", path, err)
+		}
+	}
 	if !supportedFileMagic(prefix[:]) {
 		return SegmentHeader{}, fmt.Errorf("%s: unsupported .jhlog format; expected %s", path, FormatVersionString)
 	}
@@ -70,14 +75,17 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 	if prefixErr != nil && !errors.Is(prefixErr, io.EOF) && !errors.Is(prefixErr, io.ErrUnexpectedEOF) {
 		return result, prefixErr
 	}
-	if n < len(Magic) && (bytes.Equal(prefix[:n], Magic[:n]) || bytes.Equal(prefix[:n], legacyMagicV500[:n])) {
+	if n < len(Magic) && (bytes.Equal(prefix[:n], Magic[:n]) || bytes.Equal(prefix[:n], legacyMagicV500[:n]) || bytes.Equal(prefix[:n], legacyMagicV510[:n]) || bytes.Equal(prefix[:n], legacyMagicV520[:n])) {
 		return corruptResult(result, fmt.Errorf("incomplete file magic: %d of %d bytes", n, len(Magic)))
+	}
+	if n == len(ProcessMagic) && bytes.Equal(prefix[:], ProcessMagic) {
+		return streamProcessFile(file, result, handle)
 	}
 	if n == len(Magic) && supportedFileMagic(prefix[:]) {
 		result.FormatVersion = fmt.Sprintf("%d.%d.%d", prefix[8], prefix[9], prefix[10])
 		digest := sha256.New()
 		_, _ = digest.Write(prefix[:])
-		return streamBinary(file, result, handle, digest, bytes.Equal(prefix[:], legacyMagicV500))
+		return streamBinary(file, result, handle, digest, bytes.Equal(prefix[:], legacyMagicV500), true)
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:8], Magic[:8]) {
 		return corruptResult(result, fmt.Errorf(
@@ -97,7 +105,7 @@ func newStreamResult(source string) StreamResult {
 	}
 }
 
-func streamBinary(file *os.File, result StreamResult, handle EventHandler, digest hash.Hash, legacyStall bool) (StreamResult, error) {
+func streamBinary(file io.ReadSeeker, result StreamResult, handle EventHandler, digest hash.Hash, legacyStall, validateFilename bool) (StreamResult, error) {
 	tracked := io.TeeReader(file, digest)
 	header, err := readHeader(tracked)
 	if err != nil {
@@ -106,8 +114,10 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 	if err := validateHeader(header); err != nil {
 		return corruptResult(result, fmt.Errorf("invalid session header: %w", err))
 	}
-	if err := validateSessionLogFilename(result.Source, header); err != nil {
-		return corruptResult(result, err)
+	if validateFilename {
+		if err := validateSessionLogFilename(result.Source, header); err != nil {
+			return corruptResult(result, err)
+		}
 	}
 	result.Header = header
 	symbolNamespace := hex.EncodeToString(header.SymbolNamespace)
@@ -115,17 +125,18 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 	dict := map[uint64]string{}
 	kinds := map[uint64]DictKind{}
 	segmentState := &segmentDecodeState{
-		legacyStall:               legacyStall,
-		legacyGaugeSum:            header.RequiredFeatures&FeatureGaugeWideSum == 0,
-		legacyUIDTraffic:          header.RequiredFeatures&FeatureUIDTraffic == 0,
-		legacyHTTPCollectionState: header.RequiredFeatures&FeatureHTTPCollectionState == 0,
-		symbolOrigins:             header.RequiredFeatures&FeatureSymbolOrigin != 0,
-		legacyHTTPFirstByte:       header.RequiredFeatures&FeatureHTTPFirstByte == 0,
-		stableAliases:             map[uint64]uint64{},
-		stableIDs:                 stableAliasTable{},
-		databaseDescriptors:       map[uint64]databaseDescriptorKey{},
-		runtimeEdges:              make([]runtimeEdgeKey, 0, 256),
-		qualityCounters:           map[uint64]uint64{},
+		legacyStall:                 legacyStall,
+		legacyGaugeSum:              header.RequiredFeatures&FeatureGaugeWideSum == 0,
+		legacyUIDTraffic:            header.RequiredFeatures&FeatureUIDTraffic == 0,
+		legacyHTTPCollectionState:   header.RequiredFeatures&FeatureHTTPCollectionState == 0,
+		legacyCausalCollectionState: header.RequiredFeatures&FeatureCausalConcurrency == 0,
+		symbolOrigins:               header.RequiredFeatures&FeatureSymbolOrigin != 0,
+		legacyHTTPFirstByte:         header.RequiredFeatures&FeatureHTTPFirstByte == 0,
+		stableAliases:               map[uint64]uint64{},
+		stableIDs:                   stableAliasTable{},
+		databaseDescriptors:         map[uint64]databaseDescriptorKey{},
+		runtimeEdges:                make([]runtimeEdgeKey, 0, 256),
+		qualityCounters:             map[uint64]uint64{},
 	}
 	var expectedSequence uint32
 	var dataRecords uint64
@@ -144,7 +155,7 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 			result.Status = SegmentStatusOpenWithTail
-			result.TailBytes = physicalTailBytes(file, chunkStart, uint64(n))
+			result.TailBytes = physicalTailBytes(result.InputBytes, chunkStart, uint64(n))
 			return result, nil
 		}
 		if err != nil {
@@ -162,7 +173,7 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 		if _, err := io.ReadFull(tracked, stored); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				result.Status = SegmentStatusOpenWithTail
-				result.TailBytes = physicalTailBytes(file, chunkStart, chunkHeaderSize)
+				result.TailBytes = physicalTailBytes(result.InputBytes, chunkStart, chunkHeaderSize)
 				return result, nil
 			}
 			return result, fmt.Errorf("%s: read chunk %d payload: %w", result.Source, metadata.Sequence, err)
@@ -171,7 +182,7 @@ func streamBinary(file *os.File, result StreamResult, handle EventHandler, diges
 		if _, err := io.ReadFull(tracked, trailer[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				result.Status = SegmentStatusOpenWithTail
-				result.TailBytes = physicalTailBytes(file, chunkStart, uint64(chunkHeaderSize)+uint64(metadata.StoredLen))
+				result.TailBytes = physicalTailBytes(result.InputBytes, chunkStart, uint64(chunkHeaderSize)+uint64(metadata.StoredLen))
 				return result, nil
 			}
 			return result, fmt.Errorf("%s: read chunk %d commit trailer: %w", result.Source, metadata.Sequence, err)
@@ -292,12 +303,11 @@ func readHeader(reader io.Reader) (SegmentHeader, error) {
 	return header, nil
 }
 
-func physicalTailBytes(file *os.File, chunkStart int64, minimum uint64) uint64 {
-	stat, err := file.Stat()
-	if err != nil || stat.Size() <= chunkStart {
+func physicalTailBytes(size uint64, chunkStart int64, minimum uint64) uint64 {
+	if chunkStart < 0 || size <= uint64(chunkStart) {
 		return minimum
 	}
-	return uint64(stat.Size() - chunkStart)
+	return size - uint64(chunkStart)
 }
 
 func corruptResult(result StreamResult, cause error) (StreamResult, error) {
@@ -321,26 +331,29 @@ type recordDecodeState struct {
 }
 
 type segmentDecodeState struct {
-	symbolOrigins             bool
-	origins                   symbolOriginTable
-	legacyStall               bool
-	legacyGaugeSum            bool
-	legacyHTTPFirstByte       bool
-	legacyUIDTraffic          bool
-	legacyHTTPCollectionState bool
-	stableAliases             map[uint64]uint64
-	stableIDs                 stableAliasTable
-	databaseDescriptors       map[uint64]databaseDescriptorKey
-	runtimeEdges              []runtimeEdgeKey
-	qualitySequence           uint64
-	qualityCapturedUS         uint64
-	qualityCounters           map[uint64]uint64
-	logGrowthPrevious         [3][]byte
-	dictionaryPrevious        [dictKindCount][]byte
-	dictionaryTokens          [][]byte
-	dictionaryTokenBytes      int
-	lastDatabaseTransactionID uint64
-	workspace                 segmentDecodeWorkspace
+	symbolOrigins               bool
+	origins                     symbolOriginTable
+	legacyStall                 bool
+	legacyGaugeSum              bool
+	legacyHTTPFirstByte         bool
+	legacyUIDTraffic            bool
+	legacyHTTPCollectionState   bool
+	legacyCausalCollectionState bool
+	stableAliases               map[uint64]uint64
+	stableIDs                   stableAliasTable
+	databaseDescriptors         map[uint64]databaseDescriptorKey
+	runtimeEdges                []runtimeEdgeKey
+	qualitySequence             uint64
+	qualityCapturedUS           uint64
+	qualityCounters             map[uint64]uint64
+	logGrowthPrevious           [3][]byte
+	dictionaryPrevious          [dictKindCount][]byte
+	dictionaryTokens            [][]byte
+	dictionaryTokenBytes        int
+	dictionaryEntries           uint64
+	dictionaryDecodedBytes      uint64
+	lastDatabaseTransactionID   uint64
+	workspace                   segmentDecodeWorkspace
 }
 
 // segmentDecodeWorkspace owns transient page storage for one sequential segment decode. Keeping
@@ -873,5 +886,5 @@ func readSymbolRef(
 }
 
 func supportedFileMagic(prefix []byte) bool {
-	return bytes.Equal(prefix, Magic) || bytes.Equal(prefix, legacyMagicV500)
+	return bytes.Equal(prefix, Magic) || bytes.Equal(prefix, legacyMagicV500) || bytes.Equal(prefix, legacyMagicV510) || bytes.Equal(prefix, legacyMagicV520)
 }

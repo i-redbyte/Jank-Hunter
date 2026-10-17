@@ -52,6 +52,7 @@ object JankHunterLogDiscovery {
     }
 
     internal fun supportedFiles(files: Sequence<File>, limit: Int = MAX_SCANNED_FILES): List<File> = files
+        .takeWhile { !Thread.currentThread().isInterrupted }
         .filter(File::isFile)
         .filter { it.extension.lowercase() in SUPPORTED_EXTENSIONS }
         .take(limit)

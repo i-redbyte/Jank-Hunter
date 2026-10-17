@@ -50,11 +50,14 @@ func (encoder eventPayloadEncoder) encodeDictionary(payload *DictionaryEntry) er
 	return writeAll(encoder.writer, data[payload.frontPrefix:])
 }
 
-func (encoder eventPayloadEncoder) encodeSession(payload *SessionEvent, legacy bool) error {
+func (encoder eventPayloadEncoder) encodeSession(payload *SessionEvent, legacyHTTP, legacyCausal bool) error {
 	if payload == nil {
 		return fmt.Errorf("session payload is nil")
 	}
-	if payload.CollectorFlags&^uint64(CollectorKnownMask) != 0 || (legacy && payload.CollectorFlags&uint64(CollectorHTTP) != 0) {
+	if payload.CollectorFlags&^uint64(CollectorKnownMask) != 0 ||
+		(legacyHTTP && payload.CollectorFlags&uint64(CollectorHTTP) != 0) ||
+		(legacyCausal && payload.CollectorFlags&uint64(CollectorConcurrencyDiagnostics|CollectorConcurrencyDetailed) != 0) ||
+		(payload.CollectorFlags&uint64(CollectorConcurrencyDetailed) != 0 && payload.CollectorFlags&uint64(CollectorConcurrencyDiagnostics) == 0) {
 		return fmt.Errorf("unsupported collector flags 0x%x", payload.CollectorFlags)
 	}
 	if err := encoder.writeRefs(payload.AppVersionRef, payload.BuildRef, payload.DeviceRef); err != nil {

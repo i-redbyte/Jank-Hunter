@@ -269,7 +269,7 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 const maxTimezoneOffsetMinutes int64 = 14 * 60
 
 func validateFeatureContract(required, optional uint64) error {
-	const evolved = FeatureGaugeWideSum | FeatureHTTPFirstByte | FeatureUIDTraffic | FeatureHTTPCollectionState | FeatureSymbolOrigin
+	const evolved = FeatureGaugeWideSum | FeatureHTTPFirstByte | FeatureUIDTraffic | FeatureHTTPCollectionState | FeatureSymbolOrigin | FeatureCausalConcurrency
 	base := required &^ evolved
 	if base != RequiredFeatures&^evolved && base != BestEffortFeatures&^evolved {
 		return fmt.Errorf(

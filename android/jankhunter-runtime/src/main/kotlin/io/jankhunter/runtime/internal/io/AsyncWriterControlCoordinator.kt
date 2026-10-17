@@ -22,7 +22,7 @@ internal class AsyncWriterControlCoordinator(
         }
         if (target == ADMISSION_TIMED_OUT) quality.add(QualityCounterId.CONTROL_TIMEOUT_TOTAL)
         if (target < 0L) return
-        var admitted = false
+        val admitted: Boolean
         try {
             admitted = lane.offer(AsyncControlRequest(target, writeLogGrowth = false, blocking = false))
             if (!admitted) {

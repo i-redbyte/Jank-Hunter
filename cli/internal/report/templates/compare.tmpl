@@ -10,9 +10,9 @@
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
-      <div class="eyebrow">Jank Hunter · Изменения проблем</div>
-      <h1>{{if .Comparison.ProblemComparison.SchemaVersion}}{{.Comparison.ProblemComparison.Summary.Headline}}{{else}}Панель контроля регрессий{{end}}</h1>
-      <div class="subhead">создан {{.GeneratedAt}} · база и проверяемый прогон</div>
+      <div class="eyebrow">Jank Hunter · Сравнение отчётов</div>
+      <h1>{{.Overview.Headline}}</h1>
+      <div class="subhead">{{.Overview.ScopeLine}} · создан {{.GeneratedAt}}</div>
     </div>
     <div class="report-hero-lower">
       <div class="report-hero-context">
@@ -41,6 +41,7 @@
 </header>
 <nav class="nav">
   <a href="#problem-changes">Проблемы</a>
+  {{if or .Comparison.Baseline.ThreadAnalysis .Comparison.Candidate.ThreadAnalysis}}<a href="#thread-compare">Потоки</a>{{end -}}
   <a href="#compare">Сравнение</a>
   <a href="#code-problems">Реестр кода</a>
   <a href="#memory-leaks">Утечки</a>
@@ -50,18 +51,77 @@
   {{if .Comparison.AndroidComponents.Metrics}}<a href="#android-components-compare">Компоненты Android / IPC</a>{{end}}
   {{if .Comparison.OperationDeltas}}<a href="#operations">Операции</a>{{end}}
   <a href="#signal-contexts">Связанные сигналы</a>
+  {{if or .Comparison.Baseline.WorkerAnalysis .Comparison.Candidate.WorkerAnalysis .Comparison.Baseline.WorkerCatalog .Comparison.Candidate.WorkerCatalog .Comparison.Baseline.WorkRegistry .Comparison.Candidate.WorkRegistry .Comparison.Baseline.WorkSubmissions .Comparison.Candidate.WorkSubmissions .Comparison.Baseline.WorkChainEdges .Comparison.Candidate.WorkChainEdges}}<a href="#worker-compare">Фоновые задачи</a>{{end}}
   <a href="#drilldown">Детали логов</a>
   <a href="#cohorts">Условия запусков</a>
   <a href="#analysis">Итог</a>
-</nav>
+</nav>{{if or .Comparison.Baseline.ThreadAnalysis .Comparison.Candidate.ThreadAnalysis}}
+<section id="thread-compare" class="panel"><h2>Потоки: сравнение наблюдений</h2>
+<p>Точечные события: базовый запуск {{threadLifecycleCounts .Comparison.Baseline.ThreadAnalysis}}; новый запуск {{threadLifecycleCounts .Comparison.Candidate.ThreadAnalysis}}. Это сохранённые наблюдения, не полное число созданных потоков. Область сбора вызовов может различаться; эти числа сами по себе не являются улучшением или регрессией.</p>
+<p>Сравниваются наблюдаемые значения. Отсутствие наблюдений не является нулём или улучшением. Разные частоты снимков меняют охват короткоживущих потоков.</p>
+<table><thead><tr><th>Процесс</th><th>База</th><th>Проверяемый прогон</th><th>Границы сравнения</th></tr></thead><tbody>
+{{range threadComparison .Comparison}}<tr><td>{{.Process}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Explanation}}</td></tr>{{end}}
+</tbody></table></section>{{end}}
 <main>
+  {{if or .Comparison.Baseline.WorkerAnalysis .Comparison.Candidate.WorkerAnalysis .Comparison.Baseline.WorkerCatalog .Comparison.Candidate.WorkerCatalog .Comparison.Baseline.WorkRegistry .Comparison.Candidate.WorkRegistry .Comparison.Baseline.WorkSubmissions .Comparison.Candidate.WorkSubmissions .Comparison.Baseline.WorkChainEdges .Comparison.Candidate.WorkChainEdges}}<section id="worker-compare" class="panel">
+    <p>Наблюдавшиеся параметры вызовов постановки: baseline {{workSubmissionSummary .Comparison.Baseline.WorkSubmissions}}; candidate {{workSubmissionSummary .Comparison.Candidate.WorkSubmissions}}. Это наблюдения вызовов, не подтверждённые изменения расписаний или число принятых заданий.</p>
+    <p>Зависимости цепочек по наблюдённым вызовам: база: {{workChainCount .Comparison.Baseline.WorkChainEdges}}; проверяемый прогон: {{workChainCount .Comparison.Candidate.WorkChainEdges}}. UUID не сопоставляются между запусками; числа зависят от области сбора и не доказывают изменение графа или регистрацию заданий.</p>
+    <h2>Фоновые задачи: сравнение наблюдений</h2>
+    <p>{{.Comparison.Workers.Note}}</p>
+    <table><thead><tr><th>Показатель</th><th>База</th><th>Проверяемый прогон</th><th>Изменение</th><th>Единица</th></tr></thead><tbody>
+    {{range .Comparison.Workers.Lifecycle}}<tr><td>{{.Label}}</td><td>{{workerDiagnosticNumber .Baseline}}</td><td>{{workerDiagnosticNumber .Candidate}}</td><td>{{if .Comparable}}{{workerDiagnosticNumber .Delta}}{{else}}не сравнивается{{end}}</td><td>{{.Unit}}</td></tr>{{end}}
+    </tbody></table>
+    {{if .Comparison.Workers.Classes}}<h3>Сопоставление классов воркеров</h3>
+    <p>Имена классов считаются устойчивыми только при проверенных mapping-файлах обоих запусков. Численная дельта также требует сопоставимого сценария и полного охвата lifecycle. Показаны захваченные start; отсутствие класса при неполном охвате не доказывает отсутствие запусков.</p>
+    <table><thead><tr><th>Класс</th><th>Start в базе</th><th>Start в проверяемом прогоне</th><th>Изменение</th></tr></thead><tbody>
+    {{range .Comparison.Workers.Classes}}<tr><td><code>{{.Class}}</code></td><td>{{if .BaselineKnown}}{{.BaselineStarts}}{{else}}нет данных{{end}}</td><td>{{if .CandidateKnown}}{{.CandidateStarts}}{{else}}нет данных{{end}}</td><td>{{if .Comparable}}{{workerDiagnosticNumber .DeltaStarts}}{{else}}не сравнивается{{end}}</td></tr>{{end}}
+    </tbody></table>{{if gt .Comparison.Workers.OmittedClasses 0}}<p>Не показано ещё {{.Comparison.Workers.OmittedClasses}} классов из-за ограничения отчёта.</p>{{end}}{{end}}
+    {{with .Comparison.Workers.Catalog}}
+    <h3>Каталог классов до R8</h3><p>Наблюдалось классов: {{workerCatalogCount .BaselineCount}} → {{workerCatalogCount .CandidateCount}}.</p><p>{{.Note}}</p>
+    <details><summary>Имена, наблюдавшиеся только в одном каталоге</summary>
+    <p>Только в базе: {{range .OnlyBaseline}}<code>{{.}}</code> {{else}}не наблюдались или каталог недоступен{{end}}</p>
+    <p>Только в проверяемом прогоне: {{range .OnlyCandidate}}<code>{{.}}</code> {{else}}не наблюдались или каталог недоступен{{end}}</p>
+    <p>Имен вне ограниченного списка: {{.OmittedNames}}.</p></details>{{end}}
+    <div data-worker-registry-compare>
+      <h3>Последние срезы зарегистрированных заданий</h3>
+      <label>Поиск процесса <input type="search"></label> <label>Процесс <select aria-label="Процесс для сравнения заданий"></select></label><p data-worker-compare-process-count></p>
+      <p data-worker-compare-info></p>
+      <table><thead><tr><th>Наблюдаемое состояние, сохранённая часть</th><th>База</th><th>Проверяемый прогон</th><th>Изменение</th></tr></thead><tbody data-worker-compare-states></tbody></table>
+      <h4>Распределение расписаний и ограничений</h4>
+      <table><thead><tr><th>Конфигурация</th><th>Заданий в базе</th><th>В проверяемом прогоне</th><th>Изменение</th></tr></thead><tbody data-worker-compare-schedules></tbody></table>
+      <button type="button" data-worker-compare-prev>Назад</button> <span data-worker-compare-page></span> <button type="button" data-worker-compare-next>Далее</button>
+      <script type="application/json">{{workerRegistryComparisonJSON .Comparison.Workers.Registry}}</script>
+    </div><script>{{workerCompareJS}}</script>
+  </section>{{end}}
+
+  <section id="comparison-overview" class="panel problem-first-panel">
+    <div class="analysis-banner {{severityClass .Overview.Tone}}">
+      <div class="eyebrow">Результат сравнения</div>
+      <div class="analysis-status">{{.Overview.Headline}}</div>
+      <div class="muted">{{.Overview.ScopeLine}}</div>
+    </div>
+    <div class="problem-verdict-counts" aria-label="Баланс изменений">
+      <span class="sev-low">{{.Overview.Balance.Improved}}<small>стало лучше</small></span>
+      <span class="sev-high">{{.Overview.Balance.Regressed}}<small>стало хуже</small></span>
+      <span class="sev-medium">{{.Overview.Balance.Mixed}}<small>разные направления</small></span>
+      <span>{{.Overview.Balance.Unchanged}}<small>без заметных изменений</small></span>
+      <span>{{.Overview.Balance.Excluded}}<small>не вошло в сравнение</small></span>
+    </div>
+    {{if gt .Overview.Balance.NotObservedAfter 0}}<p class="help-text">{{.Overview.Balance.NotObservedAfter}} проблем не наблюдались после изменений. Это наблюдение не считается доказательством устранения без одинакового выполнения целевого сценария.</p>{{end}}
+    <div class="comparison-overview-groups">
+      <details class="fold" open><summary>Изменилось</summary><div class="fold-body finding-list">{{range .Overview.Changed}}<div class="finding {{severityClass .Tone}}"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Сопоставимых изменений не найдено.</div>{{end}}</div></details>
+      <details class="fold"><summary>Без заметных изменений</summary><div class="fold-body finding-list">{{range .Overview.Unchanged}}<div class="finding"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Нет достаточно измеренных показателей в практической полосе.</div>{{end}}</div></details>
+      <details class="fold"><summary>Не вошло в сравнение</summary><div class="fold-body finding-list">{{range .Overview.Excluded}}<div class="finding"><strong>{{.Name}}</strong><div class="muted">{{.Detail}}</div></div>{{else}}<div class="muted">Все доступные показатели вошли в сравнение.</div>{{end}}</div></details>
+    </div>
+    {{if .MathReportHref}}<p class="help-text"><a href="{{.MathReportHref}}#comparison-basis">Математический анализ → Основания сравнения</a></p>{{end}}
+  </section>
+
   <section id="problem-changes" class="panel problem-first-panel" data-problem-inbox>
     <div class="problem-verdict verdict-{{problemReportVerdict .Comparison.ProblemComparison.Summary}}">
-      <div><div class="eyebrow">Главный вывод</div><h2>{{problemReportHeadline .Comparison.ProblemComparison.Summary}}</h2><p>Проблемы сопоставлены между прогонами. Сначала показаны новые и усилившиеся.</p><p class="problem-analysis-boundary">Причина указана как факт только при прямом подтверждении. Иначе это место для проверки.</p></div>
+      <div><div class="eyebrow">Проблемы приложения</div><h2>{{problemReportHeadline .Comparison.ProblemComparison.Summary}}</h2>{{if or (eq .Comparison.Scope.Comparability "full") (eq .Comparison.Scope.Comparability "partial")}}<p>Показаны переходы проблем внутри сопоставленной части сценария.</p>{{else}}<p>Показаны наблюдения из двух записей без утверждений о появлении или устранении проблем.</p>{{end}}<p class="problem-analysis-boundary">Причина указана как факт только при прямом подтверждении. Иначе это место для проверки.</p></div>
       <div class="problem-verdict-counts"><span class="sev-critical">{{.Comparison.ProblemComparison.Summary.Critical}}<small>критичный приоритет</small></span><span class="sev-high">{{.Comparison.ProblemComparison.Summary.High}}<small>высокий приоритет</small></span><span class="sev-medium">{{.Comparison.ProblemComparison.Summary.Medium}}<small>средний приоритет</small></span><span class="sev-low">{{.Comparison.ProblemComparison.Summary.Low}}<small>низкий приоритет</small></span></div>
     </div>
     <div class="analysis-intro problem-priority-method"><strong>Индекс приоритета расследования: от 0 до 100.</strong> Чем выше число, тем раньше стоит изучить проблему. Это не вероятность ошибки. Расчёт раскрыт в карточке.</div>
-    {{range .Comparison.CohortWarnings}}<p class="warning"><strong>Сопоставимость ограничена.</strong> {{.}}</p>{{end}}
     {{$primaryCoverage := primaryCategoryCoverage .Comparison.Candidate.CategoryCoverage}}
     {{if $primaryCoverage}}<div class="problem-coverage-grid">{{range $primaryCoverage}}<button type="button" class="problem-coverage-card coverage-{{.Status}} coverage-severity-{{.WorstSeverity}}" data-problem-category-button="{{.Category}}" data-tip="{{problemCategoryLabel .Category}}. {{.Explanation}}" aria-pressed="false"><span>{{problemCategoryLabel .Category}}</span><strong>{{problemCoverageStatusLabel .Status}}</strong><small>{{ruCount .FindingCount "проблема" "проблемы" "проблем"}}</small><em>{{.Explanation}}</em></button>{{end}}</div>{{end}}
     {{with hiddenCoverageSummary .Comparison.Candidate.CategoryCoverage}}{{if $.MathReportHref}}<p class="coverage-hidden-summary"><a href="{{$.MathReportHref}}#data-quality">Методика охвата категорий и техническая справка</a></p>{{end}}{{end}}
@@ -100,8 +160,6 @@
       </div>
       <span class="pill">база → проверяемый прогон</span>
     </div>
-    {{range .Comparison.CohortWarnings}}<p class="warning">{{.}}</p>{{end}}
-    {{range .Comparison.ExposureWarnings}}<p class="warning">{{.}}</p>{{end}}
     <div class="compare-pair-grid">
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Задержка верхних 5% HTTP-запросов" "95% запросов завершились не дольше этого значения. Рост показывает ухудшение самых медленных сетевых запросов."}}</div>
@@ -115,7 +173,7 @@
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.MemoryCount 0}}{{.Comparison.Baseline.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Проверяемый</span><strong>{{if gt .Comparison.Candidate.MemoryCount 0}}{{.Comparison.Candidate.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div></div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.MemoryCount 0}}{{dataSize .Comparison.Baseline.MemoryMaxKB}}{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Проверяемый</span><strong>{{if gt .Comparison.Candidate.MemoryCount 0}}{{dataSize .Comparison.Candidate.MemoryMaxKB}}{{else}}нет данных{{end}}</strong></div></div>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">

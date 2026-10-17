@@ -156,6 +156,7 @@ object JankHunterArtifactDiscovery {
                     else -> true
                 }
             }
+            .takeWhile { !Thread.currentThread().isInterrupted }
             .forEach { }
         return result
     }
@@ -165,6 +166,7 @@ object JankHunterArtifactDiscovery {
         return root.walkTopDown()
             .maxDepth(MAX_ARTIFACT_SEARCH_DEPTH)
             .onEnter { !Thread.currentThread().isInterrupted }
+            .takeWhile { !Thread.currentThread().isInterrupted }
             .filter(File::isFile)
     }
 

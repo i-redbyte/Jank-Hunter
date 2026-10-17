@@ -156,6 +156,30 @@ func EventTypeName(eventType EventType) string {
 		return "process_exit"
 	case EventIO:
 		return "io"
+	case EventWorkSubmission:
+		return "work_submission"
+	case EventWorkChainEdge:
+		return "work_chain_edge"
+	case EventWorkChainRoot:
+		return "work_chain_root"
+	case EventWorkerFailure:
+		return "worker_failure"
+	case EventWorkerProgress:
+		return "worker_progress"
+	case EventCoroutineSegment:
+		return "coroutine_segment"
+	case EventCausalEvent:
+		return "causal_event"
+	case EventThreadLifecycle:
+		return "thread_lifecycle"
+	case EventWorkerIdentity:
+		return "worker_identity"
+	case EventWorkRegistry:
+		return "work_registry"
+	case EventWorkerCatalog:
+		return "worker_catalog"
+	case EventThreadSnapshot:
+		return "thread_snapshot"
 	case EventWorker:
 		return "worker"
 	case EventWebSocket:

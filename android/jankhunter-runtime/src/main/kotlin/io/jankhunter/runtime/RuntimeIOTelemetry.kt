@@ -6,7 +6,10 @@ import io.jankhunter.runtime.internal.io.Jhlog
 
 internal class RuntimeIOTelemetry(
     private val access: RuntimeTelemetryAccess,
+    private val concurrency: RuntimeConcurrencyTelemetry? = null,
 ) {
+    fun captureCausalContext(): JankHunterCausalContext? = concurrency?.captureCausalContext()
+
     fun isEnabled(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.BYTECODE_IO)
 
     fun record(
@@ -30,11 +33,15 @@ internal class RuntimeIOTelemetry(
     ): T {
         if (!access.isFeatureActive(JankHunterRuntimeFeature.RUNTIME_IO)) return block()
         val startedAt = SystemClock.elapsedRealtimeNanos()
+        val causalContext = captureCausalContext()
         var outcome = JankHunterIOOutcome.FAILURE
         try {
             return block().also { outcome = JankHunterIOOutcome.SUCCESS }
         } finally {
-            record(operation, SystemClock.elapsedRealtimeNanos() - startedAt, bytes, ownerName, outcome)
+            RuntimeHookGuard.run {
+                recordInternal(operation, SystemClock.elapsedRealtimeNanos() - startedAt, bytes, ownerName,
+                    outcome, 0L, null, causalContext)
+            }
         }
     }
 
@@ -45,10 +52,11 @@ internal class RuntimeIOTelemetry(
         outcome: JankHunterIOOutcome,
         sourceId: Long,
         sourceName: String,
+        causalContext: JankHunterCausalContext? = null,
     ) {
         if (!isEnabled()) return
         RuntimeHookGuard.run {
-            recordInternal(operation, durationNanos, bytes, null, outcome, sourceId, sourceName)
+            recordInternal(operation, durationNanos, bytes, null, outcome, sourceId, sourceName, causalContext)
         }
     }
 
@@ -60,6 +68,7 @@ internal class RuntimeIOTelemetry(
         outcome: JankHunterIOOutcome,
         sourceId: Long,
         sourceName: String?,
+        causalContext: JankHunterCausalContext? = null,
     ) {
         access.ensureContextRecorded(ownerOverride = firstContextValue(ownerName, access.currentOwnerOrNull()))
         val mainLooper = Looper.getMainLooper()
@@ -76,6 +85,29 @@ internal class RuntimeIOTelemetry(
                 JankHunterIOOutcome.FAILURE -> Jhlog.IO_OUTCOME_FAILURE
             },
             bytesKnown = bytesKnown,
+        )
+        concurrency?.recordCost(
+            category = when (operation) {
+                JankHunterIOOperation.FILE_READ -> RuntimeCausalOperationKind.FILE_READ
+                JankHunterIOOperation.FILE_WRITE -> RuntimeCausalOperationKind.FILE_WRITE
+                JankHunterIOOperation.FILE_SYNC -> RuntimeCausalOperationKind.FILE_SYNC
+                JankHunterIOOperation.CONTENT_READ -> RuntimeCausalOperationKind.CONTENT_READ
+                JankHunterIOOperation.CONTENT_WRITE -> RuntimeCausalOperationKind.CONTENT_WRITE
+            },
+            durationNanos = durationNanos.coerceAtLeast(-1L),
+            readBytes = if ((operation == JankHunterIOOperation.FILE_READ ||
+                operation == JankHunterIOOperation.CONTENT_READ) && bytesKnown &&
+                outcome == JankHunterIOOutcome.SUCCESS) bytes else -1L,
+            writeBytes = if ((operation == JankHunterIOOperation.FILE_WRITE ||
+                operation == JankHunterIOOperation.CONTENT_WRITE) && bytesKnown &&
+                outcome == JankHunterIOOutcome.SUCCESS) bytes else -1L,
+            sourceSiteId = 0L,
+            // Legacy sourceName can be a path or arbitrary label, not a verified code location.
+            sourceMethod = null,
+            sourceLine = 0,
+            sourceOrigin = 0,
+            parent = causalContext,
+            executionTid = android.os.Process.myTid().toLong(),
         )
     }
 

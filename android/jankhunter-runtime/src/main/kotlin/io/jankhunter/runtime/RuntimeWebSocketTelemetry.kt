@@ -12,7 +12,8 @@ internal class RuntimeWebSocketTelemetry(
         } else {
             JankHunterContext(snapshot.screen, event.owner ?: snapshot.owner, snapshot.operationId)
         }
-        val route = access.config?.redactRoute(event.route) ?: event.route
+        val config = access.config
+        val route = if (config == null) event.route else config.redactRoute(event.route)
         activeWriter.webSocket(context.screen, context.owner, event.withRoute(route))
     }
 

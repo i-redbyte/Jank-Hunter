@@ -10,6 +10,10 @@ import (
 func (c *collector) finish() Summary {
 	c.finalizeCollectionQuality()
 	summary := c.summary
+	if c.filter.Active() {
+		filter := c.filter
+		summary.AnalysisFilter = &filter
+	}
 	if count := summary.MappingIdentity.UnknownOriginReferences; count > 0 {
 		summary.Warnings = append(summary.Warnings, fmt.Sprintf("Качество символов: %d ссылок имеют неизвестное происхождение; их строки сохранены без применения mapping. Совпадение identity сборки не подтверждает происхождение отдельных строк.", count))
 	}
@@ -108,8 +112,16 @@ func (c *collector) finish() Summary {
 		summary.DatabaseAnalysis = c.finalizeDatabaseAnalysis()
 	}
 	summary.DatabaseCoverage = buildDatabaseCoverage(summary, c.diagnostics)
+	summary.ThreadAnalysis = c.threadAnalysis.finalize()
+	summary.CausalAnalysis = c.causalAnalysis.finalize()
+	summary.WorkerCatalog = c.workerCatalog
+	summary.WorkRegistry = c.workRegistry.finalize()
+	summary.WorkSubmissions = c.workSubmissions.finalize()
+	summary.WorkChainEdges = c.workChainEdges.finalize()
 	if workerAnalysis := c.finalizeWorkerAnalysis(); workerAnalysis != nil {
+		attachWorkerJobObservations(workerAnalysis, summary.WorkRegistry)
 		summary.WorkerAnalysis = workerAnalysis
+		attachCausalWorkerAttempts(summary.CausalAnalysis, workerAnalysis)
 	}
 
 	for _, stats := range c.screenStats {
@@ -191,6 +203,7 @@ func (c *collector) finish() Summary {
 			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value})
 		}
 	}
+	summary.ObservationModes = executionObservationEvidence(summary.Counters)
 	for name, values := range c.gaugeValues {
 		value := values.value()
 		extra := values.extra()
@@ -352,6 +365,7 @@ func (c *collector) releaseAggregationState() {
 	c.databaseTotals = databaseAggregate{}
 	c.databaseStatements = databaseStatementStore{}
 	c.workerCollectorState.release()
+	c.threadAnalysis = threadCollectorState{}
 	c.runtimeAnalysis = runtimeAnalysisAccumulator{}
 	c.operationAnalysis.release()
 	c.androidAnalysis = nil

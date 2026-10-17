@@ -213,6 +213,7 @@ class RuntimeCallGraphInstrumentationTest {
         writer.visitMethod(Opcodes.ACC_PUBLIC, "calculate", "()I", null, null).apply {
             visitCode()
             visitInsn(Opcodes.ICONST_1)
+            visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Math", "abs", "(I)I", false)
             visitInsn(Opcodes.IRETURN)
             visitMaxs(0, 0)
             visitEnd()

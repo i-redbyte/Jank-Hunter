@@ -14,6 +14,12 @@ import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
 internal object RetainedLifecycleClassifier {
+    private const val CLASS_CACHE_CAPACITY = 32
+    // Same reviewed implementations as the plugin accessor; consumer rules prevent merging/renaming.
+    private val standardLazyTypes = setOf(
+        "kotlin.SynchronizedLazyImpl", "kotlin.SafePublicationLazyImpl",
+        "kotlin.UnsafeLazyImpl", "kotlin.InitializedLazyImpl",
+    )
     private val classMetadata = BoundedWeakIdentityCache<Class<*>, LifecycleClassMetadata>(CLASS_CACHE_CAPACITY)
 
     fun visitTargets(instance: Any?, lifecycleEvent: String?, ownerHint: String?, sink: JankHunterLifecycleTargetSinkV1) {
@@ -77,7 +83,7 @@ internal object RetainedLifecycleClassifier {
         for (field in metadata.candidateFields) {
             var value = runCatching { field.isAccessible = true; field.get(fragment) }.getOrNull() ?: continue
             if (value is Lazy<*>) {
-                if (!value.isInitialized()) continue
+                if (value.javaClass.name !in standardLazyTypes || !value.isInitialized()) continue
                 value = value.value ?: continue
             }
             if (value === fragment) continue
@@ -85,7 +91,7 @@ internal object RetainedLifecycleClassifier {
             if (value !is View && !binding) continue
             emit(value, owner, "onDestroyView", "$name.${field.name}", sink)
             if (binding) {
-                val root = runCatching { metadata.bindingRootGetter.invoke(value) as? View }.getOrNull()
+                val root = runCatching { metadata.bindingRootGetter?.invoke(value) as? View }.getOrNull()
                 if (root != null) emit(root, owner, "onDestroyView", "$name.${field.name}.root", sink)
             }
         }
@@ -171,5 +177,4 @@ internal object RetainedLifecycleClassifier {
         val candidateFields: Array<Field>,
     )
 
-    private const val CLASS_CACHE_CAPACITY = 32
 }

@@ -1,13 +1,45 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.JankHunterConfig
+import java.nio.file.Files
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AsyncWriterLifecycleTest {
+    @Test
+    fun terminalCallbackDoesNotSwallowFatalErrors() {
+        val directory = Files.createTempDirectory("terminal-callback-fatal").toFile()
+        val writer = AsyncLogWriterFactory().open(directory, JankHunterConfig.builder().build(), "test")
+        val ordinary = AsyncWriterLifecycle()
+        ordinary.recordTermination(7)
+        var calls = 0
+        repeat(2) {
+            ordinary.deliverTerminalCallback(writer) { _, _, _ ->
+                calls++
+                error("observer failed")
+            }
+        }
+        assertEquals(1, calls)
+        val lifecycle = AsyncWriterLifecycle()
+        val fatal = object : VirtualMachineError() {}
+        lifecycle.recordTermination(7)
+        try {
+            val actual = assertThrows(VirtualMachineError::class.java) {
+                lifecycle.deliverTerminalCallback(writer) { _, _, _ -> throw fatal }
+            }
+            assertSame(fatal, actual)
+        } finally {
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun terminalReasonAndFailureAreCommittedAsOneState() {
         val lifecycle = AsyncWriterLifecycle()

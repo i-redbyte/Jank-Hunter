@@ -32,7 +32,7 @@ func (encoder eventPayloadEncoder) encode(event Event, state *eventPayloadEncode
 	case EventDictionary:
 		return encoder.encodeDictionary(event.Dictionary)
 	case EventSession:
-		return encoder.encodeSession(event.Session, state.legacyHTTPCollectionState)
+		return encoder.encodeSession(event.Session, state.legacyHTTPCollectionState, state.legacyCausalCollectionState)
 	case EventContext:
 		return encoder.encodeContext(event.Context, state.legacyUIDTraffic)
 	case EventHTTP:
@@ -62,6 +62,66 @@ func (encoder eventPayloadEncoder) encode(event Event, state *eventPayloadEncode
 		return encoder.encodeProcessExit(event.ProcessExit)
 	case EventIO:
 		return encoder.encodeIO(event.IO, event.Flags)
+	case EventWorkSubmission:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing work submission")
+		}
+		return encoder.encodeWorkSubmission(event.WorkSubmission)
+	case EventWorkChainEdge:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing work chain edge")
+		}
+		return encoder.encodeWorkChainEdge(event.WorkChainEdge)
+	case EventWorkerFailure:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing worker failure")
+		}
+		return encoder.encodeWorkerFailure(event.WorkerFailure)
+	case EventWorkerProgress:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing worker progress")
+		}
+		return encoder.encodeWorkerProgress(event.WorkerProgress)
+	case EventCoroutineSegment:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing coroutine segment")
+		}
+		return encoder.encodeCoroutineSegment(event.CoroutineSegment)
+	case EventCausalEvent:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing causal event")
+		}
+		return encoder.encodeCausalEvent(event.CausalEvent)
+	case EventWorkChainRoot:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing work chain root")
+		}
+		return encoder.encodeWorkSubmission(event.WorkChainRoot)
+	case EventThreadLifecycle:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing thread lifecycle payload")
+		}
+		return encoder.encodeThreadLifecycle(event.ThreadLifecycle)
+	case EventWorkerIdentity:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing identity payload")
+		}
+		return encoder.encodeWorkerIdentity(event.WorkerIdentity)
+	case EventWorkRegistry:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing registry payload")
+		}
+		return encoder.encodeWorkRegistry(event.WorkRegistry)
+	case EventWorkerCatalog:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing diagnostic payload")
+		}
+		return encoder.encodeWorkerCatalog(event.WorkerCatalog)
+	case EventThreadSnapshot:
+		if event.DiagnosticEvent == nil {
+			return fmt.Errorf("missing diagnostic payload")
+		}
+		return encoder.encodeThreadSnapshot(event.ThreadSnapshot)
 	case EventWorker:
 		return encoder.encodeWorker(event.Worker, event.Flags)
 	case EventWebSocket:
