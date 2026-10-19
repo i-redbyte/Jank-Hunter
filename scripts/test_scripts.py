@@ -418,6 +418,23 @@ android {{
     def test_reintegrates_existing_groovy_dsl_project(self) -> None:
         self.assert_reintegration("groovy")
 
+    def test_accepts_thread_sampling_and_concurrency_diagnostics(self) -> None:
+        project = self.create_project("kts", existing_integration=False)
+        self.create_artifacts(project, "repo/maven", "repo/bin")
+
+        self.run_script(
+            project,
+            *self.integration_arguments("repo/maven", "repo/bin"),
+            "--enable-feature",
+            "thread-sampling",
+            "--enable-feature",
+            "concurrency-diagnostics",
+        )
+
+        build = (project / "app/build.gradle.kts").read_text(encoding="utf-8")
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.THREAD_SAMPLING)", build)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.CONCURRENCY_DIAGNOSTICS)", build)
+
     def test_rejects_conflicting_feature_directives_before_writes(self) -> None:
         project = self.create_project("kts", existing_integration=False)
         settings = project / "settings.gradle.kts"

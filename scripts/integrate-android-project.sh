@@ -122,8 +122,8 @@ usage() {
   jank-stats, main-looper, sqlite, room, http, websockets, runtime-io, bytecode-io,
   di-analysis, handlers, executors, coroutines, interactions, lifecycle-leaks, logging,
   class-graph, call-graph, compose, workers, android-components, binder-ipc,
-  method-counters, heap-dumps. Наборы: ui-all, network-all, database-all, io-all,
-  concurrency-all, android-system-all.
+  method-counters, heap-dumps, thread-sampling, concurrency-diagnostics.
+  Наборы: ui-all, network-all, database-all, io-all, concurrency-all, android-system-all.
 
 Владение вставками:
   Пользовательские блоки jankHunter/dependencies сохраняются. Повторный запуск без параметров DSL
@@ -192,7 +192,7 @@ normalize_feature_selection() {
   local normalized
   normalized="$(normalize_option_value "$raw")"
   case "$normalized" in
-    jank-stats|main-looper|sqlite|room|http|websockets|runtime-io|bytecode-io|di-analysis|handlers|executors|coroutines|interactions|lifecycle-leaks|logging|class-graph|call-graph|compose|workers|android-components|binder-ipc|method-counters|heap-dumps)
+    jank-stats|main-looper|sqlite|room|http|websockets|runtime-io|bytecode-io|di-analysis|handlers|executors|coroutines|interactions|lifecycle-leaks|logging|class-graph|call-graph|compose|workers|android-components|binder-ipc|method-counters|heap-dumps|thread-sampling|concurrency-diagnostics)
       printf 'JankHunterFeature.%s\n' "$(printf '%s' "$normalized" | tr '[:lower:]-' '[:upper:]_')"
       ;;
     ui-all|network-all|database-all|io-all|concurrency-all|android-system-all)
