@@ -36,6 +36,7 @@ JANK_HUNTER_CI_CONTROL_PATHS = frozenset(
         "GitlabConfigs/custom_jobs/static_analyse.yml",
         "GitlabConfigs/custom_jobs/tests_scripts.yml",
         "scripts/jank-hunter-publish/publish-android.sh",
+        "scripts/jank-hunter-publish/reconcile-integrations.py",
     }
 )
 
@@ -124,6 +125,7 @@ def command_plan(check: Check) -> tuple[tuple[str, ...], ...]:
             )
             + common,
             (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_jank_hunter_ci.py"),
+            (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_maven_publication_recovery.py"),
             (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_stability*.py"),
             (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_release_environment.py"),
             (sys.executable, "-B", "-m", "unittest", "discover", "-s", str(PROJECT_ROOT / "scripts"), "-p", "test_kotlin_boundary.py"),

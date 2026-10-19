@@ -2,7 +2,7 @@
 
 Скрипты подключают Android `1.0.13` к приложению, проверяют Gradle-плагин и сквозной сценарий, измеряют производительность и маршрутизируют проверки монорепозитория.
 
-Актуальный CLI имеет версию `1.0.0`, создаёт JHLOG `5.1.0` и сохраняет чтение `5.0.0`. При обновлении Android-компонентов обновляйте и сам исполняемый файл CLI; прежняя сборка с тем же номером может не поддерживать новые обязательные возможности формата.
+Актуальный CLI имеет версию `1.0.13`, создаёт JHLOG `5.3.0` и читает `5.3.0`, `5.2.0`, `5.1.0` и `5.0.0`. При обновлении Android-компонентов обновляйте и сам исполняемый файл CLI; прежняя сборка с тем же номером может не поддерживать новые обязательные возможности формата.
 
 ## Состав
 
@@ -147,7 +147,7 @@ jank-stats, main-looper, sqlite, room, http, websockets,
 runtime-io, bytecode-io, di-analysis, handlers, executors,
 coroutines, interactions, lifecycle-leaks, logging, class-graph,
 call-graph, compose, workers, android-components, binder-ipc,
-method-counters, heap-dumps
+method-counters, heap-dumps, thread-sampling, concurrency-diagnostics
 ```
 
 Наборы:
