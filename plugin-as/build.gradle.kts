@@ -12,6 +12,8 @@ group = providers.gradleProperty("pluginGroup").get()
 version = providers.gradleProperty("pluginVersion").get()
 
 repositories {
+    maven { url = uri("https://registry.vktech.team/repository/maven-internal-proxy/") }
+    maven { url = uri("https://nexus.vkteam.ru/repository/maven/") }
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
